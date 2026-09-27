@@ -3,25 +3,47 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 export const prefersReducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
-/** Adds `.is-visible` to every `.reveal` element inside `root` when it scrolls into view. */
+/**
+ * Adds `.is-visible` to every `.reveal` element inside `root` as it scrolls into view.
+ * A MutationObserver picks up elements added later (route changes, filters, lazy pages).
+ */
 export function useRevealAll(root: RefObject<HTMLElement>) {
   useEffect(() => {
     const el = root.current
     if (!el) return
-    const items = Array.from(el.querySelectorAll<HTMLElement>('.reveal:not(.is-visible)'))
-    if (prefersReducedMotion() || !('IntersectionObserver' in window)) {
-      items.forEach((i) => i.classList.add('is-visible'))
-      return
-    }
-    const io = new IntersectionObserver(
+    const reduced = prefersReducedMotion() || !('IntersectionObserver' in window)
+    const io = reduced ? null : new IntersectionObserver(
       (entries) => entries.forEach((e) => {
-        if (e.isIntersecting) { e.target.classList.add('is-visible'); io.unobserve(e.target) }
+        if (e.isIntersecting) { e.target.classList.add('is-visible'); io!.unobserve(e.target) }
       }),
-      { rootMargin: '0px 0px -8% 0px', threshold: 0.12 },
+      { rootMargin: '0px 0px -6% 0px', threshold: 0.1 },
     )
-    items.forEach((i) => io.observe(i))
-    return () => io.disconnect()
+    // Tracked per effect run (not via a DOM attribute) so StrictMode's double-invoke can't orphan elements.
+    const seen = new WeakSet<Element>()
+    const scan = () => {
+      el.querySelectorAll<HTMLElement>('.reveal:not(.is-visible)').forEach((i) => {
+        if (seen.has(i)) return
+        seen.add(i)
+        if (io) io.observe(i); else i.classList.add('is-visible')
+      })
+    }
+    scan()
+    const mo = new MutationObserver(scan)
+    mo.observe(el, { childList: true, subtree: true })
+    return () => { io?.disconnect(); mo.disconnect() }
   }, [root])
+}
+
+/** Per-page <title> and meta description. */
+export function useSeo(title: string, description?: string) {
+  useEffect(() => {
+    document.title = `${title} · DC Hospital`
+    if (description) {
+      let m = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+      if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m) }
+      m.content = description
+    }
+  }, [title, description])
 }
 
 /** True once the element has entered the viewport. */

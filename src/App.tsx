@@ -9,7 +9,23 @@ import * as R from './resources/definitions'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
-const Landing = lazy(() => import('./pages/landing/Landing'))
+// Public website
+const SiteLayout = lazy(() => import('./site/SiteLayout'))
+const SiteHome = lazy(() => import('./site/pages/Home'))
+const SiteNotFound = lazy(() => import('./site/pages/NotFound'))
+const PUBLIC_PAGES: [string, React.LazyExoticComponent<() => JSX.Element>][] = [
+  ['/welcome', SiteHome],
+  ['/about', lazy(() => import('./site/pages/About'))],
+  ['/services', lazy(() => import('./site/pages/Services'))],
+  ['/services/:slug', lazy(() => import('./site/pages/ServiceDetail'))],
+  ['/find-a-doctor', lazy(() => import('./site/pages/FindDoctor'))],
+  ['/find-a-doctor/:slug', lazy(() => import('./site/pages/DoctorProfile'))],
+  ['/packages', lazy(() => import('./site/pages/Packages'))],
+  ['/contact', lazy(() => import('./site/pages/Contact'))],
+  ['/faq', lazy(() => import('./site/pages/Faq'))],
+  ['/privacy', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Privacy })))],
+  ['/terms', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Terms })))],
+]
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'))
 const PatientDetail = lazy(() => import('./pages/PatientDetail'))
 const MyRecord = lazy(() => import('./pages/PatientDetail').then((m) => ({ default: m.MyRecord })))
@@ -24,6 +40,10 @@ const RESOURCES = [
   R.departmentsRes, R.invoicesRes, R.paymentsRes, R.expensesRes, R.inventoryRes, R.noticesRes, R.usersRes,
 ]
 
+/** Paths that belong to the signed-in app; anything else a guest opens gets the public 404. */
+const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings']
+const isAppPath = (p: string) => APP_PREFIXES.some((x) => p === x || p.startsWith(`${x}/`))
+
 const PageLoader = () => <div className="grid h-64 place-items-center"><Spinner className="h-6 w-6" /></div>
 
 export default function App() {
@@ -32,8 +52,17 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/welcome" element={<Landing />} />
-        <Route element={<RequireAuth guestHome={<Landing />}><AppLayout /></RequireAuth>}>
+        <Route element={<SiteLayout />}>
+          {PUBLIC_PAGES.map(([path, Page]) => <Route key={path} path={path} element={<Page />} />)}
+        </Route>
+        <Route element={
+          <RequireAuth
+            guestHome={<SiteLayout><SiteHome /></SiteLayout>}
+            guestFallback={(p) => (isAppPath(p) ? null : <SiteLayout><SiteNotFound /></SiteLayout>)}
+          >
+            <AppLayout />
+          </RequireAuth>
+        }>
           <Route index element={<Suspense fallback={<PageLoader />}><Dashboard /></Suspense>} />
           {RESOURCES.map((def) => (
             <Route key={def.path} path={def.path} element={<RequireNav path={def.path}><ResourcePage key={def.path} def={def} /></RequireNav>} />

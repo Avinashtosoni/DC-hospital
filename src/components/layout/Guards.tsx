@@ -13,12 +13,18 @@ export function FullScreenLoader() {
   )
 }
 
-export function RequireAuth({ children, guestHome }: { children: ReactNode; guestHome?: ReactNode }) {
+export function RequireAuth({ children, guestHome, guestFallback }: {
+  children: ReactNode
+  /** Rendered for signed-out visitors on "/" (the public website home). */
+  guestHome?: ReactNode
+  /** Optional renderer for signed-out visitors on other paths; return null to fall through to the login redirect. */
+  guestFallback?: (pathname: string) => ReactNode
+}) {
   const { user, loading } = useAuth()
   const loc = useLocation()
   if (loading) return <FullScreenLoader />
-  // Signed-out visitors hitting "/" see the public landing page instead of the login redirect.
   if (!user && guestHome && loc.pathname === '/') return <>{guestHome}</>
+  if (!user && guestFallback) { const node = guestFallback(loc.pathname); if (node) return <>{node}</> }
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
   return <>{children}</>
 }

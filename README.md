@@ -66,14 +66,29 @@ The schema lives in `scripts/sql/schema.sql`, the permission matrix in `src/auth
 npm run sql:build    # rewrites supabase/master.sql
 ```
 
-## Public landing page
+## Public website
 
-Signed-out visitors opening `/` see a patient-facing marketing site. It is also always reachable at `/welcome`. Signed-in users still land on their dashboard.
+Signed-out visitors get a multi-page, patient-facing hospital website. Signed-in users still land on their dashboard at `/`, and every public page stays reachable while signed in.
+
+| Route | Page |
+| --- | --- |
+| `/` (guests) · `/welcome` | Home: hero with quick booking, stats, services bento, doctors, testimonials, packages, FAQ |
+| `/about` | Story, mission/vision, milestone timeline, values, leadership, accreditations |
+| `/services` | Searchable grid of 12 specialities, signature programmes, 24×7 support services |
+| `/services/:slug` | Speciality detail: overview, conditions, procedures, technology, that department's doctors, FAQ, sticky booking card |
+| `/find-a-doctor` | Doctor directory: search (name, condition, language), department filter, "available today", sort. Filters sync to the URL |
+| `/find-a-doctor/:slug` | Doctor profile: credentials, education, weekly OPD schedule, reviews, a 7-day slot picker that hands off to booking, similar doctors |
+| `/packages` | Health check-ups with an Individual/Couple toggle, a full comparison table, check-up-day timeline and FAQ |
+| `/contact` | Contact channels, validated enquiry form with a reference number, map, hours and directions |
+| `/faq` | Searchable, categorised help centre |
+| `/privacy` · `/terms` | Legal pages with a sticky, scroll-spy table of contents |
+| any unknown URL | Branded 404 (unknown dashboard URLs still send guests to the login page) |
 
 - **Palette:** periwinkle → deep blue (`#CCCCFF`, `#A3A3CC`, `#5C5C99`, `#292966`), exposed as the Tailwind `peri-*` scale. Headings use Plus Jakarta Sans.
-- **Sections:** sticky glass navbar with scroll progress, hero with quick booking widget, stats counters and insurer marquee, bento services grid with an interactive mini scheduler, doctors showcase with department filter, benefits and how-it-works, testimonial marquee, health-package pricing with an Individual/Couple toggle, FAQ accordion, CTA, footer and a mobile sticky CTA bar.
-- **Accessibility:** scroll reveals, staggered entrances, pointer parallax and spotlight hover all respect `prefers-reduced-motion`. There is a skip link, aria-wired tabs, radios and accordion, and keyboard-friendly menus.
-- **Code:** in `src/pages/landing/`. All copy lives in `content.ts`, and images live in `public/landing/` (WebP, ~180 KB total). The page is lazy-loaded as its own ~19 KB gzip chunk.
+- **Shared shell** (`SiteLayout.tsx`): a sticky glass navbar with a Services mega-menu and active-link states, the footer, and a mobile sticky Call/Book bar. Pages set their own `<title>`/meta description and scroll to the top on navigation.
+- **Accessibility:** a skip link, breadcrumbs, aria-wired tabs, radios, accordions and form errors, and keyboard-friendly menus. All motion (scroll reveals, counters, parallax) respects `prefers-reduced-motion`. Layouts are tested at 390 px and 1440 px with no horizontal overflow.
+- **Code:** in `src/site/`. Page components live in `pages/`, shared blocks in `ui.tsx`/`parts.tsx`, and copy in `content.ts`. Speciality and doctor data live in `data/services.ts` and `data/doctors.ts`, so edit those to change the content. Every page is lazy-loaded as its own small chunk. Images are in `public/landing/`.
+- **Contact enquiries** are stored in the browser (`localStorage`, key `dch:enquiries:v1`). To collect them centrally, point `submit()` in `pages/Contact.tsx` at a Supabase table or an email/webhook endpoint.
 
 ## Deploy with Docker / Coolify
 
