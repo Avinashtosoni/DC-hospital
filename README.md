@@ -66,6 +66,15 @@ The schema lives in `scripts/sql/schema.sql`, the permission matrix in `src/auth
 npm run sql:build    # rewrites supabase/master.sql
 ```
 
+## Public landing page
+
+Signed-out visitors opening `/` see a patient-facing marketing site. It is also always reachable at `/welcome`. Signed-in users still land on their dashboard.
+
+- **Palette:** periwinkle → deep blue (`#CCCCFF`, `#A3A3CC`, `#5C5C99`, `#292966`), exposed as the Tailwind `peri-*` scale. Headings use Plus Jakarta Sans.
+- **Sections:** sticky glass navbar with scroll progress, hero with quick booking widget, stats counters and insurer marquee, bento services grid with an interactive mini scheduler, doctors showcase with department filter, benefits and how-it-works, testimonial marquee, health-package pricing with an Individual/Couple toggle, FAQ accordion, CTA, footer and a mobile sticky CTA bar.
+- **Accessibility:** scroll reveals, staggered entrances, pointer parallax and spotlight hover all respect `prefers-reduced-motion`. There is a skip link, aria-wired tabs, radios and accordion, and keyboard-friendly menus.
+- **Code:** in `src/pages/landing/`. All copy lives in `content.ts`, and images live in `public/landing/` (WebP, ~180 KB total). The page is lazy-loaded as its own ~19 KB gzip chunk.
+
 ## Deploy with Docker / Coolify
 
 The repo ships a production **multi-stage Dockerfile**. Node builds the app, and **nginx** (Alpine) serves it with SPA routing, gzip, long-lived caching for build assets, security headers and a `/healthz` endpoint.

@@ -9,6 +9,7 @@ import * as R from './resources/definitions'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
+const Landing = lazy(() => import('./pages/landing/Landing'))
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'))
 const PatientDetail = lazy(() => import('./pages/PatientDetail'))
 const MyRecord = lazy(() => import('./pages/PatientDetail').then((m) => ({ default: m.MyRecord })))
@@ -31,7 +32,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
+        <Route path="/welcome" element={<Landing />} />
+        <Route element={<RequireAuth guestHome={<Landing />}><AppLayout /></RequireAuth>}>
           <Route index element={<Suspense fallback={<PageLoader />}><Dashboard /></Suspense>} />
           {RESOURCES.map((def) => (
             <Route key={def.path} path={def.path} element={<RequireNav path={def.path}><ResourcePage key={def.path} def={def} /></RequireNav>} />

@@ -19,7 +19,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(31,173,170,.35),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(56,189,248,.18),transparent_50%)]" />
         <div className="absolute inset-0 opacity-[.07] [background-image:linear-gradient(white_1px,transparent_1px),linear-gradient(90deg,white_1px,transparent_1px)] [background-size:44px_44px]" />
         <div className="relative flex h-full flex-col justify-between p-12">
-          <Logo light />
+          <Link to="/" aria-label="Back to home" className="self-start"><Logo light /></Link>
           <div className="max-w-lg">
             <h1 className="text-4xl font-semibold leading-tight tracking-tight text-white">Run your entire hospital from one calm, connected workspace.</h1>
             <p className="mt-4 text-base text-slate-400">OPD scheduling, e-prescriptions, IPD & bed management, laboratory, pharmacy, billing and financial reporting — built for every role in your team.</p>
@@ -41,7 +41,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
       </div>
       <div className="flex items-center justify-center px-5 py-10 sm:px-10">
         <div className="w-full max-w-md">
-          <div className="mb-8 lg:hidden"><Logo /></div>
+          <Link to="/" aria-label="Back to home" className="mb-8 inline-block lg:hidden"><Logo /></Link>
           {children}
         </div>
       </div>
