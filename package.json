@@ -1,0 +1,46 @@
+{
+  "name": "dc-hospital",
+  "version": "1.0.0",
+  "description": "DC Hospital — full-stack Hospital Management System (React + Supabase)",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc -b",
+    "sql:build": "tsx scripts/build-master-sql.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Avinashtosoni/DC-hospital.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Avinashtosoni/DC-hospital/issues"
+  },
+  "homepage": "https://github.com/Avinashtosoni/DC-hospital#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
+    "@tanstack/react-query": "^5.104.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "lucide-react": "^1.48.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.6",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
+  },
+  "private": true,
+  "type": "module"
+}

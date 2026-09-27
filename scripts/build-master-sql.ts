@@ -1,0 +1,194 @@
+/**
+ * Builds supabase/master.sql — ONE file containing:
+ *   schema (tables, indexes, helper functions, triggers) → RLS policies → demo auth users → demo data
+ *
+ * RLS policies are generated from src/auth/permissions.ts so the database always enforces exactly
+ * what the UI shows. Demo data comes from src/data/seed.ts with dates expressed relative to
+ * current_date, so the dataset always looks "live" whenever you run the script.
+ *
+ *   npm run sql:build
+ */
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { PERMISSIONS, type Action } from '../src/auth/permissions'
+import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from '../src/data/seed'
+import type { Role, TableName } from '../src/types'
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const RAW = '__SQL__'
+
+// ------------------------------------------------------------------ RLS
+const patientCondition: Partial<Record<TableName, string>> = {
+  patients: 'profile_id = auth.uid()',
+  appointments: 'patient_id = public.my_patient_id()',
+  prescriptions: 'patient_id = public.my_patient_id()',
+  lab_tests: 'patient_id = public.my_patient_id()',
+  invoices: 'patient_id = public.my_patient_id()',
+  payments: 'patient_id = public.my_patient_id()',
+  admissions: 'patient_id = public.my_patient_id()',
+  departments: 'true',
+  doctors: "status = 'active'",
+  notices: "audience in ('all', 'patients')",
+}
+const staffNoticeCondition = "(audience in ('all', 'staff') or (audience = 'doctors' and public.has_role('doctor')))"
+
+const CMD: Record<Action, 'select' | 'insert' | 'update' | 'delete'> = { read: 'select', create: 'insert', update: 'update', delete: 'delete' }
+
+function policies(): string {
+  const out: string[] = []
+  for (const [table, matrix] of Object.entries(PERMISSIONS) as [TableName, Partial<Record<Role, Action[]>>][]) {
+    out.push(`\n-- ${table}`)
+    out.push(`alter table public.${table} enable row level security;`)
+    if (table === 'profiles') continue // handled manually below
+    for (const action of ['read', 'create', 'update', 'delete'] as Action[]) {
+      const staffRoles = (Object.keys(matrix) as Role[]).filter((r) => r !== 'patient' && matrix[r]!.includes(action))
+      const conds: string[] = []
+      if (staffRoles.length) {
+        let c = `public.has_role(${staffRoles.map((r) => `'${r}'`).join(', ')})`
+        // non-owner staff only see notices meant for them
+        if (table === 'notices' && action === 'read') c = `(public.has_role('owner') or (public.has_role(${staffRoles.filter((r) => r !== 'owner').map((r) => `'${r}'`).join(', ')}) and ${staffNoticeCondition}))`
+        conds.push(c)
+      }
+      if (matrix.patient?.includes(action)) {
+        const pc = patientCondition[table]
+        if (!pc) throw new Error(`No patient condition for ${table}`)
+        conds.push(`(public.has_role('patient') and ${pc})`)
+      }
+      if (!conds.length) continue
+      const expr = conds.join('\n      or ')
+      const name = `${table}_${CMD[action]}`
+      const cmd = CMD[action]
+      const clause = cmd === 'insert' ? `with check (${expr})` : cmd === 'update' ? `using (${expr})\n  with check (${expr})` : `using (${expr})`
+      out.push(`create policy ${name} on public.${table} for ${cmd} to authenticated\n  ${clause};`)
+    }
+  }
+  // profiles: everyone reads their own; staff can read all (to show names); users update themselves; owner manages all
+  out.push(`
+create policy profiles_select on public.profiles for select to authenticated
+  using (id = auth.uid() or public.is_staff());
+create policy profiles_update_self on public.profiles for update to authenticated
+  using (id = auth.uid()) with check (id = auth.uid());
+create policy profiles_update_owner on public.profiles for update to authenticated
+  using (public.has_role('owner')) with check (public.has_role('owner'));
+create policy profiles_delete_owner on public.profiles for delete to authenticated
+  using (public.has_role('owner'));`)
+  return out.join('\n')
+}
+
+// ------------------------------------------------------------------ seed
+const sqlDates = {
+  date: (o: number) => `${RAW}(current_date + ${o})`,
+  ts: (o: number, t = '09:00') => `${RAW}((current_date + ${o}) + time '${t}')`,
+}
+const TEXT_ARRAY_COLS = new Set(['available_days'])
+
+function lit(v: unknown, col: string): string {
+  if (v === undefined) return 'default'
+  if (v === null) return 'null'
+  if (typeof v === 'number') return Number.isFinite(v) ? String(Math.round(v * 100) / 100) : 'null'
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
+  if (typeof v === 'string') return v.startsWith(RAW) ? v.slice(RAW.length) : `'${v.replace(/'/g, "''")}'`
+  if (Array.isArray(v) && TEXT_ARRAY_COLS.has(col)) return `array[${v.map((x) => lit(x, '')).join(', ')}]::text[]`
+  return `'${JSON.stringify(v).replace(/'/g, "''")}'::jsonb`
+}
+
+function inserts(table: string, rows: Record<string, unknown>[]): string {
+  if (!rows.length) return ''
+  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))]
+  const chunks: string[] = []
+  for (let i = 0; i < rows.length; i += 50) {
+    const values = rows.slice(i, i + 50).map((r) => `  (${cols.map((c) => lit(r[c], c)).join(', ')})`).join(',\n')
+    chunks.push(`insert into public.${table} (${cols.join(', ')}) values\n${values};`)
+  }
+  return `-- ${table} (${rows.length})\n${chunks.join('\n')}`
+}
+
+function seedSql(): string {
+  const s = buildSeed(sqlDates)
+  const ids = DEMO_USERS.map((u) => `'${u.id}'`).join(', ')
+  const users = DEMO_USERS.map((u) => `  ('00000000-0000-0000-0000-000000000000', '${u.id}', 'authenticated', 'authenticated', '${u.email}',
+   extensions.crypt('${DEMO_PASSWORD}', extensions.gen_salt('bf')), now(), '{"provider":"email","providers":["email"]}'::jsonb,
+   '${JSON.stringify({ full_name: u.full_name, phone: u.phone })}'::jsonb, now() - interval '200 days', now(), '', '', '', '')`).join(',\n')
+  const identities = DEMO_USERS.map((u) => `  (gen_random_uuid(), '${u.id}', '${u.id}', '${JSON.stringify({ sub: u.id, email: u.email, email_verified: true })}'::jsonb, 'email', now(), now(), now())`).join(',\n')
+  const roleUpdates = DEMO_USERS.map((u) => `update public.profiles set role = '${u.role}', phone = '${u.phone}' where id = '${u.id}';`).join('\n')
+
+  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices']
+  const body = order.map((t) => inserts(t, s[t] as unknown as Record<string, unknown>[])).join('\n\n')
+
+  return `
+-- 7a. Demo login accounts (password: ${DEMO_PASSWORD})
+delete from auth.users where id in (${ids}) or email in (${DEMO_USERS.map((u) => `'${u.email}'`).join(', ')});
+
+insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data,
+                        raw_user_meta_data, created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token)
+values
+${users};
+
+insert into auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+values
+${identities};
+
+-- handle_new_user() created patient profiles; assign the demo roles and drop the auto-created patient rows
+${roleUpdates}
+delete from public.patients where profile_id in (${ids});
+
+-- 7b. Demo hospital data (bed/patient statuses are already consistent, so skip the admission trigger while loading)
+alter table public.admissions disable trigger trg_admissions_sync;
+
+${body}
+
+alter table public.admissions enable trigger trg_admissions_sync;
+
+-- 7c. Backfill profiles for any pre-existing auth users (e.g. if you re-run this script on a live project)
+insert into public.profiles (id, full_name, email, role)
+select u.id, coalesce(u.raw_user_meta_data ->> 'full_name', split_part(u.email, '@', 1)), u.email, 'patient'
+from auth.users u
+where not exists (select 1 from public.profiles p where p.id = u.id);
+`
+}
+
+// ------------------------------------------------------------------ assemble
+const header = `-- =====================================================================================================
+--  DC HOSPITAL — MASTER SQL FOR SUPABASE
+--  Schema · Row Level Security · Triggers · Demo users · Realistic demo data — in a single file.
+--
+--  HOW TO USE
+--    1. Supabase Dashboard → SQL Editor → New query → paste this whole file → Run.
+--    2. Put your project URL + anon key in .env (see .env.example) and start the app.
+--    3. Sign in with any demo account, password: ${DEMO_PASSWORD}
+${DEMO_USERS.map((u) => `--         ${u.role.padEnd(13)} ${u.email}`).join('\n')}
+--
+--  ⚠ Re-running DROPS and recreates all DC Hospital tables (auth users other than the demo ones are kept).
+--  Generated by scripts/build-master-sql.ts — edit the sources and run \`npm run sql:build\`.
+-- =====================================================================================================
+`
+const schema = readFileSync(resolve(root, 'scripts/sql/schema.sql'), 'utf8')
+
+const sql = `${header}
+begin;
+
+${schema}
+
+-- =====================================================================================================
+--  6. ROW LEVEL SECURITY (generated from src/auth/permissions.ts)
+-- =====================================================================================================
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+revoke all on all tables in schema public from anon;
+grant execute on all functions in schema public to authenticated;
+${policies()}
+
+-- =====================================================================================================
+--  7. DEMO DATA
+-- =====================================================================================================
+${seedSql()}
+
+commit;
+
+-- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
+`
+
+mkdirSync(resolve(root, 'supabase'), { recursive: true })
+writeFileSync(resolve(root, 'supabase/master.sql'), sql)
+console.log(`✔ supabase/master.sql written (${(sql.length / 1024).toFixed(0)} KB)`)
