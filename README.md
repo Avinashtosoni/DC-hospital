@@ -66,6 +66,52 @@ The schema lives in `scripts/sql/schema.sql`, the permission matrix in `src/auth
 npm run sql:build    # rewrites supabase/master.sql
 ```
 
+## Deploy with Docker / Coolify
+
+The repo ships a production **multi-stage Dockerfile**. Node builds the app, and **nginx** (Alpine) serves it with SPA routing, gzip, long-lived caching for build assets, security headers and a `/healthz` endpoint.
+
+**Supabase keys are read when the container starts.** On every start, the container writes `/env.js` from its environment variables. The same image works for demo, staging and production; changing a key only needs a restart, not a rebuild.
+
+### Coolify (recommended)
+
+1. **+ New Resource → Public/Private Repository**, then pick this repo and branch.
+2. **Build Pack:** `Dockerfile`. Leave Base Directory `/` and Dockerfile Location `/Dockerfile`.
+3. **Ports Exposes:** `80`.
+4. **Environment Variables:**
+   | Key | Value |
+   | --- | --- |
+   | `VITE_SUPABASE_URL` | `https://<project>.supabase.co` |
+   | `VITE_SUPABASE_ANON_KEY` | your project's anon/public key |
+
+   Plain runtime variables are enough; you don't need to tick "Build Variable". Leave both empty to run in **demo mode**.
+5. Set your domain and click **Deploy**. Coolify uses the image's built-in `HEALTHCHECK` (`GET /healthz`).
+6. In Supabase: **Authentication → URL Configuration**, add your Coolify domain to *Site URL / Redirect URLs*.
+
+You can also choose the **Docker Compose** build pack. `docker-compose.yml` is ready for it, and the environment variables appear in the Coolify UI automatically.
+
+### Plain Docker
+
+```bash
+docker build -t dc-hospital .
+docker run -d -p 8080:80 \
+  -e VITE_SUPABASE_URL=https://<project>.supabase.co \
+  -e VITE_SUPABASE_ANON_KEY=<anon-key> \
+  --name dc-hospital dc-hospital
+# → http://localhost:8080   (omit the -e flags for demo mode)
+```
+
+Or `docker compose up -d --build`; uncomment the `ports` block in `docker-compose.yml` first.
+
+| File | Purpose |
+| --- | --- |
+| `Dockerfile` | node:22-alpine build → nginx:1.27-alpine runtime, healthcheck |
+| `docker/nginx.conf` | SPA fallback, caching, gzip, security headers, `/healthz` |
+| `docker/40-runtime-env.sh` | writes `/env.js` from env vars when the container starts |
+| `docker-compose.yml` | Compose / Coolify compose deployment |
+| `.dockerignore` | keeps the build context small (no `node_modules`, `.env`, `.git`) |
+
+> The anon key is public by design; Row Level Security in `master.sql` protects the data. **Never** put the `service_role` key in these variables.
+
 ## Role permissions
 
 | Module | Owner | Doctor | Receptionist | Accountant | Staff | Patient |
@@ -100,3 +146,4 @@ supabase/master.sql  ← the single file to run in Supabase
 - `npm run dev`: start the dev server
 - `npm run build`: type-check and build for production
 - `npm run sql:build`: regenerate `supabase/master.sql`
+- `docker build -t dc-hospital .`: build the production image

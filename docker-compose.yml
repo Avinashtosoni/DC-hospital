@@ -1,0 +1,24 @@
+# Works with Coolify's "Docker Compose" build pack and plain `docker compose up -d`.
+# Leave the Supabase variables empty to run in demo mode.
+services:
+  dc-hospital:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dc-hospital:latest
+    restart: unless-stopped
+    environment:
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL:-}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY:-}
+    # Coolify's proxy routes to container port 80 — no host port needed.
+    # For local use without Coolify, uncomment:
+    # ports:
+    #   - "8080:80"
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
