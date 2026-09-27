@@ -2,13 +2,13 @@ import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, CalendarCheck, CalendarDays, Check, ChevronDown, ChevronRight, Clock, Languages, Phone, Sparkles, Stethoscope, Users, type LucideIcon } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
-import { HOSPITAL, cn } from '../lib/utils'
-import { PACKAGES, type FaqItem } from './content'
-import { nextAvailable, type SiteDoctor } from './data/doctors'
+import { cn } from '../lib/utils'
+import { Rich, nextAvailable, useContact, useSite } from './cms/content'
+import { iconFor } from './cms/icons'
+import type { FaqItem, SiteDoctor } from './cms/types'
 import { Reveal } from './parts'
 
 export const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`
-export const TEL = `tel:${HOSPITAL.phone.replace(/\s+/g, '')}`
 
 /** Where "Book" CTAs go: signed-in users book from the portal; guests sign up first. */
 export function useBookHref() {
@@ -53,7 +53,7 @@ export function Breadcrumbs({ items }: { items: { label: string; to?: string }[]
 
 /** Inner-page hero with breadcrumbs, eyebrow, title and optional right-hand content. */
 export function PageHero({ crumbs, eyebrow, title, lead, children, aside, center }: {
-  crumbs: { label: string; to?: string }[]; eyebrow?: string; title: ReactNode; lead?: ReactNode
+  crumbs: { label: string; to?: string }[]; eyebrow?: string; title: ReactNode | string; lead?: ReactNode
   children?: ReactNode; aside?: ReactNode; center?: boolean
 }) {
   return (
@@ -62,8 +62,8 @@ export function PageHero({ crumbs, eyebrow, title, lead, children, aside, center
       <div className={cn('l-container', aside && 'grid items-center gap-12 lg:grid-cols-[1.1fr_1fr]')}>
         <div className={cn(center && !aside && 'mx-auto max-w-3xl text-center [&_ol]:justify-center')}>
           <Breadcrumbs items={crumbs} />
-          {eyebrow && <div className="l-rise mt-6" style={{ animationDelay: '80ms' }}><span className="l-eyebrow">{eyebrow}</span></div>}
-          <h1 className="l-rise mt-4 font-display text-4xl font-extrabold leading-[1.08] tracking-tight text-peri-900 sm:text-5xl lg:text-[3.5rem]" style={{ animationDelay: '160ms' }}>{title}</h1>
+           {eyebrow && <div className="l-rise mt-6" style={{ animationDelay: '80ms' }}><span className="l-eyebrow">{eyebrow}</span></div>}
+          <h1 className="l-rise mt-4 font-display text-4xl font-extrabold leading-[1.08] tracking-tight text-peri-900 sm:text-5xl lg:text-[3.5rem]" style={{ animationDelay: '160ms' }}>{typeof title === 'string' ? <Rich text={title} /> : title}</h1>
           {lead && <p className={cn('l-rise mt-5 max-w-2xl text-base leading-relaxed text-slate-600 sm:text-lg', center && !aside && 'mx-auto')} style={{ animationDelay: '260ms' }}>{lead}</p>}
           {children && <div className="l-rise mt-8" style={{ animationDelay: '360ms' }}>{children}</div>}
         </div>
@@ -73,17 +73,18 @@ export function PageHero({ crumbs, eyebrow, title, lead, children, aside, center
   )
 }
 
-export function SectionHeader({ eyebrow, title, lead, id, center = true, className }: { eyebrow: string; title: ReactNode; lead?: string; id?: string; center?: boolean; className?: string }) {
+export function SectionHeader({ eyebrow, title, lead, id, center = true, className }: { eyebrow: string; title: ReactNode | string; lead?: string; id?: string; center?: boolean; className?: string }) {
   return (
     <div className={cn('max-w-2xl', center && 'mx-auto text-center', className)}>
       <Reveal><span className="l-eyebrow">{eyebrow}</span></Reveal>
-      <Reveal as="h2" id={id} delay={80} className="l-h2">{title}</Reveal>
+      <Reveal as="h2" id={id} delay={80} className="l-h2">{typeof title === 'string' ? <Rich text={title} /> : title}</Reveal>
       {lead && <Reveal as="p" delay={160} className="l-lead">{lead}</Reveal>}
     </div>
   )
 }
 
-export function FeatureIcon({ icon: Icon, className }: { icon: LucideIcon; className?: string }) {
+export function FeatureIcon({ icon, className }: { icon: LucideIcon | string; className?: string }) {
+  const Icon = typeof icon === 'string' ? iconFor(icon) : icon
   return (
     <span className={cn('grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-peri-200 to-peri-300 text-peri-800 ring-1 ring-inset ring-white/60 transition duration-500 group-hover:scale-110 group-hover:from-peri-600 group-hover:to-peri-800 group-hover:text-white', className)}>
       <Icon className="h-6 w-6" />
@@ -159,6 +160,7 @@ export function Accordion({ items, idPrefix, defaultOpen = 0 }: { items: FaqItem
 export function PackagesGrid() {
   const [couple, setCouple] = useState(false)
   const book = useBookHref()
+  const PACKAGES = useSite().packages.items
   return (
     <>
       <Reveal delay={150} className="mt-8 flex justify-center">
@@ -172,7 +174,8 @@ export function PackagesGrid() {
           ))}
         </div>
       </Reveal>
-      <div className="mt-12 grid grid-cols-1 items-stretch gap-5 lg:grid-cols-3">
+      <div className={cn('mt-12 grid grid-cols-1 items-stretch gap-5', PACKAGES.length === 2 ? 'mx-auto max-w-4xl lg:grid-cols-2' : PACKAGES.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3')}>
+        {PACKAGES.length === 0 && <p className="col-span-full text-center text-sm text-slate-500">Packages will be announced soon.</p>}
         {PACKAGES.map((p, i) => {
           const price = couple ? p.couple : p.price
           return (
@@ -214,8 +217,10 @@ export function PackagesGrid() {
   )
 }
 
-export function CtaBand({ title, lead, badge = '23 specialists available today' }: { title?: ReactNode; lead?: string; badge?: string }) {
+export function CtaBand({ title, lead, badge }: { title?: string; lead?: string; badge?: string }) {
   const book = useBookHref()
+  const c = useContact()
+  const cta = c.cta
   return (
     <section aria-label="Book an appointment" className="relative py-16 sm:py-24">
       <div className="l-container">
@@ -223,22 +228,24 @@ export function CtaBand({ title, lead, badge = '23 specialists available today' 
           <div aria-hidden="true" className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top_left,rgba(163,163,204,.45),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(92,92,153,.7),transparent_55%)]" />
           <div aria-hidden="true" className="absolute inset-0 -z-10 opacity-[.08] [background-image:linear-gradient(white_1px,transparent_1px),linear-gradient(90deg,white_1px,transparent_1px)] [background-size:48px_48px]" />
           <div aria-hidden="true" className="motion-safe-only absolute -left-10 top-10 -z-10 h-40 w-40 animate-drift rounded-full bg-peri-300/30 blur-3xl" />
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs font-semibold text-peri-200 backdrop-blur">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{badge}
-          </span>
+          {(badge || cta.badge) && (
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs font-semibold text-peri-200 backdrop-blur">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{badge || cta.badge}
+            </span>
+          )}
           <h2 className="mx-auto mt-6 max-w-3xl font-display text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl">
-            {title ?? <>Your health can’t wait in a queue. <span className="text-peri-300">Neither should you.</span></>}
+            <Rich text={title || cta.title} hl="text-peri-300" />
           </h2>
-          <p className="mx-auto mt-5 max-w-xl text-base text-peri-200 sm:text-lg">{lead ?? 'Book your consultation in 30 seconds — or talk to our care team right now.'}</p>
+          <p className="mx-auto mt-5 max-w-xl text-base text-peri-200 sm:text-lg">{lead || cta.lead}</p>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link to={book} className="inline-flex items-center gap-2 rounded-full bg-white px-7 py-4 text-sm font-semibold text-peri-900 shadow-xl transition duration-300 hover:-translate-y-0.5 hover:bg-peri-100">
               <CalendarCheck className="h-4 w-4" />Book appointment
             </Link>
-            <a href={TEL} className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/5 px-7 py-4 text-sm font-semibold text-white backdrop-blur transition duration-300 hover:-translate-y-0.5 hover:bg-white/10">
-              <Phone className="h-4 w-4" />{HOSPITAL.phone}
+            <a href={c.tel} className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/5 px-7 py-4 text-sm font-semibold text-white backdrop-blur transition duration-300 hover:-translate-y-0.5 hover:bg-white/10">
+              <Phone className="h-4 w-4" />{c.phone}
             </a>
           </div>
-          <p className="mt-6 text-xs text-peri-300">Free account · No booking fee · Cancel anytime</p>
+          {cta.note && <p className="mt-6 text-xs text-peri-300">{cta.note}</p>}
         </Reveal>
       </div>
     </section>

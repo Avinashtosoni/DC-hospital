@@ -3,7 +3,7 @@
  * (scripts/build-master-sql.ts). Dates are expressed relative to "today" through a DateHelper so the
  * data always feels current — locally they become ISO strings, in SQL they become `current_date + n`.
  */
-import type {
+import type { SiteEnquiry,
   Admission, Appointment, Bed, DB, Department, Doctor, Expense, InventoryItem, Invoice, LabTest,
   LineItem, Medication, Notice, Patient, Payment, Prescription, Profile, Role, Staff, Ward,
 } from '../types'
@@ -573,9 +573,24 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
     { id: sid(15, 6), title: 'Night shift roster updated', body: 'The revised night shift roster for nursing staff is available with the Head Nurse.', audience: 'staff', priority: 'normal', published_on: d.date(-10), created_at: d.ts(-10, '17:00') },
   ]
 
+  // ---------------------------------------------------------------- website enquiries (Contact form)
+  const enquiryDefs: [string, string, string | null, string, string | null, string, SiteEnquiry['status'], number, string | null][] = [
+    ['Sunita Agarwal', '9810012345', 'sunita.a@gmail.com', 'Book an appointment', 'Cardiology', 'I would like a cardiology consultation for my father (68). He has had chest discomfort on walking for a week.', 'new', 0, null],
+    ['Rohit Malhotra', '9899023456', null, 'Billing & insurance', null, 'Is Star Health cashless accepted for a planned knee replacement? Please share the documents needed.', 'new', 0, null],
+    ['Meenakshi Iyer', '9711034567', 'meenakshi.iyer@outlook.com', 'Medical records', null, 'I need a copy of my discharge summary from March for an insurance claim.', 'in_progress', -1, 'Records desk informed; ready for pickup tomorrow.'],
+    ['Aman Gupta', '9953045678', 'aman.g@yahoo.in', 'Feedback or complaint', null, 'Wanted to thank the night nursing team in Ward B — they were incredibly kind to my mother.', 'resolved', -3, 'Shared with nursing superintendent. Thanked patient by phone.'],
+    ['Farah Khan', '9818056789', null, 'Book an appointment', 'Pediatrics', 'Need a vaccination appointment for my 9-month-old this Saturday morning if possible.', 'resolved', -4, 'Booked with Dr. Ananya Iyer, Sat 10:30.'],
+    ['Karan Sethi', '9650067890', 'karan.sethi@gmail.com', 'Careers', null, 'I am a BSc Nursing graduate with 3 years of ICU experience. Are there any openings?', 'in_progress', -6, 'CV forwarded to HR.'],
+    ['Win Big Offers', '9000000000', 'promo@spam.example', 'Something else', null, 'Get 10,000 followers instantly!!! Visit our site now.', 'spam', -7, null],
+  ]
+  const site_enquiries: SiteEnquiry[] = enquiryDefs.map(([name, phone, email, topic, speciality, message, status, day, notes], i) => ({
+    id: sid(16, i + 1), ref: `DCH-${String(482101 + i * 37)}`, name, phone, email, topic, speciality, message, status, notes,
+    created_at: d.ts(day, `${String(9 + i).padStart(2, '0')}:${i % 2 ? '40' : '15'}`),
+  }))
+
   return {
     profiles, departments, doctors, staff, patients, appointments, prescriptions, lab_tests, wards, beds,
-    admissions, invoices, payments, expenses, inventory, notices,
+    admissions, invoices, payments, expenses, inventory, notices, site_enquiries,
   }
 
 }

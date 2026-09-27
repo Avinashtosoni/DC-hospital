@@ -1,6 +1,6 @@
 import {
   BarChart3, BedDouble, Building2, CalendarCheck, ClipboardList, CreditCard, FlaskConical, HeartPulse, LayoutDashboard,
-  Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, type LucideIcon,
+  Globe, Inbox, Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, type LucideIcon,
 } from 'lucide-react'
 import type { Role } from '../../types'
 
@@ -32,6 +32,10 @@ export const NAV: NavSection[] = [
     { label: (r) => (r === 'patient' ? 'My Payments' : 'Payments'), path: '/payments', icon: CreditCard, roles: ['owner', 'accountant', 'receptionist', 'patient'] },
     { label: 'Expenses', path: '/expenses', icon: Wallet, roles: ['owner', 'accountant'] },
     { label: 'Financial Reports', path: '/reports', icon: BarChart3, roles: ['owner', 'accountant'] },
+  ] },
+  { title: 'Website', items: [
+    { label: 'Website CMS', path: '/cms', icon: Globe, roles: ['owner'] },
+    { label: 'Enquiries', path: '/enquiries', icon: Inbox, roles: ['owner', 'receptionist'] },
   ] },
   { title: 'Operations', items: [
     { label: 'Pharmacy & Inventory', path: '/inventory', icon: Package, roles: ['owner', 'staff', 'doctor', 'accountant'] },

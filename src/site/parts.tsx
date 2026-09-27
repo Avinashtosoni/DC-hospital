@@ -2,6 +2,7 @@ import { useRef, type CSSProperties, type ElementType, type ReactNode, type Poin
 import { Link } from 'react-router-dom'
 import { HeartPulse } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { useSite } from './cms/content'
 import { useCountUp, useInView } from './hooks'
 
 /** Scroll-reveal wrapper. `delay` in ms for staggered entrances. */
@@ -16,15 +17,16 @@ export function Reveal({ as: Tag = 'div', delay = 0, variant, className, childre
 }
 
 export function LandingLogo({ className, light, to = '/' }: { className?: string; light?: boolean; to?: string }) {
+  const { settings } = useSite()
   return (
-    <Link to={to} className={cn('group inline-flex items-center gap-2.5 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-peri-300', className)} aria-label="DC Hospital home">
+    <Link to={to} className={cn('group inline-flex items-center gap-2.5 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-peri-300', className)} aria-label={`${settings.name} home`}>
       <span className="relative grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-peri-600 to-peri-800 text-white shadow-glow transition-transform duration-500 group-hover:rotate-[8deg] group-hover:scale-105">
         <HeartPulse className="h-5 w-5" strokeWidth={2.4} />
         <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-400" />
       </span>
       <span className="leading-none">
-        <span className={cn('block font-display text-lg font-extrabold tracking-tight', light ? 'text-white' : 'text-peri-900')}>DC Hospital</span>
-        <span className={cn('mt-1 block text-[10px] font-semibold uppercase tracking-[.2em]', light ? 'text-peri-300' : 'text-peri-500')}>Care · 24×7</span>
+        <span className={cn('block font-display text-lg font-extrabold tracking-tight', light ? 'text-white' : 'text-peri-900')}>{settings.name}</span>
+        <span className={cn('mt-1 block text-[10px] font-semibold uppercase tracking-[.2em]', light ? 'text-peri-300' : 'text-peri-500')}>{settings.tagline}</span>
       </span>
     </Link>
   )
@@ -56,7 +58,7 @@ export function SpotlightCard({ className, children, as: Tag = 'div' }: { classN
   )
 }
 
-export function Counter({ value, suffix = '', decimals = 0, format }: { value: number; suffix?: string; decimals?: number; format?: 'lakh' }) {
+export function Counter({ value, suffix = '', decimals = 0, format }: { value: number; suffix?: string; decimals?: number; format?: 'lakh' | 'plain' }) {
   const { ref, inView } = useInView<HTMLSpanElement>(0.5)
   const v = useCountUp(value, inView)
   let text: string

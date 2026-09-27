@@ -2,12 +2,13 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowRight, Award, BadgeCheck, CalendarDays, Check, Clock, GraduationCap, Languages, MapPin, Phone, Share2, Stethoscope, ThumbsUp, Users } from 'lucide-react'
 import { toast } from 'sonner'
-import { HOSPITAL, cn } from '../../lib/utils'
-import { DOCTORS, REVIEW_POOL, WEEK, doctorBySlug, nextAvailable } from '../data/doctors'
-import { serviceBySlug } from '../data/services'
+import { cn } from '../../lib/utils'
+import { WEEK, nextAvailable, useContact, useSite } from '../cms/content'
+import { iconFor } from '../cms/icons'
+import { REVIEW_POOL } from '../data/doctors'
 import { useSeo } from '../hooks'
 import { Reveal, Stars } from '../parts'
-import { Breadcrumbs, DoctorCard, TEL, inr, useBookHref } from '../ui'
+import { Breadcrumbs, DoctorCard, inr, useBookHref } from '../ui'
 import NotFound from './NotFound'
 
 const SLOTS = { morning: ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30'], afternoon: ['14:00', '14:30', '15:00', '15:30'], evening: ['17:00', '17:30', '18:00', '18:30'] }
@@ -22,10 +23,12 @@ export default function DoctorProfile() {
 }
 
 function Profile({ slug }: { slug?: string }) {
-  const d = doctorBySlug(slug)
+  const { doctors: DOCTORS, services } = useSite()
+  const c = useContact()
+  const d = DOCTORS.find((x) => x.slug === slug)
   const book = useBookHref()
   const navigate = useNavigate()
-  useSeo(d ? `${d.name} — ${d.role}` : 'Doctor not found', d ? `${d.name}, ${d.quals}. ${d.exp}+ years experience. Book an appointment at DC Hospital.` : undefined)
+  useSeo(d ? `${d.name} — ${d.role}` : 'Doctor not found', d ? `${d.name}, ${d.quals}. ${d.exp}+ years experience. Book an appointment at ${c.name}.` : undefined)
 
   const days = useMemo(() => {
     const out: { date: Date; dow: string; ok: boolean }[] = []
@@ -42,7 +45,8 @@ function Profile({ slug }: { slug?: string }) {
   const [slot, setSlot] = useState<string | null>(null)
 
   if (!d) return <NotFound />
-  const service = serviceBySlug(d.service)
+  const service = services.find((x) => x.slug === d.service)
+  const ServiceIcon = iconFor(service?.icon)
   const reviews = [0, 1, 2].map((k) => REVIEW_POOL[(d.slug.length + k * 2) % REVIEW_POOL.length])
   const similar = DOCTORS.filter((x) => x.slug !== d.slug && (x.dept === d.dept || x.service === d.service)).concat(DOCTORS.filter((x) => x.slug !== d.slug && x.featured)).filter((x, i, a) => a.indexOf(x) === i).slice(0, 3)
   const selected = days[day]
@@ -75,7 +79,7 @@ function Profile({ slug }: { slug?: string }) {
                   </span>
                 </div>
                 <div className="min-w-0 flex-1">
-                  {service && <Link to={`/services/${service.slug}`} className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-peri-700 backdrop-blur transition hover:bg-white"><service.icon className="h-3.5 w-3.5" />{service.name}</Link>}
+                  {service && <Link to={`/services/${service.slug}`} className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-peri-700 backdrop-blur transition hover:bg-white"><ServiceIcon className="h-3.5 w-3.5" />{service.name}</Link>}
                   <h1 className="mt-3 flex items-center gap-2 font-display text-3xl font-extrabold tracking-tight text-peri-900 sm:text-4xl">{d.name}<BadgeCheck className="h-7 w-7 shrink-0 text-peri-600" aria-label="Verified specialist" /></h1>
                   <p className="mt-1 text-base font-medium text-slate-600">{d.role}</p>
                   <p className="mt-1 text-sm text-slate-500">{d.quals}</p>
@@ -143,7 +147,7 @@ function Profile({ slug }: { slug?: string }) {
                       )
                     })}
                   </div>
-                  <p className="mt-3 flex items-center gap-2 text-sm text-slate-500"><Clock className="h-4 w-4 text-peri-500" />{d.time} · <MapPin className="h-4 w-4 text-peri-500" />OPD Block, {HOSPITAL.name}</p>
+                  <p className="mt-3 flex items-center gap-2 text-sm text-slate-500"><Clock className="h-4 w-4 text-peri-500" />{d.time} · <MapPin className="h-4 w-4 text-peri-500" />OPD Block, {c.name}</p>
                 </Reveal>
 
                 <Reveal>
@@ -218,7 +222,7 @@ function Profile({ slug }: { slug?: string }) {
                   className="btn-peri mt-6 w-full disabled:pointer-events-none disabled:opacity-50">
                   {slot ? <><Check className="h-4 w-4" />Continue with {selected.dow}, {slot}</> : <>Select a time slot</>}
                 </button>
-                <a href={TEL} className="mt-3 flex items-center justify-center gap-2 text-sm font-semibold text-peri-700 transition hover:text-peri-900"><Phone className="h-4 w-4" />or call {HOSPITAL.phone}</a>
+                <a href={c.tel} className="mt-3 flex items-center justify-center gap-2 text-sm font-semibold text-peri-700 transition hover:text-peri-900"><Phone className="h-4 w-4" />or call {c.phone}</a>
               </div>
             </aside>
           </div>

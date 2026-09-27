@@ -1,30 +1,6 @@
 // Public doctor directory. Names/specialities mirror the demo seed so the site and the app feel like one hospital.
 
-export type Day = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun'
-export const WEEK: Day[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
-export type SiteDoctor = {
-  slug: string
-  name: string
-  role: string
-  dept: string
-  service: string // service slug
-  img: string
-  exp: number
-  rating: number
-  reviews: number
-  fee: number
-  days: Day[]
-  time: string
-  langs: string[]
-  quals: string
-  bio: string
-  education: { degree: string; inst: string; year: number }[]
-  expertise: string[]
-  awards?: string[]
-  featured?: boolean
-  onLeave?: boolean
-}
+import type { SiteDoctor } from '../cms/types'
 
 export const DOCTORS: SiteDoctor[] = [
   {
@@ -42,6 +18,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MD, DM (Neurology)', featured: true,
     bio: 'Dr. Kavita Rao heads our stroke unit and epilepsy clinic. She has a special interest in headache medicine and women’s neurology, and is passionate about stroke awareness in the community.',
     education: [{ degree: 'DM Neurology', inst: 'NIMHANS, Bengaluru', year: 2015 }, { degree: 'MD Medicine', inst: 'Kasturba Medical College, Manipal', year: 2011 }, { degree: 'MBBS', inst: 'Bangalore Medical College', year: 2007 }],
+    awards: [],
     expertise: ['Acute stroke', 'Epilepsy', 'Migraine', 'Movement disorders', 'Neuropathy'],
   },
   {
@@ -50,6 +27,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MS (Ortho), Fellowship Arthroplasty', featured: true,
     bio: 'Dr. Sameer Khan specialises in knee and hip replacement and sports injuries. His patients typically walk on the day of surgery thanks to rapid-recovery protocols.',
     education: [{ degree: 'Fellowship Arthroplasty', inst: 'Endo Klinik, Hamburg', year: 2018 }, { degree: 'MS Orthopaedics', inst: 'KEM Hospital, Mumbai', year: 2016 }, { degree: 'MBBS', inst: 'Grant Medical College, Mumbai', year: 2012 }],
+    awards: [],
     expertise: ['Knee replacement', 'Hip replacement', 'ACL reconstruction', 'Sports injuries', 'Fracture care'],
   },
   {
@@ -58,6 +36,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MD (Pediatrics)', featured: true,
     bio: 'Dr. Ananya Iyer is loved by children and parents alike for her gentle, playful approach. She runs our well-baby and vaccination clinic and has a special interest in childhood asthma and nutrition.',
     education: [{ degree: 'MD Pediatrics', inst: 'JIPMER, Puducherry', year: 2017 }, { degree: 'MBBS', inst: 'Madras Medical College', year: 2013 }],
+    awards: [],
     expertise: ['Newborn care', 'Vaccination', 'Childhood asthma', 'Growth & nutrition', 'Adolescent health'],
   },
   {
@@ -75,6 +54,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MS (OBG), FMAS',
     bio: 'Dr. Meera Nair has guided over 4,000 mothers through safe deliveries. She specialises in high-risk pregnancy and minimally invasive gynaecological surgery.',
     education: [{ degree: 'MS Obstetrics & Gynaecology', inst: 'Lady Hardinge Medical College', year: 2014 }, { degree: 'MBBS', inst: 'Government Medical College, Thiruvananthapuram', year: 2010 }],
+    awards: [],
     expertise: ['High-risk pregnancy', 'Painless delivery', 'Laparoscopic surgery', 'PCOS', 'Menopause care'],
   },
   {
@@ -83,6 +63,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MD (Dermatology)',
     bio: 'Dr. Rajesh Gupta combines medical and aesthetic dermatology with an honest, evidence-first approach — no unnecessary procedures, just results.',
     education: [{ degree: 'MD Dermatology', inst: 'Banaras Hindu University', year: 2019 }, { degree: 'MBBS', inst: 'King George’s Medical University', year: 2015 }],
+    awards: [],
     expertise: ['Acne & scars', 'Hair loss', 'Psoriasis', 'Laser treatments', 'Pigmentation'],
   },
   {
@@ -91,6 +72,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MS (ENT)', onLeave: true,
     bio: 'Dr. Sneha Patil is an endoscopic sinus and ear surgeon with a keen interest in pediatric ENT and sleep medicine.',
     education: [{ degree: 'MS ENT', inst: 'B. J. Medical College, Pune', year: 2020 }, { degree: 'MBBS', inst: 'Government Medical College, Nagpur', year: 2016 }],
+    awards: [],
     expertise: ['Sinus surgery', 'Ear surgery', 'Pediatric ENT', 'Snoring & sleep apnoea'],
   },
   {
@@ -99,6 +81,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MD (Radiology)',
     bio: 'Dr. Harish Menon leads our imaging department and specialises in neuro and musculoskeletal imaging and image-guided interventions.',
     education: [{ degree: 'MD Radiodiagnosis', inst: 'CMC Vellore', year: 2013 }, { degree: 'MBBS', inst: 'Calicut Medical College', year: 2009 }],
+    awards: [],
     expertise: ['MRI', 'CT angiography', 'Musculoskeletal imaging', 'Image-guided biopsy'],
   },
   {
@@ -107,6 +90,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MEM',
     bio: 'Dr. Farah Siddiqui is part of our round-the-clock emergency team, trained in advanced trauma and cardiac life support.',
     education: [{ degree: 'MEM Emergency Medicine', inst: 'AIIMS, New Delhi', year: 2021 }, { degree: 'MBBS', inst: 'Jamia Hamdard (HIMSR)', year: 2017 }],
+    awards: [],
     expertise: ['Trauma care', 'Cardiac emergencies', 'Poisoning', 'Critical care'],
   },
   {
@@ -124,6 +108,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MD, Fellowship Diabetology',
     bio: 'Dr. Pooja Bansal runs our diabetes reversal programme, combining medication, nutrition and habit coaching to help patients cut medicines safely.',
     education: [{ degree: 'Fellowship Diabetology', inst: 'Madras Diabetes Research Foundation', year: 2017 }, { degree: 'MD Medicine', inst: 'University College of Medical Sciences, Delhi', year: 2015 }, { degree: 'MBBS', inst: 'UCMS, Delhi', year: 2011 }],
+    awards: [],
     expertise: ['Type 2 diabetes', 'Insulin therapy', 'Thyroid', 'Obesity', 'Gestational diabetes'],
   },
   {
@@ -132,6 +117,7 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MS (Ortho), Fellowship Spine',
     bio: 'Dr. Aditya Kulkarni is a minimally invasive spine surgeon who believes most back pain can be treated without surgery — and when surgery is needed, it should be as small as possible.',
     education: [{ degree: 'Fellowship Spine Surgery', inst: 'National University Hospital, Singapore', year: 2015 }, { degree: 'MS Orthopaedics', inst: 'Seth GS Medical College, Mumbai', year: 2013 }, { degree: 'MBBS', inst: 'BJ Medical College, Pune', year: 2009 }],
+    awards: [],
     expertise: ['Slipped disc', 'Endoscopic spine surgery', 'Scoliosis', 'Spinal trauma'],
   },
   {
@@ -140,28 +126,10 @@ export const DOCTORS: SiteDoctor[] = [
     quals: 'MBBS, MD (Pathology)',
     bio: 'Dr. Lakshmi Reddy oversees quality across our 24×7 laboratory, with expertise in haematopathology and cancer diagnostics.',
     education: [{ degree: 'MD Pathology', inst: 'Osmania Medical College', year: 2011 }, { degree: 'MBBS', inst: 'Gandhi Medical College, Hyderabad', year: 2007 }],
+    awards: [],
     expertise: ['Haematopathology', 'Cytology', 'Cancer diagnostics', 'Lab quality systems'],
   },
 ]
-
-export const doctorBySlug = (slug?: string) => DOCTORS.find((d) => d.slug === slug)
-export const doctorsForService = (slug: string) => DOCTORS.filter((d) => d.service === slug)
-export const DEPARTMENTS = Array.from(new Set(DOCTORS.map((d) => d.dept)))
-
-/** Human label for the next day this doctor consults, relative to today. */
-export function nextAvailable(d: SiteDoctor, from = new Date()): string {
-  if (d.onLeave) return 'On leave'
-  for (let i = 0; i < 7; i++) {
-    const dt = new Date(from); dt.setDate(from.getDate() + i)
-    const dow = WEEK[(dt.getDay() + 6) % 7]
-    if (d.days.includes(dow)) {
-      if (i === 0) return 'Today'
-      if (i === 1) return 'Tomorrow'
-      return dt.toLocaleDateString('en-IN', { weekday: 'long' })
-    }
-  }
-  return 'By appointment'
-}
 
 export const REVIEW_POOL = [
   { name: 'Ramesh K.', text: 'Explained everything patiently and never rushed me. I finally understand my condition.', rating: 5 },

@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowUpDown, Search, SearchX, SlidersHorizontal, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { DEPARTMENTS, DOCTORS, nextAvailable } from '../data/doctors'
+import { departmentsOf, nextAvailable, useSite } from '../cms/content'
 import { useSeo } from '../hooks'
 import { CtaBand, DoctorCard, PageHero } from '../ui'
 
@@ -10,7 +10,9 @@ type Sort = 'recommended' | 'experience' | 'rating' | 'fee-low' | 'fee-high'
 const SORTS: [Sort, string][] = [['recommended', 'Recommended'], ['experience', 'Most experienced'], ['rating', 'Highest rated'], ['fee-low', 'Fee: low to high'], ['fee-high', 'Fee: high to low']]
 
 export default function FindDoctor() {
-  useSeo('Find a doctor', 'Search DC Hospital specialists by name, speciality, language or availability and book an appointment online in 30 seconds.')
+  const { doctors: DOCTORS, doctorsPage: pg } = useSite()
+  const DEPARTMENTS = useMemo(() => departmentsOf(DOCTORS), [DOCTORS])
+  useSeo(pg.seo.title, pg.seo.description)
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
   const dept = params.get('dept') ?? 'All'
@@ -38,7 +40,7 @@ export default function FindDoctor() {
     }
     r = [...r].sort(by[sort] ?? by.recommended)
     return r
-  }, [q, dept, sort, today])
+  }, [q, dept, sort, today, DOCTORS])
 
   const activeFilters = (q ? 1 : 0) + (dept !== 'All' ? 1 : 0) + (today ? 1 : 0)
 
@@ -47,9 +49,9 @@ export default function FindDoctor() {
       <PageHero
         center
         crumbs={[{ label: 'Find a doctor' }]}
-        eyebrow={`${DOCTORS.length} senior specialists`}
-        title={<>Find the <span className="text-gradient">right doctor</span> for you</>}
-        lead="Search by name, speciality, condition or language. See real availability and book in seconds."
+        eyebrow={pg.hero.eyebrow.replace('{count}', String(DOCTORS.length))}
+        title={pg.hero.title}
+        lead={pg.hero.lead}
       >
         <div className="glass mx-auto flex max-w-2xl items-center gap-3 rounded-full p-2 pl-5">
           <Search className="h-5 w-5 shrink-0 text-peri-500" aria-hidden="true" />
@@ -116,7 +118,7 @@ export default function FindDoctor() {
         </div>
       </section>
 
-      <CtaBand title={<>Can’t decide? <span className="text-peri-300">We’ll help you choose.</span></>} lead="Our care coordinators match you with the right specialist based on your symptoms — free of charge." badge="Free care coordination" />
+      <CtaBand title={pg.cta.title} lead={pg.cta.lead} badge={pg.cta.badge} />
     </>
   )
 }

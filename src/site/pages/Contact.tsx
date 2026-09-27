@@ -1,28 +1,17 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Car, CheckCircle2, Clock, Loader2, Mail, MapPin, MessageCircle, Phone, Send, Siren, Train } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Clock, Loader2, Mail, MapPin, MessageCircle, Phone, Send, Siren } from 'lucide-react'
 import { toast } from 'sonner'
-import { HOSPITAL, cn } from '../../lib/utils'
-import { SERVICES } from '../data/services'
+import { cn } from '../../lib/utils'
+import { useContact, useSite } from '../cms/content'
+import { iconFor } from '../cms/icons'
+import { cms } from '../cms/store'
 import { useSeo } from '../hooks'
 import { Reveal } from '../parts'
-import { PageHero, TEL } from '../ui'
-
-const TOPICS = ['Book an appointment', 'Billing & insurance', 'Medical records', 'Feedback or complaint', 'Careers', 'Something else']
-
-const METHODS = [
-  { icon: Siren, title: 'Emergency', value: HOSPITAL.phone, sub: 'Open 24×7 · Ambulance', href: TEL, tone: 'rose' },
-  { icon: Phone, title: 'Appointments', value: '+91 11 4000 2200', sub: 'Mon–Sat, 8 AM – 9 PM', href: 'tel:+911140002200', tone: 'peri' },
-  { icon: MessageCircle, title: 'WhatsApp', value: '+91 98100 40002', sub: 'Replies within 15 min', href: 'https://wa.me/919810040002', tone: 'emerald' },
-  { icon: Mail, title: 'Email', value: HOSPITAL.email, sub: 'Replies within 24 hours', href: `mailto:${HOSPITAL.email}`, tone: 'peri' },
-] as const
-
-const HOURS: [string, string][] = [
-  ['Emergency & ICU', '24 × 7'], ['OPD consultations', 'Mon–Sat · 8 AM – 9 PM'], ['Laboratory', '24 × 7'], ['Pharmacy', '24 × 7'], ['Visiting hours', '11–1 PM · 5–7 PM'], ['Billing desk', 'Daily · 8 AM – 10 PM'],
-]
+import { PageHero } from '../ui'
 
 type Form = { name: string; phone: string; email: string; topic: string; dept: string; message: string; consent: boolean }
-const EMPTY: Form = { name: '', phone: '', email: '', topic: TOPICS[0], dept: '', message: '', consent: false }
+const EMPTY: Form = { name: '', phone: '', email: '', topic: '', dept: '', message: '', consent: false }
 
 function validate(f: Form) {
   const e: Partial<Record<keyof Form, string>> = {}
@@ -35,8 +24,17 @@ function validate(f: Form) {
 }
 
 export default function Contact() {
-  useSeo('Contact us', `Reach DC Hospital 24×7 at ${HOSPITAL.phone}. Visit us at ${HOSPITAL.address}, or send us a message online.`)
-  const [f, setF] = useState<Form>(EMPTY)
+  const { contactPage: pg, services: SERVICES } = useSite()
+  const c = useContact()
+  useSeo(pg.seo.title, pg.seo.description)
+  const TOPICS = pg.topics.length ? pg.topics : ['General enquiry']
+  const METHODS = [
+    { icon: Siren, title: 'Emergency', value: c.phone, sub: 'Open 24×7 · Ambulance', href: c.tel, tone: 'rose' },
+    { icon: Phone, title: 'Appointments', value: c.appointmentsPhone, sub: 'Mon–Sat, 8 AM – 9 PM', href: c.appointmentsTel, tone: 'peri' },
+    { icon: MessageCircle, title: 'WhatsApp', value: c.whatsapp, sub: 'Replies within 15 min', href: c.wa, tone: 'emerald' },
+    { icon: Mail, title: 'Email', value: c.email, sub: 'Replies within 24 hours', href: c.mailto, tone: 'peri' },
+  ].filter((m) => m.value.trim())
+  const [f, setF] = useState<Form>({ ...EMPTY, topic: TOPICS[0] })
   const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({})
   const [touched, setTouched] = useState(false)
   const [state, setState] = useState<'idle' | 'sending' | 'done'>('idle')
@@ -59,13 +57,14 @@ export default function Contact() {
       return
     }
     setState('sending')
-    await new Promise((r) => setTimeout(r, 900))
     const id = `DCH-${Date.now().toString().slice(-6)}`
     try {
-      const key = 'dch:enquiries:v1'
-      const all = JSON.parse(localStorage.getItem(key) ?? '[]')
-      localStorage.setItem(key, JSON.stringify([{ ...f, id, at: new Date().toISOString() }, ...all].slice(0, 50)))
-    } catch { /* storage unavailable */ }
+      await cms.submitEnquiry({ ref: id, name: f.name.trim(), phone: f.phone.trim(), email: f.email.trim() || null, topic: f.topic, speciality: f.dept || null, message: f.message.trim() })
+    } catch (err) {
+      setState('idle')
+      toast.error('Could not send your message', { description: `${err instanceof Error ? err.message : 'Please try again'} — or call us on ${c.phone}.` })
+      return
+    }
     setRef(id)
     setState('done')
     toast.success('Message sent — we’ll be in touch shortly')
@@ -79,13 +78,11 @@ export default function Contact() {
 
   return (
     <>
-      <PageHero center crumbs={[{ label: 'Contact' }]} eyebrow="We’re here for you"
-        title={<>Let’s talk about <span className="text-gradient">your health</span></>}
-        lead="Questions about appointments, bills or reports? Our patient care team is available round the clock — call, WhatsApp or write to us." />
+      <PageHero center crumbs={[{ label: 'Contact' }]} eyebrow={pg.hero.eyebrow} title={pg.hero.title} lead={pg.hero.lead} />
 
       {/* contact methods */}
       <section aria-label="Ways to reach us" className="pb-16">
-        <div className="l-container grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className={cn('l-container grid gap-4 sm:grid-cols-2', METHODS.length === 3 ? 'lg:grid-cols-3' : 'lg:grid-cols-4')}>
           {METHODS.map((m, i) => (
             <Reveal key={m.title} delay={i * 80}>
               <a href={m.href} target={m.href.startsWith('http') ? '_blank' : undefined} rel="noreferrer"
@@ -115,17 +112,17 @@ export default function Contact() {
                   <span className="relative grid h-20 w-20 place-items-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"><CheckCircle2 className="h-10 w-10" /></span>
                 </span>
                 <h2 className="mt-8 font-display text-2xl font-bold text-peri-900 sm:text-3xl">Thank you, {f.name.split(' ')[0]}!</h2>
-                <p className="mt-3 max-w-sm text-slate-600">Your message has reached our patient care team. We’ll call you on <strong className="text-peri-900">{f.phone}</strong> within 2 working hours.</p>
+                <p className="mt-3 max-w-sm text-slate-600">{pg.successText} <span className="mt-1 block text-sm">We’ll call you on <strong className="text-peri-900">{f.phone}</strong>.</span></p>
                 <p className="mt-6 rounded-full bg-peri-50 px-4 py-2 text-sm text-peri-800">Reference: <strong>{ref}</strong></p>
                 <div className="mt-8 flex flex-wrap justify-center gap-3">
-                  <button type="button" onClick={() => { setF(EMPTY); setErrors({}); setTouched(false); setState('idle') }} className="btn-ghost">Send another message</button>
+                  <button type="button" onClick={() => { setF({ ...EMPTY, topic: TOPICS[0] }); setErrors({}); setTouched(false); setState('idle') }} className="btn-ghost">Send another message</button>
                   <Link to="/find-a-doctor" className="btn-peri">Find a doctor<ArrowRight className="h-4 w-4" /></Link>
                 </div>
               </div>
             ) : (
               <form onSubmit={submit} noValidate className="relative">
-                <h2 id="form-title" className="font-display text-2xl font-bold text-peri-900 sm:text-3xl">Send us a message</h2>
-                <p className="mt-2 text-sm text-slate-500">Fields marked * are required. For medical emergencies, please call {HOSPITAL.phone}.</p>
+                <h2 id="form-title" className="font-display text-2xl font-bold text-peri-900 sm:text-3xl">{pg.formTitle}</h2>
+                <p className="mt-2 text-sm text-slate-500">{pg.formNote}</p>
                 <div className="mt-8 grid gap-5 sm:grid-cols-2">
                   <div>
                     <label htmlFor="c-name" className="mb-1.5 block text-xs font-semibold text-peri-900">Full name *</label>
@@ -170,7 +167,7 @@ export default function Contact() {
                   <div className="sm:col-span-2">
                     <label className="flex cursor-pointer items-start gap-3 text-sm text-slate-600">
                       <input id="c-consent" type="checkbox" checked={f.consent} onChange={(e) => up('consent', e.target.checked)} className="mt-0.5 h-4 w-4 cursor-pointer rounded border-peri-300 accent-peri-800" aria-invalid={!!errors.consent} />
-                      <span>I agree to be contacted by DC Hospital about my enquiry and accept the <Link to="/privacy" className="font-semibold text-peri-700 underline-offset-2 hover:underline">privacy policy</Link>.</span>
+                      <span>I agree to be contacted by {c.name} about my enquiry and accept the <Link to="/privacy" className="font-semibold text-peri-700 underline-offset-2 hover:underline">privacy policy</Link>.</span>
                     </label>
                     <Err k="consent" />
                   </div>
@@ -189,36 +186,34 @@ export default function Contact() {
                 <div aria-hidden="true" className="absolute inset-0 grid place-items-center bg-[linear-gradient(rgba(92,92,153,.12)_1px,transparent_1px),linear-gradient(90deg,rgba(92,92,153,.12)_1px,transparent_1px)] [background-size:32px_32px]">
                   <span className="relative grid h-14 w-14 place-items-center"><span className="motion-safe-only absolute inset-0 animate-pulse-ring rounded-full bg-peri-400" /><span className="relative grid h-12 w-12 place-items-center rounded-full bg-peri-800 text-white shadow-glow"><MapPin className="h-6 w-6" /></span></span>
                 </div>
-                <iframe title="DC Hospital location map" loading="lazy" referrerPolicy="no-referrer-when-downgrade"
-                  src="https://www.openstreetmap.org/export/embed.html?bbox=77.030%2C28.582%2C77.062%2C28.602&layer=mapnik&marker=28.5921%2C77.0460"
-                  className="absolute inset-0 h-full w-full border-0 grayscale-[.3] saturate-[.8]" />
+                {c.map.embedUrl && <iframe title={`${c.name} location map`} loading="lazy" referrerPolicy="no-referrer-when-downgrade"
+                  src={c.map.embedUrl}
+                  className="absolute inset-0 h-full w-full border-0 grayscale-[.3] saturate-[.8]" />}
               </div>
               <div className="p-6">
-                <p className="flex items-start gap-3 text-sm text-slate-700"><MapPin className="mt-0.5 h-5 w-5 shrink-0 text-peri-600" /><span><strong className="block font-display text-base text-peri-900">{HOSPITAL.name}</strong>{HOSPITAL.address}</span></p>
-                <a href="https://www.openstreetmap.org/?mlat=28.5921&mlon=77.0460#map=16/28.5921/77.0460" target="_blank" rel="noreferrer" className="btn-ghost mt-5 w-full">Get directions<ArrowRight className="h-4 w-4" /></a>
+                <p className="flex items-start gap-3 text-sm text-slate-700"><MapPin className="mt-0.5 h-5 w-5 shrink-0 text-peri-600" /><span><strong className="block font-display text-base text-peri-900">{c.name}</strong>{c.address}</span></p>
+                {c.map.directionsUrl && <a href={c.map.directionsUrl} target="_blank" rel="noreferrer" className="btn-ghost mt-5 w-full">Get directions<ArrowRight className="h-4 w-4" /></a>}
               </div>
             </Reveal>
 
-            <Reveal variant="right" delay={100} className="rounded-[2rem] border border-peri-200 bg-white p-6 shadow-soft">
+            {c.hours.length > 0 && <Reveal variant="right" delay={100} className="rounded-[2rem] border border-peri-200 bg-white p-6 shadow-soft">
               <h2 className="flex items-center gap-2 font-display text-lg font-bold text-peri-900"><Clock className="h-5 w-5 text-peri-600" />Hours</h2>
               <dl className="mt-4 divide-y divide-peri-100">
-                {HOURS.map(([k, v]) => (
-                  <div key={k} className="flex items-center justify-between gap-4 py-2.5 text-sm">
-                    <dt className="text-slate-600">{k}</dt>
-                    <dd className={cn('text-right font-semibold', v.includes('24') ? 'text-emerald-700' : 'text-peri-900')}>{v}</dd>
+                {c.hours.map((h, i) => (
+                  <div key={h.label + i} className="flex items-center justify-between gap-4 py-2.5 text-sm">
+                    <dt className="text-slate-600">{h.label}</dt>
+                    <dd className={cn('text-right font-semibold', h.highlight ? 'text-emerald-700' : 'text-peri-900')}>{h.value}</dd>
                   </div>
                 ))}
               </dl>
-            </Reveal>
+            </Reveal>}
 
-            <Reveal variant="right" delay={180} className="rounded-[2rem] bg-gradient-to-br from-peri-100 to-peri-200/70 p-6">
+            {c.directions.length > 0 && <Reveal variant="right" delay={180} className="rounded-[2rem] bg-gradient-to-br from-peri-100 to-peri-200/70 p-6">
               <h2 className="font-display text-lg font-bold text-peri-900">Getting here</h2>
               <ul className="mt-4 space-y-3 text-sm text-slate-700">
-                <li className="flex gap-3"><Train className="mt-0.5 h-5 w-5 shrink-0 text-peri-700" />Dwarka Sector 21 Metro (Blue Line) — 6 min by e-rickshaw</li>
-                <li className="flex gap-3"><Car className="mt-0.5 h-5 w-5 shrink-0 text-peri-700" />Free multi-level parking · Valet at main entrance</li>
-                <li className="flex gap-3"><Siren className="mt-0.5 h-5 w-5 shrink-0 text-peri-700" />Dedicated emergency drop-off at Gate 2</li>
+                {c.directions.map((d, i) => { const Icon = iconFor(d.icon); return <li key={i} className="flex gap-3"><Icon className="mt-0.5 h-5 w-5 shrink-0 text-peri-700" />{d.text}</li> })}
               </ul>
-            </Reveal>
+            </Reveal>}
           </div>
         </div>
       </section>

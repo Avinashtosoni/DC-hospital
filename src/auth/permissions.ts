@@ -30,6 +30,7 @@ export const PERMISSIONS: Record<TableName, Matrix> = {
   expenses:      { owner: ALL, accountant: ALL },
   inventory:     { owner: ALL, staff: RCU, doctor: R, accountant: R },
   notices:       { owner: ALL, doctor: R, receptionist: R, accountant: R, staff: R, patient: R },
+  site_enquiries: { owner: ALL, receptionist: RU },
 }
 
 export function can(role: Role | undefined, table: TableName, action: Action) {

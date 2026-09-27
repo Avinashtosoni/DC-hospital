@@ -34,17 +34,8 @@ export function useRevealAll(root: RefObject<HTMLElement>) {
   }, [root])
 }
 
-/** Per-page <title> and meta description. */
-export function useSeo(title: string, description?: string) {
-  useEffect(() => {
-    document.title = `${title} · DC Hospital`
-    if (description) {
-      let m = document.querySelector<HTMLMetaElement>('meta[name="description"]')
-      if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m) }
-      m.content = description
-    }
-  }, [title, description])
-}
+/** Per-page SEO lives in ./cms/content (it needs the hospital name from Site settings). */
+export { useSeo } from './cms/content'
 
 /** True once the element has entered the viewport. */
 export function useInView<T extends HTMLElement>(threshold = 0.3) {
@@ -111,6 +102,6 @@ export function useActiveSection(ids: string[]) {
     )
     ids.forEach((id) => { const el = document.getElementById(id); if (el) io.observe(el) })
     return () => io.disconnect()
-  }, [ids])
+  }, [ids.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
   return active
 }

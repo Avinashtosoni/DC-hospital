@@ -28,7 +28,13 @@ function load(): Store {
   if (raw) {
     try {
       cache = JSON.parse(raw) as Store
-      for (const t of TABLES) if (!cache[t]) (cache as Record<string, unknown[]>)[t] = []
+      // tables added after this browser was seeded get their demo rows now
+      const missing = TABLES.filter((t) => !cache![t])
+      if (missing.length) {
+        const fresh = buildSeed(localDates) as Store
+        for (const t of missing) (cache as Record<string, unknown[]>)[t] = fresh[t] ?? []
+        persist()
+      }
       return cache
     } catch { /* fallthrough to reseed */ }
   }

@@ -1,26 +1,8 @@
-import {
-  Activity, Ambulance, Baby, Bone, Brain, ClipboardCheck, Droplet, Droplets, Ear, Flower2, HeartPulse, House, Microscope,
-  MonitorDot, Pill, ScanLine, Siren, Sparkles, Stethoscope, Video, type LucideIcon,
-} from 'lucide-react'
-
-export type Service = {
-  slug: string
-  name: string
-  icon: LucideIcon
-  tagline: string
-  summary: string
-  description: string[]
-  conditions: string[]
-  treatments: string[]
-  technology: string[]
-  stats: [string, string][]
-  hours: string
-  featured?: boolean
-}
+import type { Service, SupportService } from '../cms/types'
 
 export const SERVICES: Service[] = [
   {
-    slug: 'cardiology', name: 'Cardiology', icon: HeartPulse, featured: true,
+    slug: 'cardiology', name: 'Cardiology', icon: 'HeartPulse', featured: true,
     tagline: 'Heart care that never skips a beat',
     summary: 'Complete heart care from prevention and diagnostics to angioplasty and bypass surgery.',
     description: [
@@ -30,11 +12,11 @@ export const SERVICES: Service[] = [
     conditions: ['Coronary artery disease', 'Heart attack', 'Heart failure', 'Arrhythmia', 'Hypertension', 'Valve disease', 'Congenital heart defects', 'High cholesterol'],
     treatments: ['Coronary angiography & angioplasty', 'Bypass surgery (CABG)', 'Pacemaker & ICD implantation', 'Valve repair & replacement', '2D Echo, TMT & Holter', 'Preventive cardiology clinic'],
     technology: ['Flat-panel digital cath-lab', '3D echocardiography', '12-bed cardiac ICU', 'Remote ECG monitoring'],
-    stats: [['4,800+', 'Cardiac procedures'], ['< 60 min', 'Door-to-balloon'], ['98.6%', 'Angioplasty success']],
+    stats: [{ value: '4,800+', label: 'Cardiac procedures' }, { value: '< 60 min', label: 'Door-to-balloon' }, { value: '98.6%', label: 'Angioplasty success' }],
     hours: 'OPD Mon–Sat, 9:00 AM – 8:00 PM · Emergency 24×7',
   },
   {
-    slug: 'neurology', name: 'Neurology', icon: Brain, featured: true,
+    slug: 'neurology', name: 'Neurology', icon: 'Brain', featured: true,
     tagline: 'Expert care for brain, spine & nerves',
     summary: 'Stroke-ready neurology with advanced diagnostics for epilepsy, migraine and movement disorders.',
     description: [
@@ -44,11 +26,11 @@ export const SERVICES: Service[] = [
     conditions: ['Stroke', 'Epilepsy & seizures', 'Migraine & headache', 'Parkinson’s disease', 'Multiple sclerosis', 'Neuropathy', 'Vertigo', 'Memory disorders'],
     treatments: ['Thrombolysis for acute stroke', 'EEG & video EEG', 'Nerve conduction studies', 'Botox for migraine & spasticity', 'Epilepsy management', 'Neuro-rehabilitation'],
     technology: ['1.5T MRI & CT angiography', '32-channel digital EEG', 'EMG/NCV lab', 'Dedicated stroke unit'],
-    stats: [['1,200+', 'Stroke patients treated'], ['24×7', 'Stroke team'], ['3.5 hrs', 'Thrombolysis window']],
+    stats: [{ value: '1,200+', label: 'Stroke patients treated' }, { value: '24×7', label: 'Stroke team' }, { value: '3.5 hrs', label: 'Thrombolysis window' }],
     hours: 'OPD Mon, Wed, Fri & Sat · Stroke team 24×7',
   },
   {
-    slug: 'orthopedics', name: 'Orthopedics', icon: Bone, featured: true,
+    slug: 'orthopedics', name: 'Orthopedics', icon: 'Bone', featured: true,
     tagline: 'Move freely, live fully',
     summary: 'Joint replacement, sports injury, spine and trauma care — back on your feet sooner.',
     description: [
@@ -58,11 +40,11 @@ export const SERVICES: Service[] = [
     conditions: ['Knee & hip arthritis', 'Sports injuries', 'Fractures & trauma', 'Back & neck pain', 'Slipped disc', 'Frozen shoulder', 'Osteoporosis', 'Ligament tears'],
     treatments: ['Total knee & hip replacement', 'Arthroscopic ACL reconstruction', 'Minimally invasive spine surgery', 'Fracture fixation', 'Shoulder arthroscopy', 'PRP & joint injections'],
     technology: ['Computer-navigated joint replacement', 'Laminar-flow modular OTs', 'C-arm fluoroscopy', 'Physiotherapy & rehab gym'],
-    stats: [['2,500+', 'Joint replacements'], ['Day 1', 'Walking after surgery'], ['4.9★', 'Patient rating']],
+    stats: [{ value: '2,500+', label: 'Joint replacements' }, { value: 'Day 1', label: 'Walking after surgery' }, { value: '4.9★', label: 'Patient rating' }],
     hours: 'OPD Mon–Sat, 10:00 AM – 7:00 PM',
   },
   {
-    slug: 'pediatrics', name: 'Pediatrics', icon: Baby, featured: true,
+    slug: 'pediatrics', name: 'Pediatrics', icon: 'Baby', featured: true,
     tagline: 'Gentle care for little ones',
     summary: 'Child-friendly care from newborn to teen — vaccinations, growth checks and NICU.',
     description: [
@@ -72,11 +54,11 @@ export const SERVICES: Service[] = [
     conditions: ['Fever & infections', 'Asthma & allergies', 'Growth & nutrition issues', 'Newborn jaundice', 'Diarrhoea & dehydration', 'Developmental delays'],
     treatments: ['Complete vaccination schedule', 'Newborn & well-baby clinic', 'Level-III NICU', 'Pediatric emergency', 'Growth & development tracking', 'Adolescent health'],
     technology: ['Level-III NICU & PICU', 'Neonatal ventilators', 'Phototherapy units', 'Child-friendly OPD'],
-    stats: [['15,000+', 'Children cared for'], ['Level III', 'NICU'], ['5.0★', 'Parent rating']],
+    stats: [{ value: '15,000+', label: 'Children cared for' }, { value: 'Level III', label: 'NICU' }, { value: '5.0★', label: 'Parent rating' }],
     hours: 'OPD Mon–Sat, 9:00 AM – 8:00 PM · Emergency 24×7',
   },
   {
-    slug: 'general-medicine', name: 'General Medicine', icon: Stethoscope,
+    slug: 'general-medicine', name: 'General Medicine', icon: 'Stethoscope',
     tagline: 'Your first stop for everyday health',
     summary: 'Experienced physicians for fever, infections, lifestyle diseases and preventive care.',
     description: [
@@ -86,11 +68,11 @@ export const SERVICES: Service[] = [
     conditions: ['Fever, dengue & typhoid', 'Hypertension', 'Thyroid disorders', 'Anaemia', 'Respiratory infections', 'Gastric problems', 'Fatigue & weakness'],
     treatments: ['Comprehensive consultations', 'Chronic disease management', 'Preventive health checks', 'Vaccinations for adults', 'In-patient medical care'],
     technology: ['Integrated lab & imaging', 'Digital health records', 'Teleconsultation follow-ups'],
-    stats: [['40,000+', 'Consultations / year'], ['Same day', 'Appointments'], ['6', 'Senior physicians']],
+    stats: [{ value: '40,000+', label: 'Consultations / year' }, { value: 'Same day', label: 'Appointments' }, { value: '6', label: 'Senior physicians' }],
     hours: 'OPD Mon–Sat, 8:00 AM – 9:00 PM',
   },
   {
-    slug: 'gynecology-obstetrics', name: 'Gynecology & Obstetrics', icon: Flower2, featured: true,
+    slug: 'gynecology-obstetrics', name: 'Gynecology & Obstetrics', icon: 'Flower2', featured: true,
     tagline: 'Every stage of womanhood, cared for',
     summary: 'Pregnancy care, safe deliveries, fertility guidance and advanced gynaecological surgery.',
     description: [
@@ -100,11 +82,11 @@ export const SERVICES: Service[] = [
     conditions: ['High-risk pregnancy', 'PCOS / PCOD', 'Menstrual disorders', 'Fibroids & cysts', 'Infertility', 'Menopause care'],
     treatments: ['Antenatal & postnatal care', 'Normal & painless delivery', 'C-section', 'Laparoscopic surgery', 'Fertility counselling', 'Cervical cancer screening'],
     technology: ['LDR birthing suites', '4D ultrasound', 'Laparoscopy suite', 'Level-III NICU next door'],
-    stats: [['6,000+', 'Happy deliveries'], ['24×7', 'Obstetric team'], ['4.9★', 'Mother rating']],
+    stats: [{ value: '6,000+', label: 'Happy deliveries' }, { value: '24×7', label: 'Obstetric team' }, { value: '4.9★', label: 'Mother rating' }],
     hours: 'OPD Mon–Sat, 10:00 AM – 6:00 PM · Labour room 24×7',
   },
   {
-    slug: 'dermatology', name: 'Dermatology', icon: Sparkles,
+    slug: 'dermatology', name: 'Dermatology', icon: 'Sparkles',
     tagline: 'Healthy skin, hair & nails',
     summary: 'Medical and aesthetic dermatology — acne, allergies, hair loss and laser treatments.',
     description: [
@@ -114,11 +96,11 @@ export const SERVICES: Service[] = [
     conditions: ['Acne & scars', 'Eczema & psoriasis', 'Fungal infections', 'Hair fall', 'Pigmentation', 'Skin allergies'],
     treatments: ['Medical dermatology', 'Chemical peels', 'Laser hair reduction', 'PRP for hair', 'Mole & wart removal', 'Patch testing'],
     technology: ['Diode & Q-switched lasers', 'Digital dermoscopy', 'Phototherapy unit'],
-    stats: [['9,000+', 'Patients treated'], ['FDA-approved', 'Lasers'], ['4.8★', 'Patient rating']],
+    stats: [{ value: '9,000+', label: 'Patients treated' }, { value: 'FDA-approved', label: 'Lasers' }, { value: '4.8★', label: 'Patient rating' }],
     hours: 'OPD Mon–Sat, 11:00 AM – 7:00 PM',
   },
   {
-    slug: 'ent', name: 'ENT', icon: Ear,
+    slug: 'ent', name: 'ENT', icon: 'Ear',
     tagline: 'Hear, breathe & speak better',
     summary: 'Ear, nose and throat care including endoscopic sinus surgery and hearing solutions.',
     description: [
@@ -128,11 +110,11 @@ export const SERVICES: Service[] = [
     conditions: ['Sinusitis', 'Tonsillitis', 'Hearing loss', 'Ear infections', 'Snoring & sleep apnoea', 'Voice disorders'],
     treatments: ['Endoscopic sinus surgery', 'Tonsillectomy & adenoidectomy', 'Tympanoplasty', 'Hearing aids', 'Sleep studies', 'Speech therapy'],
     technology: ['HD ENT endoscopy', 'Operating microscope', 'Audiology & BERA lab'],
-    stats: [['3,200+', 'ENT surgeries'], ['Same day', 'Hearing tests'], ['4.8★', 'Patient rating']],
+    stats: [{ value: '3,200+', label: 'ENT surgeries' }, { value: 'Same day', label: 'Hearing tests' }, { value: '4.8★', label: 'Patient rating' }],
     hours: 'OPD Mon–Sat, 10:00 AM – 5:00 PM',
   },
   {
-    slug: 'radiology', name: 'Radiology & Imaging', icon: ScanLine,
+    slug: 'radiology', name: 'Radiology & Imaging', icon: 'ScanLine',
     tagline: 'See clearly, diagnose accurately',
     summary: 'MRI, CT, ultrasound, digital X-ray and mammography with same-day reports.',
     description: [
@@ -142,11 +124,11 @@ export const SERVICES: Service[] = [
     conditions: ['Injury evaluation', 'Tumour detection', 'Stroke imaging', 'Pregnancy scans', 'Breast screening', 'Abdominal pain'],
     treatments: ['1.5T MRI', '128-slice CT', 'Ultrasound & Doppler', 'Digital X-ray', 'Mammography', 'Image-guided biopsies'],
     technology: ['128-slice CT scanner', '1.5T silent MRI', '4D ultrasound', 'PACS with online reports'],
-    stats: [['60,000+', 'Scans / year'], ['4 hrs', 'Average report time'], ['24×7', 'CT & X-ray']],
+    stats: [{ value: '60,000+', label: 'Scans / year' }, { value: '4 hrs', label: 'Average report time' }, { value: '24×7', label: 'CT & X-ray' }],
     hours: 'Open 24×7',
   },
   {
-    slug: 'emergency', name: 'Emergency & Trauma', icon: Siren, featured: true,
+    slug: 'emergency', name: 'Emergency & Trauma', icon: 'Siren', featured: true,
     tagline: 'Always open. Always ready.',
     summary: '24×7 emergency, trauma and critical care with rapid ambulance response.',
     description: [
@@ -156,11 +138,11 @@ export const SERVICES: Service[] = [
     conditions: ['Chest pain & heart attack', 'Stroke', 'Road accidents & trauma', 'Breathing difficulty', 'Poisoning', 'Burns', 'High fever & seizures'],
     treatments: ['Resuscitation & triage', 'Trauma surgery', 'Emergency cardiac care', 'Critical care & ICU', 'Advanced life support ambulance', 'Minor procedures'],
     technology: ['ALS ambulances with GPS', '30-bed multi-speciality ICU', 'Point-of-care labs', 'Dedicated trauma OT'],
-    stats: [['< 5 min', 'Triage time'], ['24×7', 'Ambulance'], ['30', 'ICU beds']],
+    stats: [{ value: '< 5 min', label: 'Triage time' }, { value: '24×7', label: 'Ambulance' }, { value: '30', label: 'ICU beds' }],
     hours: 'Open 24×7, 365 days',
   },
   {
-    slug: 'pathology', name: 'Laboratory & Pathology', icon: Microscope,
+    slug: 'pathology', name: 'Laboratory & Pathology', icon: 'Microscope',
     tagline: 'Accurate results, delivered fast',
     summary: 'Fully automated lab with home sample collection and online reports in hours.',
     description: [
@@ -170,11 +152,11 @@ export const SERVICES: Service[] = [
     conditions: ['Diabetes monitoring', 'Thyroid tests', 'Infections', 'Vitamin deficiencies', 'Cancer markers', 'Hormone tests'],
     treatments: ['Biochemistry & haematology', 'Microbiology & culture', 'Histopathology', 'Molecular diagnostics (RT-PCR)', 'Home sample collection', 'Health check-up panels'],
     technology: ['Fully automated analysers', 'Barcode sample tracking', 'Online reports'],
-    stats: [['1,500+', 'Tests offered'], ['6 hrs', 'Average turnaround'], ['Home', 'Sample collection']],
+    stats: [{ value: '1,500+', label: 'Tests offered' }, { value: '6 hrs', label: 'Average turnaround' }, { value: 'Home', label: 'Sample collection' }],
     hours: 'Open 24×7 · Home collection 6:00 AM – 8:00 PM',
   },
   {
-    slug: 'diabetology', name: 'Diabetes & Endocrinology', icon: Droplet,
+    slug: 'diabetology', name: 'Diabetes & Endocrinology', icon: 'Droplet',
     tagline: 'Take control of your sugar',
     summary: 'Personalised diabetes, thyroid and hormone care with diet and lifestyle coaching.',
     description: [
@@ -184,20 +166,18 @@ export const SERVICES: Service[] = [
     conditions: ['Type 1 & Type 2 diabetes', 'Gestational diabetes', 'Thyroid disorders', 'Obesity', 'PCOS', 'Diabetic foot'],
     treatments: ['Diabetes reversal programme', 'Insulin pump & CGM', 'Diet & lifestyle counselling', 'Diabetic foot clinic', 'Thyroid management'],
     technology: ['Continuous glucose monitors', 'HbA1c point-of-care testing', 'Foot pressure analysis'],
-    stats: [['8,000+', 'Patients enrolled'], ['1.4%', 'Avg. HbA1c drop'], ['4.9★', 'Patient rating']],
+    stats: [{ value: '8,000+', label: 'Patients enrolled' }, { value: '1.4%', label: 'Avg. HbA1c drop' }, { value: '4.9★', label: 'Patient rating' }],
     hours: 'OPD Mon–Sat, 9:00 AM – 5:00 PM',
   },
 ]
 
-export const serviceBySlug = (slug?: string) => SERVICES.find((s) => s.slug === slug)
-
-export const SUPPORT_SERVICES: { icon: LucideIcon; title: string; text: string }[] = [
-  { icon: Ambulance, title: 'ALS Ambulance', text: 'GPS-tracked advanced life-support ambulances across Delhi NCR, 24×7.' },
-  { icon: MonitorDot, title: 'ICU & Critical Care', text: '30-bed multi-speciality ICU with 1:1 nursing for critical patients.' },
-  { icon: Pill, title: '24×7 Pharmacy', text: 'Genuine medicines, always in stock, with home delivery for refills.' },
-  { icon: Activity, title: 'Physiotherapy & Rehab', text: 'Sports, neuro and post-surgery rehabilitation with modern equipment.' },
-  { icon: House, title: 'Home Care', text: 'Nursing, sample collection and doctor visits in the comfort of your home.' },
-  { icon: Video, title: 'Teleconsultation', text: 'Follow up with your doctor over secure video — no travel needed.' },
-  { icon: ClipboardCheck, title: 'Health Check-ups', text: 'Doctor-designed packages with same-day reports and consultation.' },
-  { icon: Droplets, title: 'Blood Bank', text: 'Licensed blood bank with component separation, open round the clock.' },
+export const SUPPORT_SERVICES: SupportService[] = [
+  { icon: 'Ambulance', title: 'ALS Ambulance', text: 'GPS-tracked advanced life-support ambulances across Delhi NCR, 24×7.' },
+  { icon: 'MonitorDot', title: 'ICU & Critical Care', text: '30-bed multi-speciality ICU with 1:1 nursing for critical patients.' },
+  { icon: 'Pill', title: '24×7 Pharmacy', text: 'Genuine medicines, always in stock, with home delivery for refills.' },
+  { icon: 'Activity', title: 'Physiotherapy & Rehab', text: 'Sports, neuro and post-surgery rehabilitation with modern equipment.' },
+  { icon: 'House', title: 'Home Care', text: 'Nursing, sample collection and doctor visits in the comfort of your home.' },
+  { icon: 'Video', title: 'Teleconsultation', text: 'Follow up with your doctor over secure video — no travel needed.' },
+  { icon: 'ClipboardCheck', title: 'Health Check-ups', text: 'Doctor-designed packages with same-day reports and consultation.' },
+  { icon: 'Droplets', title: 'Blood Bank', text: 'Licensed blood bank with component separation, open round the clock.' },
 ]

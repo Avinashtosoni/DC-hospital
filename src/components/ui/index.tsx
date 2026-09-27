@@ -84,7 +84,7 @@ const STATUS_TONE: Record<string, Tone> = {
   checked_in: 'violet', in_progress: 'violet', sample_collected: 'violet', inpatient: 'violet', admitted: 'violet', reserved: 'violet',
   partial: 'amber', pending: 'amber', on_leave: 'amber', unpaid: 'amber', urgent: 'amber', maintenance: 'amber', important: 'amber', follow_up: 'teal',
   cancelled: 'red', no_show: 'red', overdue: 'red', inactive: 'red', occupied: 'red', stat: 'red', emergency: 'red',
-  consultation: 'blue', checkup: 'green',
+  consultation: 'blue', checkup: 'green', new: 'blue', resolved: 'green', spam: 'slate',
 }
 export function StatusBadge({ value }: { value?: string | null }) {
   if (!value) return <span className="text-slate-400">—</span>
@@ -182,7 +182,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'max-w-md
   return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-center p-4">
       <div className="absolute inset-0 animate-fade-in bg-slate-900/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className={cn('relative w-full animate-pop-in rounded-2xl bg-white shadow-2xl', size)}>
+      <div className={cn('scrollbar-thin relative max-h-[calc(100vh-2rem)] w-full animate-pop-in overflow-y-auto rounded-2xl bg-white shadow-2xl', size)}>
         {title && (
           <div className="flex items-center justify-between px-5 pt-5">
             <h2 className="text-base font-semibold text-slate-900">{title}</h2>
@@ -219,7 +219,7 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { valu
   return (
     <div className="scrollbar-thin flex gap-1 overflow-x-auto border-b border-slate-200">
       {tabs.map((t) => (
-        <button key={t.value} onClick={() => onChange(t.value)}
+        <button key={t.value} type="button" onClick={() => onChange(t.value)}
           className={cn('-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition',
             value === t.value ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800')}>
           {t.label}

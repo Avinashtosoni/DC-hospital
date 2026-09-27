@@ -208,6 +208,20 @@ export interface Notice extends BaseRow {
   published_on: string
 }
 
+export type EnquiryStatus = 'new' | 'in_progress' | 'resolved' | 'spam'
+/** Message sent from the public website's Contact form. */
+export interface SiteEnquiry extends BaseRow {
+  ref: string
+  name: string
+  phone: string
+  email?: string | null
+  topic: string
+  speciality?: string | null
+  message: string
+  status: EnquiryStatus
+  notes?: string | null
+}
+
 export interface DB {
   profiles: Profile
   departments: Department
@@ -225,10 +239,11 @@ export interface DB {
   expenses: Expense
   inventory: InventoryItem
   notices: Notice
+  site_enquiries: SiteEnquiry
 }
 
 export type TableName = keyof DB
 export const TABLES: TableName[] = [
   'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions',
-  'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices',
+  'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries',
 ]

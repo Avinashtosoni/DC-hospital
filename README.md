@@ -90,6 +90,31 @@ Signed-out visitors get a multi-page, patient-facing hospital website. Signed-in
 - **Code:** in `src/site/`. Page components live in `pages/`, shared blocks in `ui.tsx`/`parts.tsx`, and copy in `content.ts`. Speciality and doctor data live in `data/services.ts` and `data/doctors.ts`, so edit those to change the content. Every page is lazy-loaded as its own small chunk. Images are in `public/landing/`.
 - **Contact enquiries** are stored in the browser (`localStorage`, key `dch:enquiries:v1`). To collect them centrally, point `submit()` in `pages/Contact.tsx` at a Supabase table or an email/webhook endpoint.
 
+## Website CMS (Dashboard → Website → Website CMS)
+
+The hospital **owner** can edit every public page without touching code:
+
+| Section | What you can change |
+|---|---|
+| **Site settings** | Hospital name & tagline, phone / WhatsApp / email / address, opening hours, directions, map, social links, top bar, emergency box, default call-to-action, and **which pages are visible** |
+| **Pages** | Home (hero, stats, insurers, features, benefits, steps, section headings, show/hide each section), About, Services, Find a doctor, Packages, Contact, FAQ, Privacy & Terms — including SEO title/description |
+| **Collections** | Specialities (each gets its own `/services/:slug` page), support services, doctors (photo, OPD days, fees, education…), health packages + comparison table, FAQs, testimonials |
+| **Media library** | Upload images (auto-resized to WebP in the browser), reuse built-in photos |
+
+- **Live preview** — the page updates as you type (desktop / mobile view). Nothing is public until you press **Publish**.
+- **Hide, reorder, duplicate, delete** any list item; drafts survive switching dashboard pages.
+- **Version history** — every publish/reset keeps the previous version; restore it with one click.
+- **Validation** — duplicate/invalid URL slugs are blocked before publishing.
+- Headings support `*highlight*` and texts support `{phone}`, `{email}`, `{address}`, `{name}` tokens from Site settings.
+- **Contact form → Enquiries**: messages from `/contact` land in *Dashboard → Website → Enquiries* (owner & receptionist) with call/email/status actions.
+
+**Storage.** With Supabase, content lives in `site_content` (one JSONB row per section), history in `site_content_revisions`
+(written by a trigger that also stamps who published), images in the public `site-media` storage bucket and enquiries in
+`site_enquiries`. RLS: anyone can read content and submit an enquiry; only the owner can write content or upload media.
+Sections that were never edited fall back to the defaults in `src/site/cms/defaults.ts`. Re-running `master.sql` resets
+the hospital demo data but **keeps your website content, history and images**. In demo mode the same features use
+browser storage.
+
 ## Deploy with Docker / Coolify
 
 The repo ships a production **multi-stage Dockerfile**. Node builds the app, and **nginx** (Alpine) serves it with SPA routing, gzip, long-lived caching for build assets, security headers and a `/healthz` endpoint.

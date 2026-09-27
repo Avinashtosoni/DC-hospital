@@ -7,7 +7,7 @@ create extension if not exists pgcrypto with schema extensions;
 drop trigger if exists on_auth_user_created on auth.users;
 
 drop table if exists
-  public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
+  public.site_enquiries, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
   public.staff, public.doctors, public.departments, public.profiles
 cascade;
@@ -252,6 +252,22 @@ create table public.notices (
   updated_at    timestamptz not null default now()
 );
 
+-- Messages sent from the public website's Contact form (anyone may insert; owner/receptionist manage them)
+create table public.site_enquiries (
+  id          uuid primary key default gen_random_uuid(),
+  ref         text not null default ('DCH-' || lpad((floor(random() * 1000000))::int::text, 6, '0')),
+  name        text not null check (char_length(name) between 2 and 120),
+  phone       text not null check (char_length(phone) between 6 and 30),
+  email       text check (email is null or char_length(email) <= 200),
+  topic       text not null default 'General enquiry' check (char_length(topic) <= 80),
+  speciality  text check (speciality is null or char_length(speciality) <= 80),
+  message     text not null check (char_length(message) between 1 and 2000),
+  status      text not null default 'new' check (status in ('new', 'in_progress', 'resolved', 'spam')),
+  notes       text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
 -- Indexes for foreign keys and common filters
 create index on public.doctors (department_id);
 create index on public.staff (department_id);
@@ -270,6 +286,7 @@ create index on public.invoices (status);
 create index on public.payments (invoice_id);
 create index on public.payments (patient_id);
 create index on public.expenses (expense_date);
+create index on public.site_enquiries (status, created_at desc);
 
 -- =====================================================================================================
 --  4. HELPER FUNCTIONS (security definer so they can be used inside RLS without recursion)
@@ -309,7 +326,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
-                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices']
+                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);
   end loop;
