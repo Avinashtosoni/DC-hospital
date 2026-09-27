@@ -76,7 +76,7 @@ The repo ships a production **multi-stage Dockerfile**. Node builds the app, and
 
 1. **+ New Resource → Public/Private Repository**, then pick this repo and branch.
 2. **Build Pack:** `Dockerfile`. Leave Base Directory `/` and Dockerfile Location `/Dockerfile`.
-3. **Ports Exposes:** `80`.
+3. **Ports Exposes:** `80`. The image also listens on `3000`, so Coolify's default works too. A wrong port shows up as **502 Bad Gateway** even though the healthcheck passes.
 4. **Environment Variables:**
    | Key | Value |
    | --- | --- |

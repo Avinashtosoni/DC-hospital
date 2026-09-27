@@ -39,7 +39,8 @@ RUN chmod +x /docker-entrypoint.d/40-runtime-env.sh \
 ENV VITE_SUPABASE_URL="" \
     VITE_SUPABASE_ANON_KEY=""
 
-EXPOSE 80
+# 80 = primary; 3000 = fallback for Coolify's default "Ports Exposes" value
+EXPOSE 80 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1/healthz || exit 1
