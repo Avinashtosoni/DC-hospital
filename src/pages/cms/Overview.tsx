@@ -55,16 +55,16 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
   return (
     <div className="space-y-6">
       {/* hero */}
-      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#292966] via-[#3a3a7a] to-[#5c5c99] p-6 text-white shadow-lift sm:p-8">
-        <div aria-hidden="true" className="pointer-events-none absolute -right-16 -top-20 h-72 w-72 rounded-full bg-[#ccccff]/25 blur-3xl" />
-        <div aria-hidden="true" className="pointer-events-none absolute -bottom-24 left-1/3 h-60 w-60 rounded-full bg-[#a3a3cc]/20 blur-3xl" />
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-900 via-[#3a3a7a] to-brand-600 p-6 text-white shadow-lift sm:p-8">
+        <div aria-hidden="true" className="pointer-events-none absolute -right-16 -top-20 h-72 w-72 rounded-full bg-brand-300/25 blur-3xl" />
+        <div aria-hidden="true" className="pointer-events-none absolute -bottom-24 left-1/3 h-60 w-60 rounded-full bg-brand-400/20 blur-3xl" />
         <div className="relative flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-xl">
-            <p className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-[#ccccff] ring-1 ring-inset ring-white/15">
+            <p className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-brand-300 ring-1 ring-inset ring-white/15">
               <Sparkles className="h-3 w-3" />Website CMS
             </p>
             <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight sm:text-3xl">Manage every page of your website</h1>
-            <p className="mt-2 text-sm leading-relaxed text-[#dcdcfa]">Edit texts, images, doctors, specialities and packages. Changes stay as drafts, with a live preview, until you publish them.</p>
+            <p className="mt-2 text-sm leading-relaxed text-brand-200">Edit texts, images, doctors, specialities and packages. Changes stay as drafts, with a live preview, until you publish them.</p>
             <div className="mt-5 flex flex-wrap gap-2">
               <Button variant="outline" className="border-white/20 bg-white text-brand-900 hover:bg-brand-50" icon={<Layers className="h-4 w-4" />} onClick={() => onOpen('home')}>Edit home page</Button>
               <a href="/welcome" target="_blank" rel="noreferrer" className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-medium text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/10">
@@ -79,8 +79,8 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end sm:text-right">
             <Badge tone={cms.mode === 'supabase' ? 'green' : 'amber'} dot><Database className="mr-0.5 h-3 w-3" />{cms.mode === 'supabase' ? 'Supabase' : 'Demo · this browser'}</Badge>
-            <p className="text-xs text-[#ccccff]">{liveDoctors} doctors · {liveServices} specialities live</p>
-            <p className="hidden items-center gap-1.5 text-[11px] text-[#a3a3cc] sm:inline-flex"><Keyboard className="h-3.5 w-3.5" />Ctrl + S publish · Ctrl + Z undo</p>
+            <p className="text-xs text-brand-300">{liveDoctors} doctors · {liveServices} specialities live</p>
+            <p className="hidden items-center gap-1.5 text-[11px] text-brand-400 sm:inline-flex"><Keyboard className="h-3.5 w-3.5" />Ctrl + S publish · Ctrl + Z undo</p>
           </div>
         </div>
       </section>
@@ -118,7 +118,7 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
                 ))}
                 {g === 'General' && (
                   <button type="button" onClick={() => onOpen('media')} className="group card flex items-start gap-3 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-lift">
-                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#ccccff] to-[#a3a3cc] text-brand-900"><ImageIcon className="h-5 w-5" /></span>
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-300 to-brand-400 text-brand-900"><ImageIcon className="h-5 w-5" /></span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2 text-sm font-semibold text-brand-950">Media library<ArrowRight className="h-4 w-4 text-brand-300 transition group-hover:translate-x-0.5 group-hover:text-brand-600" /></span>
                       <span className="mt-0.5 line-clamp-2 block text-xs text-slate-500">Upload and reuse images anywhere on the website.</span>
@@ -165,7 +165,7 @@ function SectionCard({ s, row, draft, hidden, info, loading, onOpen }: {
   return (
     <button type="button" onClick={onOpen}
       className={cn('group card relative flex items-start gap-3 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-lift', draft ? 'border-amber-200' : 'hover:border-brand-300')}>
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#5c5c99] to-[#292966] text-white shadow-md shadow-brand-900/20"><s.icon className="h-5 w-5" /></span>
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-600 to-brand-900 text-white shadow-md shadow-brand-900/20"><s.icon className="h-5 w-5" /></span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2 text-sm font-semibold text-brand-950">
           <span className="truncate">{s.label}</span>

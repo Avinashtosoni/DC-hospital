@@ -9,9 +9,9 @@
 --    public_book_appointment(token, …)         re-validates the slot server-side, then creates
 --                                              patient (if new) → appointment → unpaid invoice
 --
---  SMS: codes are delivered by public.send_booking_otp(). Out of the box it does nothing and — while the
---  CMS setting "Show the OTP on screen" is ON — the code is returned to the browser for testing.
---  Connect a provider (MSG91, Twilio, Gupshup…) inside send_booking_otp() and switch that setting OFF.
+--  SMS: codes are queued by public.send_booking_otp() on the channels configured in Settings → Notifications
+--  and delivered by the Edge Function `notify`. With no gateway configured — and the CMS setting
+--  "Show the OTP on screen" ON — the code is returned to the browser for testing.
 --  All dates/times are Indian Standard Time.
 -- =====================================================================================================
 
@@ -38,14 +38,15 @@ returns text language sql stable security definer set search_path = public as $$
   select coalesce((select data -> p_group ->> p_key from public.site_content where key = 'settings'), p_default)
 $$;
 
--- ▶ plug your SMS gateway in here. Example (MSG91 via pg_net — enable the pg_net extension first):
---   perform net.http_post(
---     url     := 'https://control.msg91.com/api/v5/otp?template_id=<TEMPLATE>&mobile=91' || p_phone || '&otp=' || p_code,
---     headers := jsonb_build_object('authkey', '<AUTH KEY>', 'Content-Type', 'application/json'));
+-- Queues the code on the channels enabled in Settings → Notifications (SMS / WhatsApp) and returns how many
+-- messages were queued. 0 = no gateway configured → the booking page may show the code on screen (demo mode).
+-- Delivery is done by the Edge Function `notify` (supabase/functions/notify), which reads the credentials.
 create or replace function public.send_booking_otp(p_phone text, p_code text)
-returns void language plpgsql security definer set search_path = public as $$
+returns int language plpgsql security definer set search_path = public as $$
 begin
-  null;
+  return coalesce(public.notify_enqueue('otp', p_phone, null, jsonb_build_object('code', p_code, 'otp', p_code), 'booking_otps', null), 0);
+exception when undefined_function then
+  return 0;
 end $$;
 
 create or replace function public.public_doctors()
@@ -84,8 +85,9 @@ $$;
 create or replace function public.request_booking_otp(p_phone text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
-  v_phone text := public.norm_phone(p_phone);
-  v_code  text;
+  v_phone  text := public.norm_phone(p_phone);
+  v_code   text;
+  v_queued int;
 begin
   if public.booking_setting('enabled', 'true') <> 'true' then
     raise exception 'Online booking is switched off right now. Please call the hospital to book.';
@@ -103,10 +105,11 @@ begin
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
   insert into public.booking_otps (phone, code_hash, expires_at)
   values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes');
-  perform public.send_booking_otp(v_phone, v_code);
+  v_queued := public.send_booking_otp(v_phone, v_code);
 
-  return jsonb_build_object('sent', true, 'expires_in', 600,
-    'demo_code', case when public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
+  -- the code is only ever returned to the browser when no SMS/WhatsApp gateway took it AND demo mode is on
+  return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', v_queued,
+    'demo_code', case when v_queued = 0 and public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
 end $$;
 
 -- returns {ok:true, token} or {ok:false, error} (no exception, so the failed-attempt counter is kept)

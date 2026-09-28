@@ -12,7 +12,8 @@ import { ResourcePage } from '../components/ResourcePage'
 import { Avatar, Badge, Button, ConfirmDialog, EmptyState, Modal, PageHeader, Select, Skeleton } from '../components/ui'
 import { useTable, useUpdate } from '../hooks/useData'
 import { conflictOf, freeSlots, type ScheduleExt } from '../lib/schedule'
-import { HOSPITAL, ago, cn, fmtDate, fmtTime, today } from '../lib/utils'
+import { ago, cn, fmtDate, fmtTime, today } from '../lib/utils'
+import { useSiteSettings } from '../site/cms/content'
 import { holidaysRes, leavesRes } from '../resources/definitions'
 import { useResourceCtx } from '../resources/useResourceCtx'
 import type { Appointment, Doctor, Patient } from '../types'
@@ -42,7 +43,7 @@ export default function SchedulePage() {
   const upcomingHol = holidays.filter((h) => h.holiday_date >= today()).length
 
   const tabs = (
-    <div role="tablist" aria-label="Schedule sections" className="inline-flex max-w-full overflow-x-auto rounded-xl border border-[#e6e6f5] bg-white p-1 shadow-sm">
+    <div role="tablist" aria-label="Schedule sections" className="inline-flex max-w-full overflow-x-auto rounded-xl border border-brand-100 bg-white p-1 shadow-sm">
       {([
         ['leave', isDoctor ? 'My leave & blocks' : 'Leave & blocked time', CalendarOff, pending, 'bg-amber-100 text-amber-800'],
         ['holidays', 'Holidays', PartyPopper, upcomingHol, 'bg-brand-100 text-brand-800'],
@@ -68,6 +69,7 @@ const waDigits = (phone?: string | null) => { const d = (phone ?? '').replace(/\
 const shortWhy = (why: string) => why.replace(/^Dr\.[^—]+— /, '').replace(/^Hospital holiday — /, '')
 
 function RescheduleQueue({ tabs }: { tabs: ReactNode }) {
+  const site = useSiteSettings()
   const { ctx } = useResourceCtx(['patients', 'doctors', 'departments', 'doctor_leaves', 'holidays'])
   const apptQ = useTable('appointments')
   const leaveQ = useTable('doctor_leaves')
@@ -118,7 +120,7 @@ function RescheduleQueue({ tabs }: { tabs: ReactNode }) {
   const whatsapp = (a: Appointment, why: string) => {
     if (!ctx) return
     const p = ctx.lk.patients.get(a.patient_id), d = ctx.lk.doctors.get(a.doctor_id)
-    const msg = `Namaste ${p?.full_name.split(' ')[0] ?? ''}, this is ${HOSPITAL.name}. Your appointment with ${d?.full_name ?? 'the doctor'} on ${fmtDate(a.appointment_date, 'EEE, d MMM')} at ${fmtTime(a.appointment_time)} needs to be moved (${shortWhy(why)}). Please reply with a convenient day/time, or call us on ${HOSPITAL.phone}. We are sorry for the inconvenience.`
+    const msg = `Namaste ${p?.full_name.split(' ')[0] ?? ''}, this is ${site.name}. Your appointment with ${d?.full_name ?? 'the doctor'} on ${fmtDate(a.appointment_date, 'EEE, d MMM')} at ${fmtTime(a.appointment_time)} needs to be moved (${shortWhy(why)}). Please reply with a convenient day/time, or call us on ${site.appointmentsPhone || site.phone}. We are sorry for the inconvenience.`
     window.open(`https://wa.me/${waDigits(p?.phone)}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener')
     if (!a.contacted_at) update.mutate({ id: a.id, patch: { contacted_at: new Date().toISOString() } })
   }
@@ -218,7 +220,7 @@ function RescheduleQueue({ tabs }: { tabs: ReactNode }) {
             update.mutate({ id: a.id, patch: { ...patch, status: 'scheduled', contacted_at: new Date().toISOString(),
               notes: [a.notes, `Rescheduled from ${fmtDate(a.appointment_date, 'dd MMM')} ${fmtTime(a.appointment_time)} — ${shortWhy(moving.why)}`].filter(Boolean).join('\n') } })
             const p = ctx.lk.patients.get(a.patient_id), d = ctx.lk.doctors.get(patch.doctor_id)
-            const msg = `Namaste ${p?.full_name.split(' ')[0] ?? ''}, your appointment at ${HOSPITAL.name} has been moved to ${fmtDate(patch.appointment_date, 'EEE, d MMM')} at ${fmtTime(patch.appointment_time)} with ${d?.full_name}. Reply if this time doesn't suit you. Thank you!`
+            const msg = `Namaste ${p?.full_name.split(' ')[0] ?? ''}, your appointment at ${site.name} has been moved to ${fmtDate(patch.appointment_date, 'EEE, d MMM')} at ${fmtTime(patch.appointment_time)} with ${d?.full_name}. Reply if this time doesn't suit you. Thank you!`
             toast.success(`Moved to ${fmtDate(patch.appointment_date, 'EEE d MMM')}, ${fmtTime(patch.appointment_time)}`, {
               duration: 9000, action: p?.phone ? { label: 'Tell patient on WhatsApp', onClick: () => window.open(`https://wa.me/${waDigits(p.phone)}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener') } : undefined,
             })
@@ -280,10 +282,10 @@ function RescheduleModal({ item, ctx, ext, appts, onClose, onSave }: {
             {days.map((d, i) => (
               <button key={d} type="button" disabled={!counts[i]} onClick={() => { setDate(d); setTime('') }}
                 className={cn('flex w-14 shrink-0 flex-col items-center rounded-xl border py-1.5 text-center transition disabled:cursor-not-allowed disabled:opacity-40',
-                  d === date ? 'border-brand-900 bg-brand-900 text-white' : 'border-[#e6e6f5] bg-white hover:border-brand-400')}>
+                  d === date ? 'border-brand-900 bg-brand-900 text-white' : 'border-brand-100 bg-white hover:border-brand-400')}>
                 <span className="text-[10px] font-semibold uppercase opacity-70">{format(parseISO(d), 'EEE')}</span>
                 <span className="text-base font-bold leading-tight">{format(parseISO(d), 'd')}</span>
-                <span className={cn('text-[10px]', d === date ? 'text-[#ccccff]' : counts[i] ? 'text-emerald-600' : 'text-slate-400')}>{counts[i] ? `${counts[i]} free` : 'off'}</span>
+                <span className={cn('text-[10px]', d === date ? 'text-brand-300' : counts[i] ? 'text-emerald-600' : 'text-slate-400')}>{counts[i] ? `${counts[i]} free` : 'off'}</span>
               </button>
             ))}
           </div>

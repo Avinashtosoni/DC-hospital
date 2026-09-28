@@ -9,10 +9,8 @@ export default {
       },
       colors: {
         // Dashboard palette built on #CCCCFF · #A3A3CC · #5C5C99 · #292966
-        brand: {
-          50: '#f5f5ff', 100: '#ebebff', 200: '#dcdcfa', 300: '#ccccff', 400: '#a3a3cc',
-          500: '#7a7ab3', 600: '#5c5c99', 700: '#484885', 800: '#363673', 900: '#292966', 950: '#1b1b47',
-        },
+        // Values live in CSS variables (src/index.css) so Settings → Appearance can switch the theme at runtime.
+        brand: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((s) => [s, `rgb(var(--brand-${s}) / <alpha-value>)`])),
         // Landing palette: #CCCCFF periwinkle → #A3A3CC → #5C5C99 → #292966 deep blue
         peri: {
           50: '#f7f7ff', 100: '#eeeeff', 200: '#e0e0ff', 300: '#ccccff', 400: '#a3a3cc',

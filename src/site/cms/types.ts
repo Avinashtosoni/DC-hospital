@@ -36,6 +36,28 @@ export interface SiteSettings {
   cta: Cta & { note: string }
   pages: { about: boolean; services: boolean; doctors: boolean; packages: boolean; contact: boolean; faq: boolean }
   seoDescription: string
+  /** Logo, favicon and names used across the website, dashboard, login and documents. */
+  brand: {
+    /** short name for tight spaces (mobile header, SMS signature) */
+    shortName: string
+    /** line under the name in the dashboard sidebar */
+    appSubtitle: string
+    /** square logo / mark (PNG, SVG or WebP). Empty = built-in icon */
+    logoUrl: string
+    /** browser-tab icon. Empty = logo */
+    faviconUrl: string
+    /** show the hospital name next to the logo (turn off if the logo already contains the name) */
+    showName: boolean
+  }
+  /** Sign-in / patient portal behaviour. */
+  portal: {
+    /** allow patients to create their own portal account on /register */
+    allowSignup: boolean
+    /** show the one-click demo accounts on the login page (turn OFF in production) */
+    showDemoLogins: boolean
+    /** optional message on the sign-in page */
+    loginNotice: string
+  }
   /** Online appointment booking from the public website (/book). */
   booking: {
     enabled: boolean

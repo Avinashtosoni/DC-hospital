@@ -1,3 +1,4 @@
+import { flushNotificationsSoon } from '../settings/store'
 import { useCallback, useMemo } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -37,10 +38,12 @@ export function useResourceCtx(relations: TableName[] = []): { ctx: ResourceCtx 
   const patch = useCallback<ResourceCtx['patch']>(async (table, id, p) => {
     try { await db.update(table, id, p) } catch (e) { toast.error((e as Error).message) }
     qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') })
+    if (['appointments', 'invoices', 'payments', 'lab_tests'].includes(table)) flushNotificationsSoon()
   }, [qc])
   const insert = useCallback<ResourceCtx['insert']>(async (table, row) => {
     try { await db.insert(table, row as never) } catch (e) { toast.error((e as Error).message) }
     qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') })
+    if (['appointments', 'invoices', 'payments', 'lab_tests'].includes(table)) flushNotificationsSoon()
   }, [qc])
 
   const ctx = useMemo<ResourceCtx | null>(() => (user ? {

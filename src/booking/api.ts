@@ -5,6 +5,7 @@
  * Demo mode     → the same rules, run against the browser's local demo database.
  * Both return identical shapes, so the wizard does not care which one it talks to.
  */
+import { flushNotificationsSoon } from '../settings/store'
 import { addDays, format, parseISO } from 'date-fns'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import { asActor, localAdapter } from '../data/localAdapter'
@@ -194,7 +195,11 @@ const local = {
 const remote = {
   doctors: () => rpc<PublicDoctor[]>('public_doctors'),
   availability: (doctorId: string | null, from: string, to: string) => rpc<Availability>('public_availability', { p_doctor: doctorId, p_from: from, p_to: to }),
-  requestOtp: (phone: string) => rpc<{ sent: boolean; expires_in: number; demo_code: string | null }>('request_booking_otp', { p_phone: phone }),
+  requestOtp: async (phone: string) => {
+    const r = await rpc<{ sent: boolean; expires_in: number; queued?: number; demo_code: string | null }>('request_booking_otp', { p_phone: phone })
+    if (r.queued) flushNotificationsSoon(0)   // deliver the SMS / WhatsApp right away
+    return r
+  },
   verifyOtp: (phone: string, code: string) => rpc<{ ok: boolean; token?: string; error?: string }>('verify_booking_otp', { p_phone: phone, p_code: code }),
   book: (i: BookingInput) => rpc<BookingReceipt>('public_book_appointment', {
     p_token: i.token, p_doctor: i.doctorId, p_date: i.date, p_time: i.time, p_name: i.name, p_gender: i.gender,
@@ -208,7 +213,11 @@ export const bookingApi = {
   availability: (doctorId: string | null, from: string, to: string) => (isSupabaseConfigured ? remote.availability(doctorId, from, to) : local.availability(doctorId, from, to)),
   requestOtp: (phone: string, cfg: Cfg) => (isSupabaseConfigured ? remote.requestOtp(phone) : local.requestOtp(phone, cfg)),
   verifyOtp: (phone: string, code: string) => (isSupabaseConfigured ? remote.verifyOtp(phone, code) : local.verifyOtp(phone, code)),
-  book: (input: BookingInput, cfg: Cfg) => (isSupabaseConfigured ? remote.book(input) : local.book(input, cfg)),
+  book: async (input: BookingInput, cfg: Cfg) => {
+    const r = await (isSupabaseConfigured ? remote.book(input) : local.book(input, cfg))
+    flushNotificationsSoon(300)   // booking confirmation / invoice messages
+    return r
+  },
 }
 
 // ------------------------------------------------------------------ receipt persistence + calendar file

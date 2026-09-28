@@ -125,6 +125,43 @@ browser storage.
 - **Audit log (`/audit`)** — database triggers record every create, update and delete on patients, appointments, prescriptions, lab orders, admissions, invoices, payments and leave: who did it, their role, when, and a field-by-field before/after. The log can't be edited or deleted. The owner sees everything, and other staff see their own changes. A *History* tab also appears on patient and invoice pages.
 - **My profile (`/profile`)** — photo upload, personal details, password change, preferences and your own recent activity.
 
+## Settings (Dashboard → Settings, owner only)
+
+| Tab | What you can change |
+|---|---|
+| **General & brand** | Hospital name, short name, sidebar subtitle, **logo** and favicon uploads (media library), contact numbers, date/time format, first day of the week. Changes show up on the website, sidebar, sign-in page, invoices and prescriptions. |
+| **Appearance** | 8 theme colours plus any custom colour (previewed live), sidebar style, interface size, corner radius, **hide modules** for everyone except the owner, and an announcement banner aimed at staff, patients or everyone. |
+| **Dashboard** | Show or hide each stat card and panel, per role, plus the greeting header. |
+| **Notifications & APIs** | Credentials for **SMS** (MSG91, Fast2SMS, Twilio, webhook), **WhatsApp** (Meta Cloud API, Interakt, Twilio, webhook) and **Email** (Resend, SendGrid, SMTP). Each channel has setup hints and a *Send test* button. An events × channels matrix picks which messages go out (OTP, booked, reminder, rescheduled, cancelled, invoice, payment, lab report ready), with a template editor (tokens, SMS segment counter, DLT ID, WhatsApp template name and variables) and a delivery log. |
+| **Billing & booking** | GST letterhead (GSTIN/PAN validation, SAC code, rate, UPI ID, signatory, footer) and online booking rules. |
+| **Security & access** | Idle auto sign-out, patient self-signup, demo-login buttons, sign-in notice, and a read-only permissions matrix. |
+| **Data & backup** | Export/import settings as JSON (credentials are never included), restore defaults, reset demo data, system info. |
+
+Other roles only see **My account** there.
+
+### How credentials and messages work (Supabase mode)
+
+* API keys go into `app_secrets`, which has RLS on and no policies. The browser can write keys through `set_app_secret()`, but can never read them back; `app_secret_status()` only returns a masked `••••1234`. Every change is written to the audit log without the value.
+* Database triggers on appointments, invoices, payments and lab tests, plus the booking OTP, queue messages in `notification_outbox` via `notify_enqueue()`. If queuing fails, it never blocks the booking or invoice itself.
+* The **`notify` Edge Function** delivers queued messages. The app calls it right after an action. Deploy it once:
+
+  ```bash
+  supabase functions deploy notify     # uses SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY automatically
+  ```
+* To send appointment reminders every day at 18:00 IST, and retry anything left in the queue, enable **pg_cron** and **pg_net** and schedule:
+
+  ```sql
+  select cron.schedule('appointment-reminders', '30 12 * * *', $$ select public.queue_appointment_reminders() $$);
+  select cron.schedule('notify-flush', '*/5 * * * *', $$
+    select net.http_post('https://<project>.supabase.co/functions/v1/notify',
+      '{"flush":true}'::jsonb, headers => '{"Authorization":"Bearer <service-role-key>","Content-Type":"application/json"}'::jsonb) $$);
+  ```
+* Once SMS or WhatsApp is connected, the booking OTP is sent to the phone and is no longer shown on screen.
+* **India (DLT):** SMS through MSG91 or Fast2SMS needs DLT-approved templates. Paste each template or flow ID into the matching message template.
+* **WhatsApp:** outside a 24-hour chat window, only approved templates can be sent.
+
+In demo mode everything can be configured, and test sends are *simulated* and logged.
+
 ## Deploy with Docker / Coolify
 
 The repo ships a production **multi-stage Dockerfile**. Node builds the app, and **nginx** (Alpine) serves it with SPA routing, gzip, long-lived caching for build assets, security headers and a `/healthz` endpoint.

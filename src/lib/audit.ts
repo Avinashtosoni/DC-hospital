@@ -14,7 +14,7 @@ export const isAudited = (t: string): t is AuditedTable => (AUDITED_TABLES as re
 export const AUDIT_TABLE_LABEL: Record<string, string> = {
   patients: 'Patient', appointments: 'Appointment', prescriptions: 'Prescription', lab_tests: 'Lab test', admissions: 'Admission',
   invoices: 'Invoice', payments: 'Payment', doctors: 'Doctor', doctor_leaves: 'Leave / block', holidays: 'Holiday',
-  profiles: 'User', staff: 'Staff member', expenses: 'Expense',
+  profiles: 'User', staff: 'Staff member', expenses: 'Expense', app_settings: 'Settings', app_secrets: 'Credential',
 }
 
 /** Columns that change on every write and carry no meaning for a reviewer. */

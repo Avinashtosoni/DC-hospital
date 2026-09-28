@@ -1,3 +1,4 @@
+import { useWidgetHidden } from '../../settings/widgetScope'
 import { forwardRef, useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, Inbox, Loader2, X } from 'lucide-react'
@@ -246,8 +247,9 @@ export function PageHeader({ title, description, actions }: { title: string; des
 }
 
 export function StatCard({ label, value, icon, hint, tone = 'teal', loading }: { label: string; value: ReactNode; icon: ReactNode; hint?: ReactNode; tone?: Tone; loading?: boolean }) {
+  if (useWidgetHidden(label)) return null
   const bg: Record<Tone, string> = {
-    teal: 'from-brand-600 to-brand-900', blue: 'from-[#7a7ab3] to-[#484885]', violet: 'from-violet-500 to-violet-700', amber: 'from-amber-400 to-amber-500',
+    teal: 'from-brand-600 to-brand-900', blue: 'from-[#7a7ab3] to-brand-700', violet: 'from-violet-500 to-violet-700', amber: 'from-amber-400 to-amber-500',
     green: 'from-emerald-500 to-emerald-600', red: 'from-rose-500 to-rose-600', slate: 'from-slate-500 to-slate-600', pink: 'from-pink-500 to-pink-600',
   }
   return (

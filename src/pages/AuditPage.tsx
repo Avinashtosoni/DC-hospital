@@ -42,7 +42,7 @@ export default function AuditPage() {
   const stats = [
     { label: 'Changes today', value: rows.filter((r) => r.created_at && format(parseISO(r.created_at), 'yyyy-MM-dd') === t).length, icon: History, tone: 'bg-brand-50 text-brand-700' },
     { label: 'Created', value: filtered.filter((r) => r.action === 'insert').length, icon: FilePlus2, tone: 'bg-emerald-50 text-emerald-600' },
-    { label: 'Edited', value: filtered.filter((r) => r.action === 'update').length, icon: PencilLine, tone: 'bg-[#292966] text-white' },
+    { label: 'Edited', value: filtered.filter((r) => r.action === 'update').length, icon: PencilLine, tone: 'bg-brand-900 text-white' },
     { label: 'Deleted', value: filtered.filter((r) => r.action === 'delete').length, icon: FileX2, tone: 'bg-rose-50 text-rose-600' },
   ]
 

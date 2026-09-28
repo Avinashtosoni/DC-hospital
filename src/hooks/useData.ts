@@ -5,6 +5,10 @@ import type { TableName } from '../types'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
 import { isAudited } from '../lib/audit'
+import { flushNotificationsSoon } from '../settings/store'
+
+/** Tables whose changes can queue SMS / WhatsApp / email (see scripts/sql/settings.sql). */
+const NOTIFY_TABLES = new Set<string>(['appointments', 'invoices', 'payments', 'lab_tests'])
 
 export const qk = (table: TableName) => ['table', table] as const
 
@@ -46,7 +50,7 @@ export function useCreate<T extends TableName>(table: T, opts: { silent?: boolea
       if (ctx?.prev) qc.setQueryData(qk(table), ctx.prev)
       toast.error(`Could not create ${opts.label ?? 'record'}`, { description: err.message })
     },
-    onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} created`) },
+    onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} created`); if (NOTIFY_TABLES.has(table)) flushNotificationsSoon() },
     onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
   })
 }
@@ -66,7 +70,7 @@ export function useUpdate<T extends TableName>(table: T, opts: { silent?: boolea
       if (ctx?.prev) qc.setQueryData(qk(table), ctx.prev)
       toast.error(`Could not update ${opts.label ?? 'record'}`, { description: err.message })
     },
-    onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} updated`) },
+    onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} updated`); if (NOTIFY_TABLES.has(table)) flushNotificationsSoon() },
     onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
   })
 }

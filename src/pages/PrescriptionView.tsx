@@ -5,11 +5,13 @@ import { useLookup, useTable } from '../hooks/useData'
 import { Button, Card, EmptyState, Skeleton } from '../components/ui'
 import { Forbidden } from '../components/layout/Guards'
 import { Logo } from '../components/layout/AppLayout'
-import { HOSPITAL, age, fmtDate, titleCase } from '../lib/utils'
+import { age, fmtDate, titleCase } from '../lib/utils'
+import { useSiteSettings } from '../site/cms/content'
 
 export default function PrescriptionView() {
   const { id } = useParams()
   const { user } = useAuth()
+  const site = useSiteSettings()
   const nav = useNavigate()
   const rx = useTable('prescriptions')
   const pLk = useLookup('patients')
@@ -29,7 +31,7 @@ export default function PrescriptionView() {
       </div>
       <Card className="print-area overflow-hidden">
         <div className="flex flex-col justify-between gap-4 border-b-4 border-brand-600 p-8 sm:flex-row">
-          <div><Logo /><p className="mt-2 text-xs text-slate-500">{HOSPITAL.address} · {HOSPITAL.phone}</p></div>
+          <div><Logo /><p className="mt-2 text-xs text-slate-500">{site.address} · {site.phone}</p></div>
           <div className="sm:text-right">
             <p className="text-lg font-semibold text-slate-900">{d?.full_name}</p>
             <p className="text-sm text-slate-500">{d?.qualification}</p>

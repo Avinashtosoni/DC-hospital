@@ -20,11 +20,17 @@ export function LandingLogo({ className, light, to = '/' }: { className?: string
   const { settings } = useSite()
   return (
     <Link to={to} className={cn('group inline-flex items-center gap-2.5 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-peri-300', className)} aria-label={`${settings.name} home`}>
-      <span className="relative grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-peri-600 to-peri-800 text-white shadow-glow transition-transform duration-500 group-hover:rotate-[8deg] group-hover:scale-105">
-        <HeartPulse className="h-5 w-5" strokeWidth={2.4} />
-        <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-400" />
-      </span>
-      <span className="leading-none">
+      {settings.brand?.logoUrl ? (
+        <span className={cn('relative grid h-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-white p-1 shadow-soft ring-1 ring-peri-200 transition-transform duration-500 group-hover:scale-105', settings.brand.showName ? 'w-10' : 'max-w-[200px] px-2')}>
+          <img src={settings.brand.logoUrl} alt={settings.brand.showName ? '' : settings.name} className="h-full w-full object-contain" />
+        </span>
+      ) : (
+        <span className="relative grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-peri-600 to-peri-800 text-white shadow-glow transition-transform duration-500 group-hover:rotate-[8deg] group-hover:scale-105">
+          <HeartPulse className="h-5 w-5" strokeWidth={2.4} />
+          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-400" />
+        </span>
+      )}
+      <span className={cn('leading-none', settings.brand?.logoUrl && !settings.brand.showName && 'sr-only')}>
         <span className={cn('block font-display text-lg font-extrabold tracking-tight', light ? 'text-white' : 'text-peri-900')}>{settings.name}</span>
         <span className={cn('mt-1 block text-[10px] font-semibold uppercase tracking-[.2em]', light ? 'text-peri-300' : 'text-peri-500')}>{settings.tagline}</span>
       </span>

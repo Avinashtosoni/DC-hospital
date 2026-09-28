@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dashboard theme — defaults = periwinkle (#CCCCFF · #A3A3CC · #5C5C99 · #292966). Overridden at runtime by Settings → Appearance. */
+:root {
+  --brand-50: 245 245 255; --brand-100: 235 235 255; --brand-200: 220 220 250; --brand-300: 204 204 255; --brand-400: 163 163 204;
+  --brand-500: 122 122 179; --brand-600: 92 92 153; --brand-700: 72 72 133; --brand-800: 54 54 115; --brand-900: 41 41 102; --brand-950: 27 27 71;
+}
+/* Settings → Appearance → Interface size (dashboard only; everything is rem-based) */
+html[data-app-size='compact'] { font-size: 15px; }
+html[data-app-size='large'] { font-size: 17px; }
+/* Settings → Appearance → Corners */
+html[data-radius='sharp'] .card { border-radius: .5rem; }
+html[data-radius='round'] .card { border-radius: 1.5rem; }
+html[data-radius='sharp'] .input { border-radius: .375rem; }
+html[data-radius='round'] .input { border-radius: .875rem; }
+
 @layer base {
   html { font-feature-settings: 'cv11', 'ss01'; }
   ::selection { @apply bg-brand-200 text-brand-950; }
@@ -9,11 +23,11 @@
 
 @layer components {
   .input {
-    @apply block w-full rounded-lg border border-[#e3e3f3] bg-white px-3 py-2 text-sm text-slate-900 shadow-[0_1px_2px_rgba(41,41,102,.04)] outline-none transition
+    @apply block w-full rounded-lg border border-brand-100 bg-white px-3 py-2 text-sm text-slate-900 shadow-[0_1px_2px_rgba(41,41,102,.04)] outline-none transition
       placeholder:text-slate-400 hover:border-brand-300 focus:border-brand-500 focus:ring-4 focus:ring-brand-300/40 disabled:cursor-not-allowed disabled:bg-slate-50;
   }
   .label { @apply mb-1.5 block text-xs font-medium text-slate-600; }
-  .card { @apply rounded-2xl border border-[#e6e6f5] bg-white shadow-card; }
+  .card { @apply rounded-2xl border border-brand-100 bg-white shadow-card; }
   .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #c9c9e6 transparent; }
   .scrollbar-dark { scrollbar-width: thin; scrollbar-color: rgba(204,204,255,.18) transparent; }
   /* calm periwinkle canvas behind the signed-in app */

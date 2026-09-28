@@ -21,6 +21,7 @@ import {
 import { appointmentsRes } from '../../resources/definitions'
 import type { ResourceCtx, RowAction } from '../../resources/types'
 import { useResourceCtx } from '../../resources/useResourceCtx'
+import { useAppSettings } from '../../settings/AppSettingsProvider'
 import type { Appointment, Doctor } from '../../types'
 
 type View = 'month' | 'day' | 'list'
@@ -49,7 +50,7 @@ export default function AppointmentsPage() {
 function ViewSwitcher({ view, onChange }: { view: View; onChange: (v: View) => void }) {
   const items: [View, string, typeof List][] = [['month', 'Month', CalendarDays], ['day', 'Day', CalendarRange], ['list', 'List', List]]
   return (
-    <div role="tablist" aria-label="Appointment view" className="inline-flex rounded-xl border border-[#e6e6f5] bg-white p-1 shadow-sm">
+    <div role="tablist" aria-label="Appointment view" className="inline-flex rounded-xl border border-brand-100 bg-white p-1 shadow-sm">
       {items.map(([v, label, Icon]) => (
         <button key={v} role="tab" type="button" aria-selected={view === v} onClick={() => onChange(v)}
           className={cn('inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition',
@@ -225,7 +226,9 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
   onNew: (p?: Record<string, any>) => void; onEdit: (a: Appointment) => void; canCreate: boolean; ctx: ResourceCtx; ext: ScheduleExt
 }) {
   const month = parseISO(cursor)
-  const days = useMemo(() => eachDayOfInterval({ start: startOfWeek(startOfMonth(month), { weekStartsOn: 1 }), end: endOfWeek(endOfMonth(month), { weekStartsOn: 1 }) }).map(iso), [cursor]) // eslint-disable-line react-hooks/exhaustive-deps
+  const weekStartsOn = useAppSettings().settings.locale.weekStartsOn
+  const heads = weekStartsOn === 0 ? ['Sun', ...WEEKDAYS.slice(0, 6)] : [...WEEKDAYS]
+  const days = useMemo(() => eachDayOfInterval({ start: startOfWeek(startOfMonth(month), { weekStartsOn }), end: endOfWeek(endOfMonth(month), { weekStartsOn }) }).map(iso), [cursor, weekStartsOn]) // eslint-disable-line react-hooks/exhaustive-deps
   const sums = days.map(summarize)
   const inMonth = sums.filter((s) => isSameMonth(parseISO(s.date), month))
   const cap = inMonth.reduce((n, s) => n + s.capacity, 0)
@@ -240,7 +243,7 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
     <div className="space-y-4">
       <Totals items={[
         { label: 'Total slots', value: num(cap), hint: `${inMonth.length - restDays} OPD days this month`, icon: Clock, tone: 'bg-brand-50 text-brand-700' },
-        { label: 'Booked', value: num(booked), hint: cap ? `${Math.round((booked / cap) * 100)}% utilisation` : '—', icon: UserRoundCheck, tone: 'bg-[#292966] text-white' },
+        { label: 'Booked', value: num(booked), hint: cap ? `${Math.round((booked / cap) * 100)}% utilisation` : '—', icon: UserRoundCheck, tone: 'bg-brand-900 text-white' },
         { label: 'Available', value: num(Math.max(0, cap - booked)), hint: 'Free slots left to book', icon: CalendarDays, tone: 'bg-emerald-50 text-emerald-600' },
         { label: 'Rest', value: restDays, hint: `${restDays === 1 ? 'day' : 'days'} closed${holidays ? ` (${holidays} holiday${holidays === 1 ? '' : 's'})` : ''} · ${num(offDoctorDays)} doctor-days off`, icon: Coffee, tone: 'bg-slate-100 text-slate-500' },
       ]} />
@@ -252,7 +255,7 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
             <p className="hidden text-[11px] text-slate-400 md:block">Tap a day for details · double-click to open the day timeline</p>
           </div>
           <div className="grid grid-cols-7 border-b border-[#efeff8] bg-brand-50/60 text-center text-[11px] font-semibold uppercase tracking-wider text-brand-700/80">
-            {WEEKDAYS.map((w) => <div key={w} className="py-2"><span className="sm:hidden">{w[0]}</span><span className="hidden sm:inline">{w}</span></div>)}
+            {heads.map((w) => <div key={w} className="py-2"><span className="sm:hidden">{w[0]}</span><span className="hidden sm:inline">{w}</span></div>)}
           </div>
           <div className="grid grid-cols-7">
             {sums.map((s, i) => {
@@ -307,14 +310,14 @@ function DayPanel({ s, ctx, ext, onOpenDay, onNew, onEdit }: { s: DaySummary; ct
   const lv = LEVEL[s.level]
   return (
     <aside className="card h-fit overflow-hidden xl:sticky xl:top-20" aria-label="Selected day">
-      <div className="relative overflow-hidden bg-gradient-to-br from-[#292966] via-[#3a3a7a] to-[#5c5c99] p-4 text-white">
-        <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-[#ccccff]/25 blur-2xl" />
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-[#ccccff]">{format(d, 'EEEE')}</p>
+      <div className="relative overflow-hidden bg-gradient-to-br from-brand-900 via-[#3a3a7a] to-brand-600 p-4 text-white">
+        <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-brand-300/25 blur-2xl" />
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-300">{format(d, 'EEEE')}</p>
         <p className="font-display text-xl font-semibold">{format(d, 'd MMMM yyyy')}</p>
         <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ring-white/15"><span className={cn('h-2 w-2 rounded-full', s.holiday ? 'bg-orange-400' : lv.dot)} />{s.holiday ? `Holiday · ${s.holiday.name}` : lv.label}</span>
         <div className="mt-4 grid grid-cols-4 gap-2 text-center">
           {[['Slots', s.capacity], ['Booked', s.bookedInSlots], ['Free', s.available], ['Rest', s.resting.length]].map(([k, v]) => (
-            <div key={k} className="rounded-lg bg-white/10 py-1.5"><p className="text-base font-bold leading-tight">{v}</p><p className="text-[10px] text-[#dcdcfa]">{k}</p></div>
+            <div key={k} className="rounded-lg bg-white/10 py-1.5"><p className="text-base font-bold leading-tight">{v}</p><p className="text-[10px] text-brand-200">{k}</p></div>
           ))}
         </div>
       </div>
@@ -444,7 +447,7 @@ function DayView({ summary: s, ctx, ext, onNew, onEdit, canCreate }: { summary: 
     <div className="space-y-4">
       <Totals items={[
         { label: 'Total slots', value: s.capacity, hint: `${s.working.length} doctor${s.working.length === 1 ? '' : 's'} on duty`, icon: Clock, tone: 'bg-brand-50 text-brand-700' },
-        { label: 'Booked', value: s.bookedInSlots, hint: s.cancelled ? `${s.cancelled} cancelled / no-show` : s.capacity ? `${Math.round((s.bookedInSlots / s.capacity) * 100)}% utilisation` : '—', icon: UserRoundCheck, tone: 'bg-[#292966] text-white' },
+        { label: 'Booked', value: s.bookedInSlots, hint: s.cancelled ? `${s.cancelled} cancelled / no-show` : s.capacity ? `${Math.round((s.bookedInSlots / s.capacity) * 100)}% utilisation` : '—', icon: UserRoundCheck, tone: 'bg-brand-900 text-white' },
         { label: 'Available', value: s.available, hint: s.date < t ? 'Day is over' : 'Free slots to book', icon: CalendarDays, tone: 'bg-emerald-50 text-emerald-600' },
         { label: 'Rest', value: s.resting.length, hint: s.holiday ? `Holiday — ${s.holiday.name}` : s.resting.length ? `${s.resting.filter((r) => r.reason === 'on_leave' || r.reason === 'leave').length} on leave · ${s.resting.filter((r) => r.reason === 'weekly_off').length} weekly off` : 'Everyone is on duty', icon: Coffee, tone: 'bg-slate-100 text-slate-500' },
       ]} />
@@ -459,7 +462,7 @@ function DayView({ summary: s, ctx, ext, onNew, onEdit, canCreate }: { summary: 
         <div className="card overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#efeff8] px-4 py-3">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600">
-              <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded border-l-[3px] border-l-[#292966] bg-[#ebebff]" />Booked</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded border-l-[3px] border-l-brand-900 bg-brand-100" />Booked</span>
               <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded border border-dashed border-emerald-400 bg-emerald-50/50" />Available</span>
               <span className={cn('inline-flex items-center gap-1.5')}><span className={cn('h-3 w-5 rounded border border-slate-200', hatch)} />Off shift / rest</span>
               <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded bg-slate-200/80" />Blocked</span>

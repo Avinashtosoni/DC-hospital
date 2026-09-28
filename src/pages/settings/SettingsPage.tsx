@@ -1,0 +1,183 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { BellRing, Building2, CircleUserRound, Database, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { useAuth } from '../../auth/AuthProvider'
+import { Button, PageHeader, Skeleton } from '../../components/ui'
+import { cn } from '../../lib/utils'
+import { CONTENT_QK, mergeRows, useContentRows } from '../../site/cms/content'
+import { cms, type ContentRows } from '../../site/cms/store'
+import type { SiteSettings } from '../../site/cms/types'
+import { useAppSettings } from '../../settings/AppSettingsProvider'
+import { paletteFor, type AppSettings } from '../../settings/types'
+import { AccountTab } from './AccountTab'
+import { AppearanceTab, LOCKED_MODULES } from './AppearanceTab'
+import { BillingTab } from './BillingTab'
+import { DashboardTab } from './DashboardTab'
+import { DataTab } from './DataTab'
+import { GeneralTab } from './GeneralTab'
+import { NotificationsTab } from './NotificationsTab'
+import { SecurityTab } from './SecurityTab'
+import type { TabCtx } from './shared'
+
+type TabId = 'general' | 'appearance' | 'dashboard' | 'notifications' | 'billing' | 'security' | 'data' | 'account'
+const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ className?: string }>; ownerOnly: boolean }[] = [
+  { id: 'general', label: 'General & brand', hint: 'Logo, name, contacts, formats', icon: Building2, ownerOnly: true },
+  { id: 'appearance', label: 'Appearance', hint: 'Theme, layout, modules, banner', icon: Palette, ownerOnly: true },
+  { id: 'dashboard', label: 'Dashboard', hint: 'Widgets for each role', icon: LayoutDashboard, ownerOnly: true },
+  { id: 'notifications', label: 'Notifications & APIs', hint: 'SMS, WhatsApp, email', icon: BellRing, ownerOnly: true },
+  { id: 'billing', label: 'Billing & booking', hint: 'GST letterhead, online booking', icon: Receipt, ownerOnly: true },
+  { id: 'security', label: 'Security & access', hint: 'Timeout, sign-in, roles', icon: ShieldCheck, ownerOnly: true },
+  { id: 'data', label: 'Data & backup', hint: 'Export, import, system', icon: Database, ownerOnly: true },
+  { id: 'account', label: 'My account', hint: 'Profile and your access', icon: CircleUserRound, ownerOnly: false },
+]
+
+const clone = <T,>(v: T): T => structuredClone(v)
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+/** Paint the draft appearance on the whole dashboard while editing; restore the saved one on leave. */
+function useLiveAppearance(draft: AppSettings['appearance'] | undefined, saved: AppSettings['appearance']) {
+  const savedRef = useRef(saved)
+  savedRef.current = saved
+  const paint = (a: AppSettings['appearance']) => {
+    const root = document.documentElement
+    for (const [k, v] of Object.entries(paletteFor(a))) root.style.setProperty(`--brand-${k}`, v)
+    root.dataset.radius = a.radius
+    root.dataset.appSize = a.size
+  }
+  useEffect(() => { if (draft) paint(draft) }, [draft])
+  useEffect(() => () => paint(savedRef.current), [])
+}
+
+export default function SettingsPage() {
+  const { user } = useAuth()
+  const isOwner = user?.role === 'owner'
+  const tabs = TABS.filter((t) => isOwner || !t.ownerOnly)
+  const [params, setParams] = useSearchParams()
+  const tab = (tabs.find((t) => t.id === params.get('tab'))?.id ?? tabs[0].id) as TabId
+  const qc = useQueryClient()
+  const activeTab = useRef<HTMLButtonElement>(null)
+  useEffect(() => { activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'center' }) }, [tab])
+
+  // ---------------------------------------------------------------- saved values
+  const rows = useContentRows({ enabled: isOwner })
+  const { settings: savedApp, loading: appLoading, save: saveApp } = useAppSettings()
+  const savedSite = useMemo(() => mergeRows(rows.data).settings, [rows.data])
+
+  // ---------------------------------------------------------------- drafts (re-synced when saved data changes and there are no local edits)
+  const [site, setSite] = useState<SiteSettings | null>(null)
+  const [app, setApp] = useState<AppSettings | null>(null)
+  const baseSite = useRef<SiteSettings | null>(null)
+  const baseApp = useRef<AppSettings | null>(null)
+  useEffect(() => {
+    if (!isOwner || rows.isPending) return
+    setSite((d) => (d === null || same(d, baseSite.current) ? clone(savedSite) : d))
+    baseSite.current = savedSite
+  }, [savedSite, rows.isPending, isOwner])
+  useEffect(() => {
+    if (!isOwner || appLoading) return
+    setApp((d) => (d === null || same(d, baseApp.current) ? clone(savedApp) : d))
+    baseApp.current = savedApp
+  }, [savedApp, appLoading, isOwner])
+
+  const siteDirty = !!site && !same(site, savedSite)
+  const appDirty = !!app && !same(app, savedApp)
+  const dirty = siteDirty || appDirty
+  useLiveAppearance(isOwner ? app?.appearance : undefined, savedApp.appearance)
+
+  const editSite = useCallback((fn: (d: SiteSettings) => void) => setSite((p) => { if (!p) return p; const n = clone(p); fn(n); return n }), [])
+  const editApp = useCallback((fn: (d: AppSettings) => void) => setApp((p) => { if (!p) return p; const n = clone(p); fn(n); return n }), [])
+
+  // ---------------------------------------------------------------- save / discard
+  const save = useMutation({
+    mutationFn: async () => {
+      if (site && siteDirty) {
+        if (!site.name.trim()) throw new Error('Hospital name cannot be empty')
+        const row = await cms.save('settings', site, user?.full_name)
+        qc.setQueryData<ContentRows>(CONTENT_QK, (old) => ({ ...(old ?? {}), settings: row }))
+      }
+      if (app && appDirty) {
+        const next = clone(app)
+        next.modules.hidden = next.modules.hidden.filter((p) => !LOCKED_MODULES.includes(p))
+        await saveApp(next)
+      }
+    },
+    onSuccess: () => toast.success('Settings saved', { description: 'Changes apply to every user on their next page load.' }),
+    onError: (e) => toast.error('Could not save settings', { description: (e as Error).message }),
+  })
+  const discard = () => { setSite(clone(savedSite)); setApp(clone(savedApp)); toast.info('Changes discarded') }
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!save.isPending) save.mutate() } }
+    window.addEventListener('beforeunload', warn)
+    window.addEventListener('keydown', key)
+    return () => { window.removeEventListener('beforeunload', warn); window.removeEventListener('keydown', key) }
+  }, [dirty, save])
+
+  // ---------------------------------------------------------------- render
+  if (!isOwner) {
+    return (
+      <div className="mx-auto max-w-4xl">
+        <PageHeader title="Settings" description="Your account and access. Hospital-wide settings are managed by the owner." />
+        <AccountTab />
+      </div>
+    )
+  }
+
+  const ready = !!site && !!app
+  const ctx: TabCtx | null = ready ? { site: site!, app: app!, savedApp, editSite, editApp, dirty } : null
+  const current = TABS.find((t) => t.id === tab)!
+  return (
+    <div className="mx-auto max-w-6xl">
+      <PageHeader title="Settings" description="Brand, appearance, dashboards, messaging credentials and hospital-wide preferences." />
+      <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">
+        <nav aria-label="Settings sections" className="scrollbar-thin -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 lg:sticky lg:top-4 lg:mx-0 lg:flex-col lg:self-start lg:overflow-visible lg:px-0">
+          {tabs.map((t) => (
+            <button key={t.id} type="button" onClick={() => setParams(t.id === tabs[0].id ? {} : { tab: t.id }, { replace: true })} aria-current={tab === t.id ? 'page' : undefined} ref={tab === t.id ? activeTab : undefined}
+              className={cn('group flex shrink-0 items-center gap-3 rounded-xl px-3 py-2 text-left transition lg:py-2.5',
+                tab === t.id ? 'bg-white text-brand-900 shadow-sm ring-1 ring-brand-100' : 'text-slate-600 hover:bg-white/70 hover:text-brand-900')}>
+              <span className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-lg transition', tab === t.id ? 'bg-brand-900 text-white' : 'bg-brand-50 text-brand-700 group-hover:bg-brand-100')}><t.icon className="h-4 w-4" /></span>
+              <span className="min-w-0">
+                <span className="block whitespace-nowrap text-sm font-medium">{t.label}</span>
+                <span className="hidden truncate text-[11px] text-slate-400 lg:block">{t.hint}</span>
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-w-0 pb-24">
+          <h2 className="sr-only">{current.label}</h2>
+          {!ctx && tab !== 'account' ? (
+            <div className="space-y-4" aria-busy="true"><Skeleton className="h-56 rounded-2xl" /><Skeleton className="h-40 rounded-2xl" /></div>
+          ) : (
+            <>
+              {tab === 'general' && <GeneralTab ctx={ctx!} />}
+              {tab === 'appearance' && <AppearanceTab ctx={ctx!} />}
+              {tab === 'dashboard' && <DashboardTab ctx={ctx!} />}
+              {tab === 'notifications' && <NotificationsTab ctx={ctx!} />}
+              {tab === 'billing' && <BillingTab ctx={ctx!} />}
+              {tab === 'security' && <SecurityTab ctx={ctx!} />}
+              {tab === 'data' && <DataTab ctx={ctx!} />}
+              {tab === 'account' && <AccountTab />}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* sticky save bar */}
+      <div className={cn('pointer-events-none fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 transition-all duration-300 lg:pl-64', dirty ? 'visible translate-y-0 opacity-100' : 'invisible translate-y-6 opacity-0')} aria-hidden={!dirty}>
+        <div role="region" aria-label="Unsaved changes" className="pointer-events-auto flex w-full max-w-2xl flex-wrap items-center gap-3 rounded-2xl bg-brand-950 px-4 py-3 text-white shadow-2xl ring-1 ring-white/10">
+          <span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-60" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-400" /></span>
+          <p className="min-w-0 flex-1 text-sm">Unsaved changes<span className="hidden text-white/50 sm:inline"> · {[siteDirty && 'brand & site', appDirty && 'app settings'].filter(Boolean).join(' + ')} · Ctrl+S</span></p>
+          <Button variant="ghost" size="sm" className="text-white/80 hover:bg-white/10 hover:text-white" icon={<Undo2 className="h-4 w-4" />} onClick={discard} disabled={save.isPending} tabIndex={dirty ? 0 : -1}>Discard</Button>
+          <button type="button" onClick={() => save.mutate()} disabled={save.isPending} tabIndex={dirty ? 0 : -1}
+            className="inline-flex h-8 items-center gap-2 rounded-lg bg-white px-3.5 text-xs font-semibold text-brand-950 shadow-sm transition hover:bg-brand-50 active:scale-[.98] disabled:opacity-60">
+            {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save changes</button>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -6,6 +6,9 @@ import {
   IndianRupee, Megaphone, Package, Pill, Receipt, Stethoscope, TrendingDown, TrendingUp, UserCheck, UserPlus, Users, Wallet,
 } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
+import { useAppSettings } from '../../settings/AppSettingsProvider'
+import { useSiteSettings } from '../../site/cms/content'
+import { Widget, WidgetScope } from '../../settings/widgetScope'
 import { useLookup, useTable, useUpdate } from '../../hooks/useData'
 import { useMe } from '../../hooks/useScope'
 import { Avatar, Badge, Button, Card, CardHeader, StatCard, StatusBadge } from '../../components/ui'
@@ -16,7 +19,14 @@ import type { Appointment, Doctor, Patient } from '../../types'
 
 export default function Dashboard() {
   const { user } = useAuth()
-  switch (user?.role) {
+  const { settings } = useAppSettings()
+  const role = user?.role
+  const hidden = useMemo(() => new Set(settings.dashboard.hidden.filter((k) => k.startsWith(`${role}:`)).map((k) => k.slice(String(role).length + 1))), [settings.dashboard.hidden, role])
+  return <WidgetScope.Provider value={hidden}><RoleDashboard role={role} /></WidgetScope.Provider>
+}
+
+function RoleDashboard({ role }: { role?: string }) {
+  switch (role) {
     case 'owner': return <OwnerDashboard />
     case 'doctor': return <DoctorDashboard />
     case 'receptionist': return <ReceptionDashboard />
@@ -80,6 +90,7 @@ function ApptRow({ a, patients, doctors, actions, showDoctor = true }: { a: Appo
 
 // ---------------------------------------------------------------- OWNER
 function OwnerDashboard() {
+  const site = useSiteSettings()
   const { user } = useAuth()
   const fin = useFinance()
   const appts = useTable('appointments')
@@ -114,11 +125,11 @@ function OwnerDashboard() {
 
   return (
     <div>
-      <Greeting name={user!.full_name} subtitle="Here's how DC Hospital is performing today.">
+      <Greeting name={user!.full_name} subtitle={`Here's how ${site.name} is performing today.`}>
         <Link to="/reports"><Button variant="outline" icon={<TrendingUp className="h-4 w-4" />}>Reports</Button></Link>
         <Link to="/appointments?new=1"><Button icon={<CalendarPlus className="h-4 w-4" />}>New appointment</Button></Link>
       </Greeting>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Revenue (this month)" value={money(fin.thisMonth?.revenue)} icon={<IndianRupee className="h-5 w-5" />} loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.revenue} prev={fin.lastMonth.revenue} />} />
         <StatCard label="Total patients" value={num(patients.data?.length)} icon={<Users className="h-5 w-5" />} tone="blue" loading={patients.isLoading} hint={`+${newPatients} in last 30 days`} />
         <StatCard label="Today's appointments" value={todays.length} icon={<CalendarCheck className="h-5 w-5" />} tone="violet" loading={appts.isLoading} hint={`${todays.filter((a) => a.status === 'completed').length} completed`} />
@@ -126,25 +137,25 @@ function OwnerDashboard() {
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
+        <Widget id="Revenue vs expenses"><Card className="xl:col-span-2">
           <CardHeader title="Revenue vs expenses" subtitle="Collections and spending over the last 6 months" icon={<TrendingUp className="h-4 w-4" />} />
           <RevenueChart data={fin.series} loading={fin.loading} />
-        </Card>
-        <Card>
+        </Card></Widget>
+        <Widget id="Appointments by department"><Card>
           <CardHeader title="Appointments by department" subtitle="Last 30 days" icon={<Stethoscope className="h-4 w-4" />} />
           <Donut data={byDept} loading={appts.isLoading} height={290} />
-        </Card>
+        </Card></Widget>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
-        <ListCard title="Today's appointments" subtitle={`${todays.length} scheduled`} icon={<Clock className="h-4 w-4" />} link="/appointments?when=today" loading={appts.isLoading} empty={!todays.length} emptyText="No appointments today" className="xl:col-span-2">
+        <ListCard widgetId="Today's appointments list" title="Today's appointments" subtitle={`${todays.length} scheduled`} icon={<Clock className="h-4 w-4" />} link="/appointments?when=today" loading={appts.isLoading} empty={!todays.length} emptyText="No appointments today" className="xl:col-span-2">
           {todays.slice(0, 7).map((a) => <ApptRow key={a.id} a={a} patients={pLk} doctors={dLk} />)}
         </ListCard>
         <div className="space-y-6">
-          <Card>
+          <Widget id="Patient flow"><Card>
             <CardHeader title="Patient flow" subtitle="Appointments, last 7 days" icon={<CalendarCheck className="h-4 w-4" />} />
             <SimpleBar data={week} loading={appts.isLoading} height={180} />
-          </Card>
+          </Card></Widget>
           <ListCard title="Low stock alerts" icon={<AlertTriangle className="h-4 w-4" />} link="/inventory?stock=low" loading={inventory.isLoading} empty={!lowStock.length} emptyText="All stock levels healthy">
             {lowStock.slice(0, 4).map((i) => <ListRow key={i.id} left={<div><div className="text-sm font-medium text-slate-800">{i.name}</div><div className="text-xs text-slate-500">Reorder at {i.reorder_level}</div></div>} right={<Badge tone="red">{i.quantity} {i.unit}</Badge>} />)}
           </ListCard>
@@ -197,7 +208,7 @@ function DoctorDashboard() {
         <Link to="/prescriptions?new=1"><Button variant="outline" icon={<Pill className="h-4 w-4" />}>New prescription</Button></Link>
         <Link to="/appointments?when=today"><Button icon={<CalendarCheck className="h-4 w-4" />}>Today's queue</Button></Link>
       </Greeting>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Today's patients" value={todays.length} icon={<CalendarCheck className="h-5 w-5" />} loading={loading} hint={`${todays.filter((a) => a.status === 'completed').length} seen so far`} />
         <StatCard label="In waiting room" value={waiting} icon={<UserCheck className="h-5 w-5" />} tone="violet" loading={loading} hint="Checked-in patients" />
         <StatCard label="Completed (7 days)" value={completedWeek} icon={<CheckCircle2 className="h-5 w-5" />} tone="green" loading={loading} />
@@ -215,7 +226,7 @@ function DoctorDashboard() {
         <ListCard title="Upcoming appointments" icon={<CalendarCheck className="h-4 w-4" />} link="/appointments?when=upcoming" loading={loading} empty={!upcoming.length}>
           {upcoming.slice(0, 5).map((a) => <ListRow key={a.id} to={`/patients/${a.patient_id}`} left={<div><div className="text-sm font-medium text-slate-800">{pLk.get(a.patient_id)?.full_name}</div><div className="text-xs text-slate-500">{a.reason}</div></div>} right={<div className="text-xs text-slate-600">{fmtDate(a.appointment_date, 'EEE dd MMM')}<div className="text-slate-400">{fmtTime(a.appointment_time)}</div></div>} />)}
         </ListCard>
-        <ListCard title="Pending lab results" icon={<FlaskConical className="h-4 w-4" />} link="/lab-tests" loading={labs.isLoading} empty={!pendingLabs.length} emptyText="All results are in">
+        <ListCard widgetId="Pending lab results list" title="Pending lab results" icon={<FlaskConical className="h-4 w-4" />} link="/lab-tests" loading={labs.isLoading} empty={!pendingLabs.length} emptyText="All results are in">
           {pendingLabs.slice(0, 5).map((l) => <ListRow key={l.id} left={<div><div className="text-sm font-medium text-slate-800">{l.test_name}</div><div className="text-xs text-slate-500">{pLk.get(l.patient_id)?.full_name}</div></div>} right={<StatusBadge value={l.status} />} />)}
         </ListCard>
         <ListCard title="Follow-ups due" icon={<Pill className="h-4 w-4" />} link="/prescriptions" loading={rx.isLoading} empty={!followUps.length}>
@@ -248,7 +259,7 @@ function ReceptionDashboard() {
         <QuickAction to="/admissions?new=1" icon={<BedDouble className="h-5 w-5" />} label="Admit patient" desc="Allocate an available bed" />
         <QuickAction to="/invoices?new=1" icon={<Receipt className="h-5 w-5" />} label="Create invoice" desc="Bill consultation or services" />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Today's appointments" value={todays.length} icon={<CalendarCheck className="h-5 w-5" />} loading={appts.isLoading} />
         <StatCard label="Checked in" value={todays.filter((a) => a.status === 'checked_in').length} icon={<UserCheck className="h-5 w-5" />} tone="violet" loading={appts.isLoading} hint="Waiting for doctor" />
         <StatCard label="New patients (7d)" value={(patients.data ?? []).filter((p) => (p.created_at ?? '') >= weekAgo).length} icon={<UserPlus className="h-5 w-5" />} tone="blue" loading={patients.isLoading} />
@@ -289,15 +300,15 @@ function AccountantDashboard() {
         <Link to="/payments?new=1"><Button variant="outline" icon={<CreditCard className="h-4 w-4" />}>Record payment</Button></Link>
         <Link to="/invoices?new=1"><Button icon={<Receipt className="h-4 w-4" />}>New invoice</Button></Link>
       </Greeting>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Collected (month)" value={money(fin.thisMonth?.revenue)} icon={<IndianRupee className="h-5 w-5" />} loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.revenue} prev={fin.lastMonth.revenue} />} />
         <StatCard label="Outstanding" value={money(fin.outstanding)} icon={<Receipt className="h-5 w-5" />} tone="amber" loading={fin.loading} hint={`${fin.invoices.filter((i) => invoiceBalance(i) > 0 && i.status !== 'cancelled').length} open invoices`} />
         <StatCard label="Expenses (month)" value={money(fin.thisMonth?.expenses)} icon={<Wallet className="h-5 w-5" />} tone="violet" loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.expenses ?? 0} prev={fin.lastMonth.expenses ?? 0} invert />} />
         <StatCard label="Net (month)" value={money(net)} icon={net >= 0 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />} tone={net >= 0 ? 'green' : 'red'} loading={fin.loading} />
       </div>
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
-        <Card className="xl:col-span-2"><CardHeader title="Cash flow" subtitle="Last 6 months" icon={<TrendingUp className="h-4 w-4" />} /><RevenueChart data={fin.series} loading={fin.loading} /></Card>
-        <Card><CardHeader title="Collections by method" icon={<CreditCard className="h-4 w-4" />} /><Donut data={fin.methods} loading={fin.loading} formatter={money} height={290} /></Card>
+        <Widget id="Cash flow"><Card className="xl:col-span-2"><CardHeader title="Cash flow" subtitle="Last 6 months" icon={<TrendingUp className="h-4 w-4" />} /><RevenueChart data={fin.series} loading={fin.loading} /></Card></Widget>
+        <Widget id="Collections by method"><Card><CardHeader title="Collections by method" icon={<CreditCard className="h-4 w-4" />} /><Donut data={fin.methods} loading={fin.loading} formatter={money} height={290} /></Card></Widget>
       </div>
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <ListCard title="Overdue invoices" icon={<AlertTriangle className="h-4 w-4" />} link="/invoices?status=overdue" loading={fin.loading} empty={!overdue.length} emptyText="No overdue invoices 🎉">
@@ -328,7 +339,7 @@ function StaffDashboard() {
   return (
     <div>
       <Greeting name={user!.full_name} subtitle="Ward, lab and pharmacy tasks at a glance." />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Admitted patients" value={inpatients.length} icon={<BedDouble className="h-5 w-5" />} loading={admissions.isLoading} />
         <StatCard label="Pending lab tests" value={pending.length} icon={<FlaskConical className="h-5 w-5" />} tone="violet" loading={labs.isLoading} hint={`${pending.filter((p) => p.priority !== 'routine').length} urgent / STAT`} />
         <StatCard label="Low stock items" value={low.length} icon={<Package className="h-5 w-5" />} tone="red" loading={inventory.isLoading} />
@@ -404,7 +415,7 @@ function PatientDashboard() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Upcoming visits" value={upcoming.length} icon={<CalendarCheck className="h-5 w-5" />} loading={loading} />
         <StatCard label="Prescriptions" value={myRx.length} icon={<Pill className="h-5 w-5" />} tone="violet" loading={rx.isLoading} />
         <StatCard label="Lab reports" value={myLabs.filter((l) => l.status === 'completed').length} icon={<FlaskConical className="h-5 w-5" />} tone="blue" loading={labs.isLoading} hint={`${myLabs.filter((l) => l.status !== 'completed' && l.status !== 'cancelled').length} in progress`} />
@@ -415,7 +426,7 @@ function PatientDashboard() {
         <ListCard title="Recent prescriptions" icon={<Pill className="h-4 w-4" />} link="/prescriptions" loading={rx.isLoading} empty={!myRx.length} emptyText="No prescriptions yet">
           {myRx.slice(0, 4).map((r) => <ListRow key={r.id} to={`/prescriptions/${r.id}`} left={<div><div className="text-sm font-medium text-slate-800">{r.diagnosis}</div><div className="text-xs text-slate-500">{dLk.get(r.doctor_id)?.full_name} · {r.medications.length} medicines</div></div>} right={<span className="text-xs text-slate-500">{fmtDate(r.prescribed_on, 'dd MMM')}</span>} />)}
         </ListCard>
-        <ListCard title="Lab reports" icon={<FlaskConical className="h-4 w-4" />} link="/lab-tests" loading={labs.isLoading} empty={!myLabs.length} emptyText="No lab tests yet">
+        <ListCard widgetId="Lab reports list" title="Lab reports" icon={<FlaskConical className="h-4 w-4" />} link="/lab-tests" loading={labs.isLoading} empty={!myLabs.length} emptyText="No lab tests yet">
           {myLabs.slice(0, 4).map((l) => <ListRow key={l.id} left={<div className="min-w-0"><div className="text-sm font-medium text-slate-800">{l.test_name}</div><div className="max-w-xs truncate text-xs text-slate-500">{l.result ?? 'Awaiting result'}</div></div>} right={<StatusBadge value={l.status} />} />)}
         </ListCard>
       </div>

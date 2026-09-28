@@ -187,7 +187,7 @@ export default function CmsPage() {
   return (
     <div className="-mx-4 -my-6 sm:-mx-6 lg:-mx-8 lg:-my-8">
       {/* ---------- header */}
-      <div className="sticky top-16 z-20 border-b border-[#e6e6f5] bg-white/85 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
+      <div className="sticky top-16 z-20 border-b border-brand-100 bg-white/85 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center gap-3">
           <SectionSwitcher view={view} onChange={go} isDirty={isDirty} />
           <div className="hidden min-w-0 flex-1 text-xs text-slate-500 md:block">
@@ -201,7 +201,7 @@ export default function CmsPage() {
               <Button size="sm" icon={<CloudUpload className="h-4 w-4" />} onClick={() => publishAll.mutate()} loading={publishAll.isPending}>Publish all ({dirtyKeys.length})</Button>
             )}
             {key && <>
-              <div className="flex items-center rounded-lg border border-[#e6e6f5] bg-white p-0.5">
+              <div className="flex items-center rounded-lg border border-brand-100 bg-white p-0.5">
                 <button type="button" onClick={undo} disabled={!h?.past.length} aria-label="Undo" title="Undo (Ctrl+Z)" className="grid h-7 w-7 place-items-center rounded-md text-brand-700 transition hover:bg-brand-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"><Undo className="h-4 w-4" /></button>
                 <button type="button" onClick={redo} disabled={!h?.future.length} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" className="grid h-7 w-7 place-items-center rounded-md text-brand-700 transition hover:bg-brand-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"><Redo2 className="h-4 w-4" /></button>
               </div>
@@ -300,14 +300,14 @@ function SectionSwitcher({ view, onChange, isDirty }: { view: View; onChange: (v
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu"
-        className="flex items-center gap-2.5 rounded-xl border border-[#e6e6f5] bg-white py-1.5 pl-2 pr-3 text-sm font-medium text-brand-950 shadow-sm transition hover:border-brand-300 hover:bg-brand-50/50">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-[#5c5c99] to-[#292966] text-white"><Icon className="h-4 w-4" /></span>
+        className="flex items-center gap-2.5 rounded-xl border border-brand-100 bg-white py-1.5 pl-2 pr-3 text-sm font-medium text-brand-950 shadow-sm transition hover:border-brand-300 hover:bg-brand-50/50">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-brand-600 to-brand-900 text-white"><Icon className="h-4 w-4" /></span>
         <span className="max-w-[10rem] truncate sm:max-w-none">{cur.label}</span>
         {anyDirty && <span className="h-2 w-2 rounded-full bg-amber-500" title="Unsaved changes" />}
         <ChevronDown className={cn('h-4 w-4 text-slate-400 transition', open && 'rotate-180')} />
       </button>
       {open && (
-        <div role="menu" className="absolute left-0 top-full z-30 mt-2 w-[min(92vw,640px)] animate-pop-in rounded-2xl border border-[#e6e6f5] bg-white p-2 shadow-lift">
+        <div role="menu" className="absolute left-0 top-full z-30 mt-2 w-[min(92vw,640px)] animate-pop-in rounded-2xl border border-brand-100 bg-white p-2 shadow-lift">
           <div className="grid gap-x-2 sm:grid-cols-2">
             {groups.map((g) => (
               <div key={g} className={cn(g === 'Pages' && 'sm:row-span-2')}>
@@ -350,7 +350,7 @@ function PreviewPane({ path, onClose }: { path: string; onClose: () => void }) {
   const scale = w ? Math.min(1, (w - (device === 'mobile' ? 32 : 0)) / base) : 0.5
 
   return (
-    <aside aria-label="Live preview" className="fixed inset-0 z-40 flex flex-col bg-slate-100 xl:sticky xl:top-[121px] xl:z-0 xl:h-[calc(100vh-121px)] xl:border-l xl:border-[#e6e6f5] xl:bg-brand-50/60">
+    <aside aria-label="Live preview" className="fixed inset-0 z-40 flex flex-col bg-slate-100 xl:sticky xl:top-[121px] xl:z-0 xl:h-[calc(100vh-121px)] xl:border-l xl:border-brand-100 xl:bg-brand-50/60">
       <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
         <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative h-2 w-2 rounded-full bg-emerald-500" /></span>
         <p className="text-xs font-semibold text-slate-700">Live preview</p>

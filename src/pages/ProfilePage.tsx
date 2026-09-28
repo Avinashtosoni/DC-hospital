@@ -79,7 +79,7 @@ export default function ProfilePage() {
 
       {/* hero */}
       <Card className="overflow-hidden">
-        <div className="relative h-28 bg-gradient-to-r from-[#292966] via-[#5c5c99] to-[#a3a3cc]">
+        <div className="relative h-28 bg-gradient-to-r from-brand-900 via-brand-600 to-brand-400">
           <div aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(circle_at_85%_30%,rgba(204,204,255,.45),transparent_55%)]" />
         </div>
         <div className="flex flex-col gap-4 px-5 pb-5 sm:flex-row sm:items-end sm:justify-between sm:px-6">
@@ -296,7 +296,7 @@ function Preferences() {
         <div role="radiogroup" className="grid grid-cols-3 gap-2">
           {[['month', 'Month'], ['day', 'Day'], ['list', 'List']].map(([v, l]) => (
             <button key={v} type="button" role="radio" aria-checked={view === v} onClick={() => save(v)}
-              className={'rounded-xl border px-3 py-2 text-sm font-medium transition ' + (view === v ? 'border-brand-900 bg-brand-900 text-white' : 'border-[#e6e6f5] bg-white text-slate-600 hover:border-brand-300')}>{l}</button>
+              className={'rounded-xl border px-3 py-2 text-sm font-medium transition ' + (view === v ? 'border-brand-900 bg-brand-900 text-white' : 'border-brand-100 bg-white text-slate-600 hover:border-brand-300')}>{l}</button>
           ))}
         </div>
       </div>

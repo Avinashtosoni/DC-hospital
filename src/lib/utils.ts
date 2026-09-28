@@ -19,16 +19,21 @@ export const moneyCompact = (n: number | null | undefined) => inrCompact.format(
 export const num = (n: number | null | undefined) => new Intl.NumberFormat('en-IN').format(Number(n ?? 0))
 
 const toDate = (v: string | Date) => (v instanceof Date ? v : parseISO(v))
-export const fmtDate = (v?: string | null, f = 'dd MMM yyyy') => {
+/** Hospital-wide display preferences (Settings → General → Date & time). */
+const fmtPrefs = { date: 'dd MMM yyyy', time24: false }
+export const setFormatPrefs = (p: { date?: string; time24?: boolean }) => { Object.assign(fmtPrefs, p) }
+export const getFormatPrefs = () => ({ ...fmtPrefs })
+
+export const fmtDate = (v?: string | null, f?: string) => {
   if (!v) return '—'
   const d = toDate(v)
-  return isValid(d) ? format(d, f) : '—'
+  return isValid(d) ? format(d, f ?? fmtPrefs.date) : '—'
 }
 export const fmtTime = (t?: string | null) => {
   if (!t) return '—'
   const [h, m] = t.split(':').map(Number)
   const d = new Date(); d.setHours(h, m)
-  return format(d, 'h:mm a')
+  return format(d, fmtPrefs.time24 ? 'HH:mm' : 'h:mm a')
 }
 export const ago = (v?: string | null) => (v ? formatDistanceToNowStrict(toDate(v), { addSuffix: true }) : '—')
 export const age = (dob?: string | null) => (dob ? differenceInYears(new Date(), toDate(dob)) : null)

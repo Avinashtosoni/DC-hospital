@@ -174,6 +174,7 @@ const schema = readFileSync(resolve(root, 'scripts/sql/schema.sql'), 'utf8')
 const cmsSql = readFileSync(resolve(root, 'scripts/sql/cms.sql'), 'utf8')
 const auditSql = readFileSync(resolve(root, 'scripts/sql/audit.sql'), 'utf8')
 const bookingSql = readFileSync(resolve(root, 'scripts/sql/booking.sql'), 'utf8')
+const settingsSql = readFileSync(resolve(root, 'scripts/sql/settings.sql'), 'utf8')
 
 const sql = `${header}
 begin;
@@ -199,6 +200,8 @@ ${auditSql}
 ${cmsSql}
 
 ${bookingSql}
+
+${settingsSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}

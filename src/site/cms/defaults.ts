@@ -51,6 +51,8 @@ export const DEFAULT_CONTENT: SiteContent = {
     },
     pages: { about: true, services: true, doctors: true, packages: true, contact: true, faq: true },
     seoDescription: 'DC Hospital — multi-speciality care in New Delhi. Book appointments with top specialists in 30 seconds, get digital prescriptions & lab reports online, 24×7 emergency.',
+    brand: { shortName: 'DC Hospital', appSubtitle: 'Management System', logoUrl: '', faviconUrl: '', showName: true },
+    portal: { allowSignup: true, showDemoLogins: true, loginNotice: '' },
     booking: {
       enabled: true,
       advanceDays: 30,

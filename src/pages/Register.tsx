@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { useSiteSettings } from '../site/cms/content'
 import { useAuth } from '../auth/AuthProvider'
 import { Button, Field, Input } from '../components/ui'
 import { AuthShell } from './Login'
@@ -11,7 +12,15 @@ export default function Register() {
   const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '', confirm: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const site = useSiteSettings()
   if (user) return <Navigate to="/" replace />
+  if (!site.portal.allowSignup) return (
+    <AuthShell>
+      <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Registration is closed</h2>
+      <p className="mt-2 text-sm text-slate-500">New portal accounts are created by the hospital. Please contact reception{site.phone ? ` on ${site.phone}` : ''} — or book a visit online.</p>
+      <div className="mt-6 flex gap-3"><Link to="/book" className="font-medium text-brand-700 hover:underline">Book an appointment</Link><span className="text-slate-300">·</span><Link to="/login" className="font-medium text-brand-700 hover:underline">Sign in</Link></div>
+    </AuthShell>
+  )
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
   const submit = async (e: FormEvent) => {
@@ -22,7 +31,7 @@ export default function Register() {
     setLoading(true)
     try {
       await signUp({ full_name: form.full_name.trim(), email: form.email.trim(), phone: form.phone.trim(), password: form.password })
-      toast.success('Account created — welcome to DC Hospital!')
+      toast.success(`Account created — welcome to ${site.name}!`)
       nav('/', { replace: true })
     } catch (err) { setError((err as Error).message) } finally { setLoading(false) }
   }

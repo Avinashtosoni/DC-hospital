@@ -8,11 +8,13 @@ import { Logo } from '../components/layout/AppLayout'
 import { DEMO_PASSWORD, DEMO_USERS } from '../data/seed'
 import { ROLE_LABEL, type Role } from '../types'
 import { isSupabaseConfigured } from '../lib/supabase'
-import { HOSPITAL, cn } from '../lib/utils'
+import { cn } from '../lib/utils'
+import { useSiteSettings } from '../site/cms/content'
 
 const ROLE_ICON: Record<Role, typeof Crown> = { owner: Crown, doctor: Stethoscope, receptionist: CalendarCheck, accountant: Wallet, staff: UserCog, patient: HeartPulse }
 
 export function AuthShell({ children }: { children: React.ReactNode }) {
+  const site = useSiteSettings()
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
       <div className="relative hidden overflow-hidden bg-brand-950 lg:block">
@@ -36,7 +38,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
               })}
             </div>
           </div>
-          <p className="text-xs text-slate-500">© {new Date().getFullYear()} {HOSPITAL.name} · {HOSPITAL.address}</p>
+          <p className="text-xs text-slate-500">© {new Date().getFullYear()} {site.name} · {site.address}</p>
         </div>
       </div>
       <div className="flex items-center justify-center px-5 py-10 sm:px-10">
@@ -59,6 +61,7 @@ export default function Login() {
   const [pending, setPending] = useState<string | null>(null)
   const [error, setError] = useState('')
 
+  const portal = useSiteSettings().portal
   if (user) return <Navigate to={loc.state?.from ?? '/'} replace />
 
   const doLogin = async (e: string, p: string) => {
@@ -78,15 +81,16 @@ export default function Login() {
     <AuthShell>
       <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Sign in</h2>
       <p className="mt-1 text-sm text-slate-500">Welcome back. Enter your credentials to continue.</p>
+      {portal.loginNotice.trim() && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900 ring-1 ring-brand-200">{portal.loginNotice}</p>}
       <form onSubmit={submit} className="mt-8 space-y-4">
         <Field label="Email"><Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@dchospital.com" /></Field>
         <Field label="Password"><Input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></Field>
         {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-rose-200">{error}</p>}
         <Button type="submit" className="w-full" loading={loading} icon={!loading && <ArrowRight className="h-4 w-4" />}>Sign in</Button>
       </form>
-      <p className="mt-4 text-center text-sm text-slate-500">New patient? <Link to="/register" className="font-medium text-brand-700 hover:underline">Create an account</Link></p>
+      {portal.allowSignup && <p className="mt-4 text-center text-sm text-slate-500">New patient? <Link to="/register" className="font-medium text-brand-700 hover:underline">Create an account</Link></p>}
 
-      <div className="mt-8">
+      {portal.showDemoLogins && <div className="mt-8">
         <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><span className="h-px flex-1 bg-slate-200" />One-click demo accounts<span className="h-px flex-1 bg-slate-200" /></div>
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {DEMO_USERS.map((u) => {
@@ -105,7 +109,7 @@ export default function Login() {
           Password for all demo accounts: <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{DEMO_PASSWORD}</code>
           {isSupabaseConfigured ? ' · Supabase' : ' · local demo data'}
         </p>
-      </div>
+      </div>}
     </AuthShell>
   )
 }
