@@ -156,6 +156,33 @@ export const SECTIONS: Section[] = [
         ],
       },
       {
+        k: 'booking', t: 'group', label: 'Online booking', collapsed: true,
+        hint: 'Patients book real slots at /book. Availability comes from each doctor’s days, shift, leave and hospital holidays in the dashboard.',
+        fields: [
+          { k: 'enabled', t: 'toggle', label: 'Accept online bookings' },
+          { k: 'showDemoOtp', t: 'toggle', label: 'Show the OTP on screen (testing only)', hint: 'Turn OFF once an SMS gateway is connected — see README → Online booking.' },
+          { k: 'advanceDays', t: 'number', label: 'Book up to (days ahead)', min: 1, max: 180 },
+          { k: 'minNoticeMinutes', t: 'number', label: 'Minimum notice (minutes)', min: 0, max: 1440, step: 15 },
+          { k: 'payNote', t: 'textarea', label: 'Payment note on the confirmation', rows: 2, full: true },
+        ],
+      },
+      {
+        k: 'billing', t: 'group', label: 'Billing, GST & letterhead', collapsed: true,
+        hint: 'Printed on every invoice. Name, address, phone and email come from Identity / Contact details above.',
+        fields: [
+          { k: 'legalName', t: 'text', label: 'Registered (legal) name' },
+          { k: 'gstin', t: 'text', label: 'GSTIN', placeholder: '07AAACD1234F1Z5' },
+          { k: 'regNo', t: 'text', label: 'Clinical establishment reg. no.' },
+          { k: 'pan', t: 'text', label: 'PAN' },
+          { k: 'sac', t: 'text', label: 'SAC code (consultations)', placeholder: '999312' },
+          { k: 'gstRate', t: 'number', label: 'GST % on online consultation bookings', min: 0, max: 28, hint: '0 = exempt healthcare service → a “Bill of Supply” is issued instead of a “Tax Invoice”.' },
+          { k: 'exemptNote', t: 'textarea', label: 'Exemption note (when GST is 0)', rows: 2, full: true },
+          { k: 'upiId', t: 'text', label: 'UPI ID for payments' },
+          { k: 'signatory', t: 'text', label: 'Signatory line' },
+          { k: 'footer', t: 'textarea', label: 'Invoice footer', rows: 2, full: true },
+        ],
+      },
+      {
         k: 'socials', t: 'list', label: 'Social links', title: (v) => v.platform, subtitle: (v) => v.url || 'Hidden — no URL', addLabel: 'Add link',
         newItem: () => ({ platform: 'Instagram', url: '' }),
         item: [{ k: 'platform', t: 'select', label: 'Platform', options: ['Instagram', 'Facebook', 'X', 'LinkedIn', 'YouTube'] }, { k: 'url', t: 'url', label: 'Profile URL', hint: 'Leave blank to hide.' }],

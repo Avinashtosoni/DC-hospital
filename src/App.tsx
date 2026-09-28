@@ -25,6 +25,7 @@ const PUBLIC_PAGES: [string, React.LazyExoticComponent<() => JSX.Element>][] = [
   ['/faq', lazy(() => import('./site/pages/Faq'))],
   ['/privacy', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Privacy })))],
   ['/terms', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Terms })))],
+  ['/book', lazy(() => import('./site/pages/Book'))],
 ]
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'))
 const PatientDetail = lazy(() => import('./pages/PatientDetail'))
@@ -36,6 +37,9 @@ const Reports = lazy(() => import('./pages/Reports'))
 const Settings = lazy(() => import('./pages/Settings'))
 const CmsPage = lazy(() => import('./pages/cms/CmsPage'))
 const AppointmentsPage = lazy(() => import('./pages/appointments/AppointmentsPage'))
+const SchedulePage = lazy(() => import('./pages/SchedulePage'))
+const AuditPage = lazy(() => import('./pages/AuditPage'))
+const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 
 const RESOURCES = [
   R.patientsRes, R.appointmentsRes, R.prescriptionsRes, R.labTestsRes, R.admissionsRes, R.doctorsRes, R.staffRes,
@@ -44,7 +48,7 @@ const RESOURCES = [
 ]
 
 /** Paths that belong to the signed-in app; anything else a guest opens gets the public 404. */
-const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms']
+const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile']
 const isAppPath = (p: string) => APP_PREFIXES.some((x) => p === x || p.startsWith(`${x}/`))
 
 const PageLoader = () => <div className="grid h-64 place-items-center"><Spinner className="h-6 w-6" /></div>
@@ -78,6 +82,9 @@ export default function App() {
           <Route path="/beds" element={<RequireNav path="/beds"><Suspense fallback={<PageLoader />}><BedsPage /></Suspense></RequireNav>} />
           <Route path="/reports" element={<RequireNav path="/reports"><Suspense fallback={<PageLoader />}><Reports /></Suspense></RequireNav>} />
           <Route path="/cms" element={<RequireNav path="/cms"><Suspense fallback={<PageLoader />}><CmsPage /></Suspense></RequireNav>} />
+          <Route path="/schedule" element={<RequireNav path="/schedule"><Suspense fallback={<PageLoader />}><SchedulePage /></Suspense></RequireNav>} />
+          <Route path="/audit" element={<RequireNav path="/audit"><Suspense fallback={<PageLoader />}><AuditPage /></Suspense></RequireNav>} />
+          <Route path="/profile" element={<Suspense fallback={<PageLoader />}><ProfilePage /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />
           <Route path="*" element={<EmptyState className="py-24" icon={<Compass className="h-6 w-6" />} title="Page not found" description="The page you're looking for doesn't exist." action={<Link to="/"><Button>Go to dashboard</Button></Link>} />} />
         </Route>

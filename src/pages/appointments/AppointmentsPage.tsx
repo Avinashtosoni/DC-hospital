@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameMonth, parseISO, startOfMonth, startOfWeek,
 } from 'date-fns'
 import {
-  CalendarDays, CalendarRange, ChevronLeft, ChevronRight, Clock, Coffee, List, Plus, UserRoundCheck,
+  AlertTriangle, ArrowRight, Ban, CalendarDays, CalendarRange, ChevronLeft, ChevronRight, Clock, Coffee, List, PartyPopper, Plus, UserRoundCheck,
 } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { can } from '../../auth/permissions'
@@ -15,7 +15,8 @@ import { Avatar, Button, PageHeader, Select, Skeleton, StatusBadge } from '../..
 import { useCreate, useTable, useUpdate } from '../../hooks/useData'
 import { cn, fmtTime, num, today } from '../../lib/utils'
 import {
-  APPT_STYLE, LEVEL, SLOTS, WEEKDAYS, doctorSlots, holdsSlot, levelOf, summarizeDay, type DaySummary, type Level, type RestReason,
+  APPT_STYLE, LEAVE_LABEL, LEVEL, REST_LABEL, SLOTS, WEEKDAYS, blockAt, conflictOf, doctorSlots, holdsSlot, levelOf, summarizeDay,
+  type DaySummary, type Level, type ScheduleExt,
 } from '../../lib/schedule'
 import { appointmentsRes } from '../../resources/definitions'
 import type { ResourceCtx, RowAction } from '../../resources/types'
@@ -25,7 +26,6 @@ import type { Appointment, Doctor } from '../../types'
 type View = 'month' | 'day' | 'list'
 const VIEW_KEY = 'dch:appt-view'
 const iso = (d: Date) => format(d, 'yyyy-MM-dd')
-const REST_LABEL: Record<RestReason, string> = { weekly_off: 'Weekly off', on_leave: 'On leave', inactive: 'Inactive' }
 
 export default function AppointmentsPage() {
   const { user } = useAuth()
@@ -34,7 +34,7 @@ export default function AppointmentsPage() {
   // Deep links such as ?new=1&patient_id=… are handled by the list view, so they start there.
   const [view, setViewState] = useState<View>(() => {
     if (isPatient || params.get('new')) return 'list'
-    const v = params.get('view') ?? localStorage.getItem(VIEW_KEY)
+    const v = params.get('view') ?? localStorage.getItem(VIEW_KEY) ?? localStorage.getItem('dch:pref:appt-view')
     return v === 'day' || v === 'list' ? v : 'month'
   })
   const setView = (v: View) => {
@@ -67,6 +67,9 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
   const apptQ = useTable('appointments')
   const docQ = useTable('doctors')
   const deptQ = useTable('departments')
+  const leaveQ = useTable('doctor_leaves')
+  const holQ = useTable('holidays')
+  const ext = useMemo<ScheduleExt>(() => ({ leaves: leaveQ.data ?? [], holidays: holQ.data ?? [] }), [leaveQ.data, holQ.data])
   const create = useCreate('appointments', { label: 'Appointment' })
   const update = useUpdate('appointments', { label: 'Appointment' })
   const [params, setParams] = useSearchParams()
@@ -94,7 +97,13 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
     for (const a of appts) { const l = m.get(a.appointment_date); if (l) l.push(a); else m.set(a.appointment_date, [a]) }
     return m
   }, [appts])
-  const summarize = (date: string) => summarizeDay(date, doctors, byDate.get(date) ?? [])
+  const summarize = (date: string) => summarizeDay(date, doctors, byDate.get(date) ?? [], ext)
+  // upcoming bookings that clash with approved leave / holidays / blocked time (all doctors in scope)
+  const clashes = useMemo(() => {
+    const t = today()
+    const docs = new Map((docQ.data ?? []).map((d) => [d.id, d]))
+    return (apptQ.data ?? []).filter((a) => a.appointment_date >= t && (!isDoctor || a.doctor_id === ctx?.me.doctor?.id) && conflictOf(a, docs.get(a.doctor_id), ext))
+  }, [apptQ.data, docQ.data, ext, isDoctor, ctx])
 
   // ---- create / edit drawer
   const [drawer, setDrawer] = useState<{ open: boolean; initial: Appointment | null; prefill: Record<string, any> }>({ open: false, initial: null, prefill: {} })
@@ -145,9 +154,20 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
         )}
       </div>
 
+      {!loading && clashes.length > 0 && canUpdate && (
+        <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50/80 px-4 py-3 text-sm text-rose-800">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-rose-600 shadow-sm"><AlertTriangle className="h-4 w-4" /></span>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">{clashes.length} booked patient{clashes.length === 1 ? '' : 's'} need{clashes.length === 1 ? 's' : ''} rescheduling</p>
+            <p className="text-xs text-rose-700/80">Their doctor is now on leave, blocked (surgery / meeting) or the OPD is closed for a holiday.</p>
+          </div>
+          <Link to="/schedule?tab=reschedule" className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-rose-600 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700">Open reschedule queue<ArrowRight className="h-4 w-4" /></Link>
+        </div>
+      )}
+
       {loading ? <CalendarSkeleton /> : view === 'month'
-        ? <MonthView cursor={cursor} summarize={summarize} onPick={setCursor} ctx={ctx!} onOpenDay={(d) => { setCursor(d); setView('day') }} onNew={openNew} onEdit={openEdit} canCreate={canCreate} />
-        : <DayView summary={summarize(cursor)} ctx={ctx!} onNew={openNew} onEdit={openEdit} canCreate={canCreate} />}
+        ? <MonthView cursor={cursor} summarize={summarize} onPick={setCursor} ctx={ctx!} ext={ext} onOpenDay={(d) => { setCursor(d); setView('day') }} onNew={openNew} onEdit={openEdit} canCreate={canCreate} />
+        : <DayView summary={summarize(cursor)} ctx={ctx!} ext={ext} onNew={openNew} onEdit={openEdit} canCreate={canCreate} />}
 
       {ctx && (
         <ResourceFormDrawer def={appointmentsRes} ctx={ctx} open={drawer.open} onClose={() => setDrawer((d) => ({ ...d, open: false }))}
@@ -200,9 +220,9 @@ function CapacityBar({ used, total, level, className }: { used: number; total: n
 const hatch = 'bg-[repeating-linear-gradient(135deg,#f4f4fa_0_6px,#ffffff_6px_12px)]'
 
 // ================================================================== month view
-function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCreate, ctx }: {
+function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCreate, ctx, ext }: {
   cursor: string; summarize: (d: string) => DaySummary; onPick: (d: string) => void; onOpenDay: (d: string) => void
-  onNew: (p?: Record<string, any>) => void; onEdit: (a: Appointment) => void; canCreate: boolean; ctx: ResourceCtx
+  onNew: (p?: Record<string, any>) => void; onEdit: (a: Appointment) => void; canCreate: boolean; ctx: ResourceCtx; ext: ScheduleExt
 }) {
   const month = parseISO(cursor)
   const days = useMemo(() => eachDayOfInterval({ start: startOfWeek(startOfMonth(month), { weekStartsOn: 1 }), end: endOfWeek(endOfMonth(month), { weekStartsOn: 1 }) }).map(iso), [cursor]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -212,6 +232,7 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
   const booked = inMonth.reduce((n, s) => n + s.bookedInSlots, 0)
   const restDays = inMonth.filter((s) => s.capacity === 0).length
   const offDoctorDays = inMonth.reduce((n, s) => n + s.resting.length, 0)
+  const holidays = inMonth.filter((s) => s.holiday).length
   const t = today()
   const selected = sums.find((s) => s.date === cursor) ?? summarize(cursor)
 
@@ -221,7 +242,7 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
         { label: 'Total slots', value: num(cap), hint: `${inMonth.length - restDays} OPD days this month`, icon: Clock, tone: 'bg-brand-50 text-brand-700' },
         { label: 'Booked', value: num(booked), hint: cap ? `${Math.round((booked / cap) * 100)}% utilisation` : '—', icon: UserRoundCheck, tone: 'bg-[#292966] text-white' },
         { label: 'Available', value: num(Math.max(0, cap - booked)), hint: 'Free slots left to book', icon: CalendarDays, tone: 'bg-emerald-50 text-emerald-600' },
-        { label: 'Rest', value: restDays, hint: `${restDays === 1 ? 'day' : 'days'} closed · ${num(offDoctorDays)} doctor-days off`, icon: Coffee, tone: 'bg-slate-100 text-slate-500' },
+        { label: 'Rest', value: restDays, hint: `${restDays === 1 ? 'day' : 'days'} closed${holidays ? ` (${holidays} holiday${holidays === 1 ? '' : 's'})` : ''} · ${num(offDoctorDays)} doctor-days off`, icon: Coffee, tone: 'bg-slate-100 text-slate-500' },
       ]} />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -244,17 +265,19 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
               const chips = s.appointments.filter(holdsSlot)
               return (
                 <button key={s.date} type="button" onClick={() => onPick(s.date)} onDoubleClick={() => onOpenDay(s.date)}
-                  aria-label={`${format(d, 'EEEE d MMMM')}: ${rest ? 'rest day' : `${s.bookedInSlots} booked, ${s.available} available`}`} aria-pressed={isSel}
+                  aria-label={`${format(d, 'EEEE d MMMM')}: ${s.holiday ? `holiday, ${s.holiday.name}` : rest ? 'rest day' : `${s.bookedInSlots} booked, ${s.available} available`}${s.conflicts ? `, ${s.conflicts} need rescheduling` : ''}`} aria-pressed={isSel}
                   className={cn('group relative flex min-h-[64px] flex-col gap-1 border-[#efeff8] p-1.5 text-left transition sm:min-h-[92px] sm:p-2 lg:min-h-[112px]',
                     i % 7 !== 6 && 'border-r', i < sums.length - 7 && 'border-b',
-                    rest ? hatch : 'bg-white hover:bg-brand-50/50', out && 'opacity-40', isSel && 'z-10 ring-2 ring-inset ring-brand-600')}>
+                    s.holiday ? 'bg-[repeating-linear-gradient(135deg,#fff7ed_0_6px,#ffffff_6px_12px)]' : rest ? hatch : 'bg-white hover:bg-brand-50/50', out && 'opacity-40', isSel && 'z-10 ring-2 ring-inset ring-brand-600')}>
                   <div className="flex items-center justify-between gap-1">
                     <span className={cn('grid h-6 min-w-6 place-items-center rounded-full px-1 text-xs font-semibold',
                       isToday ? 'bg-brand-900 text-white' : past ? 'text-slate-400' : 'text-brand-950')}>{format(d, 'd')}</span>
                     <span className={cn('h-2 w-2 shrink-0 rounded-full sm:hidden', LEVEL[s.level].dot)} />
                     {!rest && <span className={cn('hidden rounded-full px-1.5 py-0.5 text-[10px] font-semibold sm:inline-block', LEVEL[s.level].soft, LEVEL[s.level].text)}>{s.bookedInSlots}/{s.capacity}</span>}
-                    {rest && <span className="hidden items-center gap-1 text-[10px] font-medium text-slate-400 sm:inline-flex"><Coffee className="h-3 w-3" />Rest</span>}
+                    {rest && !s.holiday && <span className="hidden items-center gap-1 text-[10px] font-medium text-slate-400 sm:inline-flex"><Coffee className="h-3 w-3" />Rest</span>}
                   </div>
+                  {s.holiday && <span className="line-clamp-2 inline-flex items-start gap-1 text-[10px] font-semibold leading-tight text-orange-700"><PartyPopper className="mt-px hidden h-3 w-3 shrink-0 sm:block" /><span className="hidden sm:inline">{s.holiday.name}</span><span className="sm:hidden">Hol.</span></span>}
+                  {s.conflicts > 0 && <span title={`${s.conflicts} booking(s) need rescheduling`} className="absolute bottom-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-rose-600 px-1.5 py-px text-[9px] font-bold text-white shadow-sm"><AlertTriangle className="h-2.5 w-2.5" />{s.conflicts}</span>}
                   {!rest && <>
                     <CapacityBar used={s.bookedInSlots} total={s.capacity} level={s.level} className="hidden sm:block" />
                     <p className="hidden text-[10px] leading-tight text-slate-500 sm:block"><b className="font-semibold text-slate-700">{s.available}</b> free{s.resting.length ? <> · <span className="text-slate-400">{s.resting.length} off</span></> : null}</p>
@@ -272,14 +295,14 @@ function MonthView({ cursor, summarize, onPick, onOpenDay, onNew, onEdit, canCre
             })}
           </div>
         </div>
-        <DayPanel s={selected} ctx={ctx} onOpenDay={() => onOpenDay(selected.date)} onNew={canCreate ? () => onNew({ appointment_date: selected.date }) : undefined} onEdit={onEdit} />
+        <DayPanel s={selected} ctx={ctx} ext={ext} onOpenDay={() => onOpenDay(selected.date)} onNew={canCreate ? () => onNew({ appointment_date: selected.date }) : undefined} onEdit={onEdit} />
       </div>
     </div>
   )
 }
 
 // ------------------------------------------------------------------ selected-day panel
-function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: ResourceCtx; onOpenDay: () => void; onNew?: () => void; onEdit: (a: Appointment) => void }) {
+function DayPanel({ s, ctx, ext, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: ResourceCtx; ext: ScheduleExt; onOpenDay: () => void; onNew?: () => void; onEdit: (a: Appointment) => void }) {
   const d = parseISO(s.date)
   const lv = LEVEL[s.level]
   return (
@@ -288,7 +311,7 @@ function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: Re
         <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-[#ccccff]/25 blur-2xl" />
         <p className="text-[11px] font-semibold uppercase tracking-wider text-[#ccccff]">{format(d, 'EEEE')}</p>
         <p className="font-display text-xl font-semibold">{format(d, 'd MMMM yyyy')}</p>
-        <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ring-white/15"><span className={cn('h-2 w-2 rounded-full', lv.dot)} />{lv.label}</span>
+        <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ring-white/15"><span className={cn('h-2 w-2 rounded-full', s.holiday ? 'bg-orange-400' : lv.dot)} />{s.holiday ? `Holiday · ${s.holiday.name}` : lv.label}</span>
         <div className="mt-4 grid grid-cols-4 gap-2 text-center">
           {[['Slots', s.capacity], ['Booked', s.bookedInSlots], ['Free', s.available], ['Rest', s.resting.length]].map(([k, v]) => (
             <div key={k} className="rounded-lg bg-white/10 py-1.5"><p className="text-base font-bold leading-tight">{v}</p><p className="text-[10px] text-[#dcdcfa]">{k}</p></div>
@@ -296,6 +319,11 @@ function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: Re
         </div>
       </div>
       <div className="space-y-4 p-4">
+        {s.conflicts > 0 && (
+          <Link to="/schedule?tab=reschedule" className="flex items-center gap-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200 transition hover:bg-rose-100">
+            <AlertTriangle className="h-4 w-4 shrink-0" /><span className="flex-1">{s.conflicts} booking{s.conflicts === 1 ? '' : 's'} on this day need{s.conflicts === 1 ? 's' : ''} rescheduling</span><ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        )}
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="flex-1" icon={<CalendarRange className="h-4 w-4" />} onClick={onOpenDay}>Day timeline</Button>
           {onNew && s.date >= today() && s.capacity > 0 && <Button size="sm" className="flex-1" icon={<Plus className="h-4 w-4" />} onClick={onNew}>Book</Button>}
@@ -306,7 +334,7 @@ function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: Re
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-brand-600">On duty · {s.working.length}</p>
             <ul className="max-h-48 space-y-2 overflow-y-auto pr-1">
               {s.working.map((doc) => {
-                const slots = doctorSlots(doc, s.date).length
+                const slots = doctorSlots(doc, s.date, ext).length
                 const used = new Set(s.appointments.filter((a) => a.doctor_id === doc.id && holdsSlot(a)).map((a) => a.appointment_time.slice(0, 5))).size
                 const l = levelOf(used, slots)
                 return (
@@ -326,12 +354,26 @@ function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: Re
           <div>
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Resting · {s.resting.length}</p>
             <div className="flex flex-wrap gap-1.5">
-              {s.resting.map(({ doctor, reason }) => (
-                <span key={doctor.id} title={REST_LABEL[reason]} className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 ring-inset', reason === 'on_leave' ? 'bg-amber-50 text-amber-700 ring-amber-200' : 'bg-slate-50 text-slate-500 ring-slate-200')}>
-                  {doctor.full_name.replace('Dr. ', 'Dr ')}<span className="text-[10px] opacity-70">· {REST_LABEL[reason]}</span>
+              {s.resting.map(({ doctor, reason, leave }) => (
+                <span key={doctor.id} title={leave?.reason ?? REST_LABEL[reason]} className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 ring-inset', reason === 'on_leave' || reason === 'leave' ? 'bg-amber-50 text-amber-700 ring-amber-200' : reason === 'holiday' ? 'bg-orange-50 text-orange-700 ring-orange-200' : 'bg-slate-50 text-slate-500 ring-slate-200')}>
+                  {doctor.full_name.replace('Dr. ', 'Dr ')}<span className="text-[10px] opacity-70">· {leave ? LEAVE_LABEL[leave.kind] : REST_LABEL[reason]}</span>
                 </span>
               ))}
             </div>
+          </div>
+        )}
+        {s.blocks.length > 0 && (
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Blocked time · {s.blocks.length}</p>
+            <ul className="space-y-1.5">
+              {s.blocks.map((b) => (
+                <li key={b.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 ring-1 ring-inset ring-slate-200">
+                  <Ban className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <span className="min-w-0 flex-1 truncate"><b className="font-medium text-slate-800">{ctx.lk.doctors.get(b.doctor_id)?.full_name ?? 'Doctor'}</b> · {LEAVE_LABEL[b.kind]}{b.reason ? ` — ${b.reason}` : ''}</span>
+                  <span className="shrink-0 tabular-nums text-slate-500">{fmtTime(b.start_time!)}–{fmtTime(b.end_time!)}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -341,7 +383,7 @@ function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: Re
             <p className="rounded-xl bg-brand-50/60 p-4 text-center text-xs text-slate-500">{s.capacity ? 'No bookings yet — every slot is free.' : 'OPD closed — no doctors on duty.'}</p>
           ) : (
             <ul className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
-              {s.appointments.map((a) => <ApptRow key={a.id} a={a} ctx={ctx} onEdit={onEdit} />)}
+              {s.appointments.map((a) => <ApptRow key={a.id} a={a} ctx={ctx} onEdit={onEdit} conflict={conflictOf(a, ctx.lk.doctors.get(a.doctor_id), ext)} />)}
             </ul>
           )}
         </div>
@@ -350,15 +392,15 @@ function DayPanel({ s, ctx, onOpenDay, onNew, onEdit }: { s: DaySummary; ctx: Re
   )
 }
 
-function ApptRow({ a, ctx, onEdit }: { a: Appointment; ctx: ResourceCtx; onEdit: (a: Appointment) => void }) {
+function ApptRow({ a, ctx, onEdit, conflict }: { a: Appointment; ctx: ResourceCtx; onEdit: (a: Appointment) => void; conflict?: string | null }) {
   const actions = (appointmentsRes.rowActions?.(a as any, ctx) ?? []).filter(Boolean) as RowAction<any>[]
   return (
-    <li className={cn('flex items-center gap-2 rounded-lg border-l-[3px] py-1.5 pl-2 pr-1', APPT_STYLE[a.status])}>
+    <li title={conflict ? `Needs rescheduling: ${conflict}` : undefined} className={cn('flex items-center gap-2 rounded-lg border-l-[3px] py-1.5 pl-2 pr-1', APPT_STYLE[a.status], conflict && 'border-l-rose-500 ring-1 ring-inset ring-rose-200')}>
       <button type="button" onClick={() => onEdit(a)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className="w-12 shrink-0 text-[11px] font-semibold tabular-nums">{fmtTime(a.appointment_time)}</span>
         <span className="min-w-0">
           <span className="block truncate text-xs font-medium">{ctx.lk.patients.get(a.patient_id)?.full_name ?? 'Patient'}</span>
-          <span className="block truncate text-[10px] opacity-70">{ctx.lk.doctors.get(a.doctor_id)?.full_name}</span>
+          <span className="block truncate text-[10px] opacity-70">{conflict ? <span className="font-semibold text-rose-600">⚠ Reschedule — {conflict}</span> : <>{ctx.lk.doctors.get(a.doctor_id)?.full_name}{a.source === 'website' && ' · 🌐 Online'}</>}</span>
         </span>
       </button>
       <span className="hidden shrink-0 sm:block"><StatusBadge value={a.status} /></span>
@@ -368,7 +410,7 @@ function ApptRow({ a, ctx, onEdit }: { a: Appointment; ctx: ResourceCtx; onEdit:
 }
 
 // ================================================================== day view (doctor × time grid)
-function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySummary; ctx: ResourceCtx; onNew: (p?: Record<string, any>) => void; onEdit: (a: Appointment) => void; canCreate: boolean }) {
+function DayView({ summary: s, ctx, ext, onNew, onEdit, canCreate }: { summary: DaySummary; ctx: ResourceCtx; ext: ScheduleExt; onNew: (p?: Record<string, any>) => void; onEdit: (a: Appointment) => void; canCreate: boolean }) {
   const t = today()
   const [now, setNow] = useState(() => format(new Date(), 'HH:mm'))
   useEffect(() => { const id = setInterval(() => setNow(format(new Date(), 'HH:mm')), 60_000); return () => clearInterval(id) }, [])
@@ -385,11 +427,12 @@ function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySu
   const cols: { doc: Doctor; slots: Set<string> }[] = useMemo(() => {
     const ids = new Set(s.working.map((d) => d.id))
     const extra = s.resting.filter((r) => s.appointments.some((a) => a.doctor_id === r.doctor.id && holdsSlot(a))).map((r) => r.doctor)
-    return [...s.working, ...extra.filter((d) => !ids.has(d.id))].map((doc) => ({ doc, slots: new Set(doctorSlots(doc, s.date)) }))
-  }, [s])
+    return [...s.working, ...extra.filter((d) => !ids.has(d.id))].map((doc) => ({ doc, slots: new Set(doctorSlots(doc, s.date, ext)) }))
+  }, [s, ext])
   const rows = useMemo(() => {
     const used = new Set<string>()
     cols.forEach((c) => c.slots.forEach((x) => used.add(x)))
+    s.blocks.forEach((b) => SLOTS.forEach((x) => { if (x >= b.start_time! && x < b.end_time! && cols.some((c) => c.doc.id === b.doctor_id)) used.add(x) }))
     s.appointments.forEach((a) => used.add(a.appointment_time.slice(0, 5)))
     if (!used.size) return []
     const idx = [...used].map((x) => SLOTS.indexOf(x)).filter((i) => i >= 0)
@@ -403,14 +446,14 @@ function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySu
         { label: 'Total slots', value: s.capacity, hint: `${s.working.length} doctor${s.working.length === 1 ? '' : 's'} on duty`, icon: Clock, tone: 'bg-brand-50 text-brand-700' },
         { label: 'Booked', value: s.bookedInSlots, hint: s.cancelled ? `${s.cancelled} cancelled / no-show` : s.capacity ? `${Math.round((s.bookedInSlots / s.capacity) * 100)}% utilisation` : '—', icon: UserRoundCheck, tone: 'bg-[#292966] text-white' },
         { label: 'Available', value: s.available, hint: s.date < t ? 'Day is over' : 'Free slots to book', icon: CalendarDays, tone: 'bg-emerald-50 text-emerald-600' },
-        { label: 'Rest', value: s.resting.length, hint: s.resting.length ? `${s.resting.filter((r) => r.reason === 'on_leave').length} on leave · ${s.resting.filter((r) => r.reason === 'weekly_off').length} weekly off` : 'Everyone is on duty', icon: Coffee, tone: 'bg-slate-100 text-slate-500' },
+        { label: 'Rest', value: s.resting.length, hint: s.holiday ? `Holiday — ${s.holiday.name}` : s.resting.length ? `${s.resting.filter((r) => r.reason === 'on_leave' || r.reason === 'leave').length} on leave · ${s.resting.filter((r) => r.reason === 'weekly_off').length} weekly off` : 'Everyone is on duty', icon: Coffee, tone: 'bg-slate-100 text-slate-500' },
       ]} />
 
       {cols.length === 0 ? (
         <div className={cn('card grid place-items-center px-6 py-16 text-center', hatch)}>
-          <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white text-slate-400 shadow-sm"><Coffee className="h-6 w-6" /></span>
-          <p className="mt-3 font-semibold text-brand-950">Rest day — OPD closed</p>
-          <p className="mt-1 max-w-sm text-sm text-slate-500">No doctor matching the filters works on {format(parseISO(s.date), 'EEEE')}s. Try another day or clear the filters.</p>
+          <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white text-slate-400 shadow-sm">{s.holiday ? <PartyPopper className="h-6 w-6 text-orange-500" /> : <Coffee className="h-6 w-6" />}</span>
+          <p className="mt-3 font-semibold text-brand-950">{s.holiday ? `${s.holiday.name} — OPD closed` : 'Rest day — OPD closed'}</p>
+          <p className="mt-1 max-w-sm text-sm text-slate-500">{s.holiday ? (s.holiday.note || 'Hospital holiday. Emergency & pharmacy stay open 24×7.') : s.resting.some((r) => r.reason === 'leave') ? 'The doctor(s) matching the filters are on leave this day.' : `No doctor matching the filters works on ${format(parseISO(s.date), 'EEEE')}s. Try another day or clear the filters.`}</p>
         </div>
       ) : (
         <div className="card overflow-hidden">
@@ -419,6 +462,8 @@ function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySu
               <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded border-l-[3px] border-l-[#292966] bg-[#ebebff]" />Booked</span>
               <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded border border-dashed border-emerald-400 bg-emerald-50/50" />Available</span>
               <span className={cn('inline-flex items-center gap-1.5')}><span className={cn('h-3 w-5 rounded border border-slate-200', hatch)} />Off shift / rest</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded bg-slate-200/80" />Blocked</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-3 w-5 rounded border-l-[3px] border-l-rose-500 bg-rose-50 ring-1 ring-inset ring-rose-200" />Needs rescheduling</span>
             </div>
             {canCreate && s.date >= t && <p className="text-[11px] text-slate-400">Click a free slot to book it</p>}
           </div>
@@ -438,7 +483,7 @@ function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySu
                         <p className="truncate text-[10px] text-slate-500">{ctx.lk.departments.get(doc.department_id ?? '')?.name ?? doc.specialization}</p>
                       </div>
                     </div>
-                    {resting ? <p className="mt-2 text-[10px] font-medium text-amber-600">Resting today</p> : <>
+                    {resting ? <p className="mt-2 text-[10px] font-medium text-amber-600">{(() => { const r = s.resting.find((x) => x.doctor.id === doc.id); return r ? `${r.leave ? LEAVE_LABEL[r.leave.kind] : REST_LABEL[r.reason]} — bookings need moving` : 'Resting today' })()}</p> : <>
                       <CapacityBar used={used} total={slots.size} level={levelOf(used, slots.size)} className="mt-2" />
                       <p className="mt-1 text-[10px] text-slate-500"><b className="text-slate-700">{used}</b>/{slots.size} booked · <b className="text-emerald-600">{slots.size - used}</b> free</p>
                     </>}
@@ -456,17 +501,27 @@ function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySu
                     const list = cell(doc.id, time)
                     const active = list.filter(holdsSlot)
                     const inShift = slots.has(time)
+                    const block = blockAt(doc.id, s.date, time, ext)
+                    const blockStart = block && (time === block.start_time || time === rows[0])
                     const past = s.date < t || (s.date === t && time < (nowSlot ?? ''))
                     return (
-                      <div key={doc.id + time} className={cn('relative min-h-[52px] border-b border-r border-[#efeff8] p-1 last:border-r-0', !inShift && !active.length && hatch, isNow && 'bg-rose-50/30')}>
+                      <div key={doc.id + time} className={cn('relative min-h-[52px] border-b border-r border-[#efeff8] p-1 last:border-r-0', !inShift && !block && !active.length && hatch, isNow && 'bg-rose-50/30')}>
                         {isNow && <span aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-rose-400/70" />}
-                        {list.map((a) => (
-                          <button key={a.id} type="button" onClick={() => onEdit(a)} title={`${fmtTime(a.appointment_time)} · ${a.reason ?? ''}`}
-                            className={cn('mb-0.5 block w-full rounded-md border-l-[3px] px-2 py-1 text-left transition hover:shadow-sm', APPT_STYLE[a.status], !holdsSlot(a) && active.length && 'hidden')}>
-                            <span className="block truncate text-[11px] font-semibold">{ctx.lk.patients.get(a.patient_id)?.full_name ?? 'Patient'}</span>
-                            <span className="block truncate text-[10px] capitalize opacity-70">{a.status.replace('_', ' ')} · {a.type.replace('_', ' ')}</span>
-                          </button>
-                        ))}
+                        {block && !active.length && (
+                          <div title={`${LEAVE_LABEL[block.kind]} ${block.start_time}–${block.end_time}${block.reason ? ` · ${block.reason}` : ''}`} className="flex h-full min-h-[40px] items-center gap-1 rounded-md bg-slate-200/70 px-2 text-[10px] font-medium text-slate-600">
+                            {blockStart ? <><Ban className="h-3 w-3 shrink-0" /><span className="truncate">{LEAVE_LABEL[block.kind]}{block.reason ? ` · ${block.reason}` : ''}</span></> : <span className="sr-only">{LEAVE_LABEL[block.kind]}</span>}
+                          </div>
+                        )}
+                        {list.map((a) => {
+                          const clash = conflictOf(a, doc, ext)
+                          return (
+                            <button key={a.id} type="button" onClick={() => onEdit(a)} title={clash ? `Needs rescheduling: ${clash}` : `${fmtTime(a.appointment_time)} · ${a.reason ?? ''}`}
+                              className={cn('mb-0.5 block w-full rounded-md border-l-[3px] px-2 py-1 text-left transition hover:shadow-sm', APPT_STYLE[a.status], clash && 'border-l-rose-500 ring-1 ring-inset ring-rose-300', !holdsSlot(a) && active.length && 'hidden')}>
+                              <span className="flex items-center gap-1 truncate text-[11px] font-semibold">{clash && <AlertTriangle className="h-3 w-3 shrink-0 text-rose-600" />}<span className="truncate">{ctx.lk.patients.get(a.patient_id)?.full_name ?? 'Patient'}</span></span>
+                              <span className="block truncate text-[10px] capitalize opacity-70">{clash ? 'Reschedule needed' : <>{a.status.replace('_', ' ')} · {a.type.replace('_', ' ')}{a.source === 'website' && ' · online'}</>}</span>
+                            </button>
+                          )
+                        })}
                         {inShift && !active.length && (canCreate && !past ? (
                           <button type="button" onClick={() => onNew({ doctor_id: doc.id, appointment_date: s.date, appointment_time: time })} aria-label={`Book ${doc.full_name} at ${fmtTime(time)}`}
                             className="group grid h-full min-h-[40px] w-full place-items-center rounded-md border border-dashed border-emerald-300/70 bg-emerald-50/40 text-[11px] font-medium text-emerald-600/50 transition hover:border-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 focus-visible:text-emerald-700">
@@ -483,7 +538,7 @@ function DayView({ summary: s, ctx, onNew, onEdit, canCreate }: { summary: DaySu
           {s.resting.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 border-t border-[#efeff8] bg-brand-50/40 px-4 py-2.5 text-[11px] text-slate-500">
               <Coffee className="h-3.5 w-3.5" />Resting today:
-              {s.resting.map(({ doctor, reason }) => <span key={doctor.id} className="rounded-full bg-white px-2 py-0.5 ring-1 ring-inset ring-slate-200">{doctor.full_name} · {REST_LABEL[reason]}</span>)}
+              {s.resting.map(({ doctor, reason, leave }) => <span key={doctor.id} className="rounded-full bg-white px-2 py-0.5 ring-1 ring-inset ring-slate-200">{doctor.full_name} · {leave ? LEAVE_LABEL[leave.kind] : REST_LABEL[reason]}</span>)}
             </div>
           )}
         </div>

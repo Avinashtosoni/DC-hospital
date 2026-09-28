@@ -99,7 +99,7 @@ function FieldInput({ f, ctx, value, values, onChange, error, editing }: { f: Fi
     case 'select':
       control = (
         <Select {...common} value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
-          <option value="">Select…</option>
+          {!f.options?.some((o) => o.value === '') && <option value="">Select…</option>}
           {f.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </Select>
       )

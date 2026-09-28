@@ -29,6 +29,7 @@ create extension if not exists pgcrypto with schema extensions;
 drop trigger if exists on_auth_user_created on auth.users;
 
 drop table if exists
+  public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
   public.site_enquiries, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
   public.staff, public.doctors, public.departments, public.profiles
@@ -42,6 +43,8 @@ drop function if exists public.has_role(public.app_role[]) cascade;
 drop function if exists public.is_staff() cascade;
 drop function if exists public.my_patient_id() cascade;
 drop function if exists public.current_app_role() cascade;
+drop function if exists public.my_doctor_id() cascade;
+drop function if exists public.protect_patient_fields() cascade;
 drop type if exists public.app_role cascade;
 
 -- =====================================================================================================
@@ -138,6 +141,9 @@ create table public.appointments (
   status            text not null default 'scheduled' check (status in ('scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show')),
   reason            text,
   notes             text,
+  source            text not null default 'desk' check (source in ('desk', 'website', 'portal')),
+  booking_ref       text unique,
+  contacted_at      timestamptz,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now()
 );
@@ -290,6 +296,61 @@ create table public.site_enquiries (
   updated_at  timestamptz not null default now()
 );
 
+-- Doctor leave (whole days) and blocked time (surgery, meetings…). Only approved rows affect availability.
+create table public.doctor_leaves (
+  id          uuid primary key default gen_random_uuid(),
+  doctor_id   uuid not null references public.doctors (id) on delete cascade,
+  kind        text not null default 'leave' check (kind in ('leave', 'surgery', 'meeting', 'conference', 'training', 'other')),
+  start_date  date not null,
+  end_date    date not null,
+  start_time  text check (start_time is null or start_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  end_time    text check (end_time is null or end_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  status      text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  reason      text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  check (end_date >= start_date),
+  check ((start_time is null) = (end_time is null)),
+  check (start_time is null or end_time > start_time)
+);
+
+-- Hospital-wide OPD closures (emergency stays open)
+create table public.holidays (
+  id            uuid primary key default gen_random_uuid(),
+  holiday_date  date not null unique,
+  name          text not null check (char_length(name) between 2 and 80),
+  note          text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+-- Append-only change history, written only by the audit triggers (see section 7d)
+create table public.audit_log (
+  id           uuid primary key default gen_random_uuid(),
+  table_name   text not null,
+  record_id    uuid,
+  action       text not null check (action in ('insert', 'update', 'delete')),
+  actor_id     uuid,
+  actor_name   text,
+  actor_role   text,
+  summary      text,
+  changes      jsonb not null default '{}'::jsonb,
+  created_at   timestamptz not null default now()
+);
+
+-- One-time codes for online booking (never readable through the API; see section 9)
+create table public.booking_otps (
+  id             uuid primary key default gen_random_uuid(),
+  phone          text not null,
+  code_hash      text not null,
+  attempts       int not null default 0,
+  expires_at     timestamptz not null,
+  verified_at    timestamptz,
+  token          uuid unique,
+  token_used_at  timestamptz,
+  created_at     timestamptz not null default now()
+);
+
 -- Indexes for foreign keys and common filters
 create index on public.doctors (department_id);
 create index on public.staff (department_id);
@@ -309,6 +370,14 @@ create index on public.payments (invoice_id);
 create index on public.payments (patient_id);
 create index on public.expenses (expense_date);
 create index on public.site_enquiries (status, created_at desc);
+create index on public.doctor_leaves (doctor_id, start_date, end_date);
+create index on public.audit_log (created_at desc);
+create index on public.audit_log (table_name, record_id);
+create index on public.audit_log (actor_id, created_at desc);
+create index on public.booking_otps (phone, created_at desc);
+-- a doctor can never hold two live bookings in the same slot (desk, portal or website)
+create unique index appointments_one_per_slot on public.appointments (doctor_id, appointment_date, appointment_time)
+  where status not in ('cancelled', 'no_show');
 
 -- =====================================================================================================
 --  4. HELPER FUNCTIONS (security definer so they can be used inside RLS without recursion)
@@ -326,6 +395,11 @@ $$;
 create or replace function public.is_staff()
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and role <> 'patient')
+$$;
+
+create or replace function public.my_doctor_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.doctors where profile_id = auth.uid() limit 1
 $$;
 
 create or replace function public.my_patient_id()
@@ -348,7 +422,8 @@ do $$
 declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
-                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries']
+                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries',
+                           'doctor_leaves','holidays']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);
   end loop;
@@ -393,6 +468,21 @@ end $$;
 
 create trigger trg_profiles_protect_role before update on public.profiles
   for each row execute function public.protect_profile_role();
+
+-- 5c-2. patients may update their own contact details, but never their MRN, status or account link
+create or replace function public.protect_patient_fields()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and public.has_role('patient') then
+    new.mrn := old.mrn;
+    new.status := old.status;
+    new.profile_id := old.profile_id;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_patients_protect before update on public.patients
+  for each row execute function public.protect_patient_fields();
 
 -- 5d. admissions keep bed + patient status consistent (idempotent with the client-side updates)
 create or replace function public.sync_admission()
@@ -477,8 +567,10 @@ create policy patients_select on public.patients for select to authenticated
 create policy patients_insert on public.patients for insert to authenticated
   with check (public.has_role('owner', 'receptionist'));
 create policy patients_update on public.patients for update to authenticated
-  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'))
-  with check (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff')
+      or (public.has_role('patient') and profile_id = auth.uid()))
+  with check (public.has_role('owner', 'receptionist', 'doctor', 'staff')
+      or (public.has_role('patient') and profile_id = auth.uid()));
 create policy patients_delete on public.patients for delete to authenticated
   using (public.has_role('owner'));
 
@@ -634,6 +726,44 @@ create policy site_enquiries_update on public.site_enquiries for update to authe
   with check (public.has_role('owner', 'receptionist'));
 create policy site_enquiries_delete on public.site_enquiries for delete to authenticated
   using (public.has_role('owner'));
+
+-- doctor_leaves
+alter table public.doctor_leaves enable row level security;
+create policy doctor_leaves_select on public.doctor_leaves for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+create policy doctor_leaves_insert on public.doctor_leaves for insert to authenticated
+  with check (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'));
+create policy doctor_leaves_update on public.doctor_leaves for update to authenticated
+  using (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'))
+  with check (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'));
+create policy doctor_leaves_delete on public.doctor_leaves for delete to authenticated
+  using (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'));
+
+-- holidays
+alter table public.holidays enable row level security;
+create policy holidays_select on public.holidays for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff', 'accountant')
+      or (public.has_role('patient') and true));
+create policy holidays_insert on public.holidays for insert to authenticated
+  with check (public.has_role('owner', 'receptionist'));
+create policy holidays_update on public.holidays for update to authenticated
+  using (public.has_role('owner', 'receptionist'))
+  with check (public.has_role('owner', 'receptionist'));
+create policy holidays_delete on public.holidays for delete to authenticated
+  using (public.has_role('owner', 'receptionist'));
+
+-- audit_log
+alter table public.audit_log enable row level security;
+create policy audit_log_select on public.audit_log for select to authenticated
+  using (public.has_role('owner')
+      or (public.has_role('doctor') and actor_id = auth.uid())
+      or (public.has_role('receptionist') and actor_id = auth.uid())
+      or (public.has_role('accountant') and actor_id = auth.uid())
+      or (public.has_role('staff') and actor_id = auth.uid()));
 
 create policy profiles_select on public.profiles for select to authenticated
   using (id = auth.uid() or public.is_staff());
@@ -829,370 +959,370 @@ insert into public.patients (id, profile_id, mrn, full_name, gender, date_of_bir
   ('d0c00004-0000-4000-8000-000000000080', null, 'DCH-100080', 'Yash Malhotra', 'male', (current_date + -13816), 'B+', '+91 98537 62308', 'yash.malhotra46@gmail.com', 'Mayur Vihar Phase 1, New Delhi', 'Divya Malhotra', '+91 97258 52668', 'Peanuts', null, 'outpatient', ((current_date + -53) + time '09:00'));
 
 -- appointments (356)
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000043', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000002', (current_date + -45), '10:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -48) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000170', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000010', (current_date + -45), '11:00', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -52) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000215', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000011', (current_date + -45), '11:00', 'follow_up', 'completed', 'High blood pressure review', null, ((current_date + -46) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000278', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000003', (current_date + -45), '15:00', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -53) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000243', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000005', (current_date + -45), '17:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -53) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000056', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000005', (current_date + -44), '09:30', 'checkup', 'completed', 'Acidity and bloating', null, ((current_date + -50) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000291', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000012', (current_date + -44), '09:30', 'consultation', 'completed', 'Acidity and bloating', null, ((current_date + -46) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000051', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000013', (current_date + -44), '11:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -48) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000094', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000010', (current_date + -44), '11:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -48) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000167', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000007', (current_date + -44), '12:30', 'follow_up', 'completed', 'Itching', null, ((current_date + -48) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000211', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000005', (current_date + -43), '10:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -47) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000198', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000009', (current_date + -43), '15:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -46) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000188', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000013', (current_date + -43), '16:00', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -50) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000356', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000006', (current_date + -43), '17:00', 'follow_up', 'no_show', 'Pelvic pain', null, ((current_date + -49) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000284', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000013', (current_date + -43), '17:30', 'checkup', 'completed', 'Knee pain', null, ((current_date + -53) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000047', 'd0c00004-0000-4000-8000-000000000073', 'd0c00002-0000-4000-8000-000000000003', (current_date + -42), '11:00', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -49) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000124', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000007', (current_date + -41), '11:30', 'consultation', 'completed', 'Hair fall', null, ((current_date + -45) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000173', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000010', (current_date + -41), '11:30', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -45) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000018', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000001', (current_date + -40), '12:30', 'follow_up', 'completed', 'High blood pressure review', null, ((current_date + -41) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000219', 'd0c00004-0000-4000-8000-000000000078', 'd0c00002-0000-4000-8000-000000000006', (current_date + -40), '14:30', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -50) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000109', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000013', (current_date + -40), '17:00', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -43) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000014', 'd0c00004-0000-4000-8000-000000000047', 'd0c00002-0000-4000-8000-000000000001', (current_date + -39), '09:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -44) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000338', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000010', (current_date + -39), '09:30', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -49) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000183', 'd0c00004-0000-4000-8000-000000000044', 'd0c00002-0000-4000-8000-000000000009', (current_date + -39), '11:00', 'checkup', 'completed', 'Ultrasound abdomen', null, ((current_date + -42) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000066', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000004', (current_date + -39), '12:30', 'follow_up', 'completed', 'Fever and cough', null, ((current_date + -45) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000026', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000001', (current_date + -39), '15:00', 'checkup', 'completed', 'Palpitations', null, ((current_date + -48) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000155', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000013', (current_date + -38), '12:00', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -41) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000001', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000001', (current_date + -38), '14:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -40) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000103', 'd0c00004-0000-4000-8000-000000000067', 'd0c00002-0000-4000-8000-000000000006', (current_date + -38), '15:00', 'consultation', 'completed', 'Pelvic pain', null, ((current_date + -39) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000283', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000010', (current_date + -37), '10:00', 'emergency', 'cancelled', 'Acute abdominal pain', 'Cancelled by patient over phone', ((current_date + -45) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000116', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000013', (current_date + -37), '16:30', 'follow_up', 'completed', 'Ankle sprain', null, ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000057', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000001', (current_date + -37), '17:30', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -42) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000197', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000010', (current_date + -36), '09:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -43) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000079', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000001', (current_date + -36), '16:30', 'consultation', 'cancelled', 'High blood pressure review', 'Cancelled by patient over phone', ((current_date + -45) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000156', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000005', (current_date + -36), '17:30', 'follow_up', 'completed', 'General weakness', null, ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000236', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', (current_date + -35), '12:00', 'consultation', 'completed', 'Acidity and bloating', null, ((current_date + -37) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000296', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000011', (current_date + -35), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -37) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000347', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000002', (current_date + -35), '12:00', 'follow_up', 'completed', 'Seizure follow-up', null, ((current_date + -44) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000279', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000009', (current_date + -35), '15:00', 'follow_up', 'completed', 'Ultrasound abdomen', null, ((current_date + -36) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000059', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000011', (current_date + -35), '15:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -45) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000185', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000001', (current_date + -35), '17:00', 'consultation', 'no_show', 'Palpitations', null, ((current_date + -37) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000200', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000013', (current_date + -35), '17:00', 'follow_up', 'completed', 'Knee pain', null, ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000138', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000005', (current_date + -35), '17:30', 'consultation', 'cancelled', 'Acidity and bloating', 'Cancelled by patient over phone', ((current_date + -42) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000348', 'd0c00004-0000-4000-8000-000000000065', 'd0c00002-0000-4000-8000-000000000013', (current_date + -35), '17:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -42) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000069', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000010', (current_date + -34), '09:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -39) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000298', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000001', (current_date + -34), '09:30', 'consultation', 'no_show', 'Chest pain on exertion', null, ((current_date + -41) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000290', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000005', (current_date + -34), '10:00', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000013', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', (current_date + -34), '12:00', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -39) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000107', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000003', (current_date + -34), '14:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -37) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000237', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000005', (current_date + -34), '17:00', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -41) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000293', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000002', (current_date + -34), '17:00', 'follow_up', 'completed', 'Seizure follow-up', null, ((current_date + -44) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000016', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000001', (current_date + -33), '09:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000135', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000013', (current_date + -33), '12:30', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -43) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000029', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000009', (current_date + -33), '15:00', 'consultation', 'completed', 'CT follow-up', null, ((current_date + -34) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000046', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000003', (current_date + -33), '15:30', 'consultation', 'cancelled', 'Lower back pain', 'Cancelled by patient over phone', ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000343', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000004', (current_date + -33), '16:00', 'consultation', 'completed', 'Vaccination', null, ((current_date + -37) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000337', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000004', (current_date + -32), '11:00', 'follow_up', 'completed', 'Loose motions', null, ((current_date + -40) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000020', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', (current_date + -32), '14:00', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -40) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000227', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000004', (current_date + -32), '16:00', 'consultation', 'completed', 'Growth check-up', null, ((current_date + -34) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000084', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000010', (current_date + -32), '16:30', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000230', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000012', (current_date + -31), '09:30', 'follow_up', 'cancelled', 'General weakness', 'Cancelled by patient over phone', ((current_date + -34) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000111', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', (current_date + -31), '11:30', 'consultation', 'completed', 'Dizziness', null, ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000253', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000002', (current_date + -31), '14:00', 'checkup', 'completed', 'Recurrent headaches', null, ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000250', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000005', (current_date + -31), '14:30', 'consultation', 'completed', 'Diabetes follow-up', null, ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000129', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000011', (current_date + -30), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -31) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000266', 'd0c00004-0000-4000-8000-000000000078', 'd0c00002-0000-4000-8000-000000000006', (current_date + -30), '16:30', 'follow_up', 'cancelled', 'Pelvic pain', 'Cancelled by patient over phone', ((current_date + -38) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000199', 'd0c00004-0000-4000-8000-000000000032', 'd0c00002-0000-4000-8000-000000000011', (current_date + -29), '10:00', 'consultation', 'completed', 'Palpitations', null, ((current_date + -31) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000120', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000010', (current_date + -29), '10:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000048', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000007', (current_date + -29), '11:30', 'follow_up', 'no_show', 'Skin rash', null, ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000146', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000006', (current_date + -29), '12:00', 'follow_up', 'completed', 'Post-natal visit', null, ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000117', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000009', (current_date + -29), '14:00', 'checkup', 'cancelled', 'CT follow-up', 'Cancelled by patient over phone', ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000139', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000013', (current_date + -28), '15:30', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -33) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000201', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000004', (current_date + -28), '16:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -36) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000081', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000004', (current_date + -27), '11:30', 'consultation', 'completed', 'Fever and cough', null, ((current_date + -31) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000260', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000005', (current_date + -27), '14:30', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -29) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000050', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000009', (current_date + -27), '15:30', 'consultation', 'completed', 'Imaging review', null, ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000160', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000010', (current_date + -27), '16:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -33) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000126', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000013', (current_date + -27), '17:00', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -35) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000205', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000012', (current_date + -26), '10:30', 'follow_up', 'completed', 'Fever for 3 days', null, ((current_date + -30) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000276', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000006', (current_date + -26), '15:30', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -31) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000285', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000003', (current_date + -26), '15:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -28) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000054', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000003', (current_date + -26), '17:00', 'checkup', 'completed', 'Knee pain', null, ((current_date + -29) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000041', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000006', (current_date + -25), '12:00', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -29) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000251', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000004', (current_date + -25), '15:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -31) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000306', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000003', (current_date + -25), '15:30', 'consultation', 'no_show', 'Shoulder stiffness', null, ((current_date + -26) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000150', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000005', (current_date + -25), '17:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -33) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000186', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000006', (current_date + -24), '09:00', 'consultation', 'completed', 'Irregular periods', null, ((current_date + -28) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000148', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000005', (current_date + -24), '09:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000017', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000001', (current_date + -24), '10:30', 'follow_up', 'completed', 'Shortness of breath', null, ((current_date + -30) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000062', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000006', (current_date + -24), '10:30', 'checkup', 'completed', 'Antenatal check-up', null, ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000213', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000006', (current_date + -24), '12:30', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -29) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000105', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000012', (current_date + -24), '14:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -34) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000071', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000011', (current_date + -24), '17:30', 'consultation', 'completed', 'Palpitations', null, ((current_date + -31) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000289', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000011', (current_date + -23), '10:30', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000068', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000013', (current_date + -23), '12:00', 'follow_up', 'completed', 'Ankle sprain', null, ((current_date + -32) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000088', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000010', (current_date + -23), '12:00', 'emergency', 'no_show', 'Acute abdominal pain', null, ((current_date + -25) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000142', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000003', (current_date + -23), '12:00', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -28) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000110', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000007', (current_date + -22), '12:00', 'checkup', 'completed', 'Acne', null, ((current_date + -25) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000161', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000001', (current_date + -22), '17:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -30) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000106', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000013', (current_date + -21), '09:30', 'follow_up', 'completed', 'Shoulder stiffness', null, ((current_date + -23) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000085', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000012', (current_date + -21), '10:00', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -27) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000002', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000005', (current_date + -21), '10:30', 'follow_up', 'completed', 'Fever for 3 days', null, ((current_date + -28) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000300', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000013', (current_date + -21), '14:30', 'consultation', 'no_show', 'Shoulder stiffness', null, ((current_date + -30) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000245', 'd0c00004-0000-4000-8000-000000000071', 'd0c00002-0000-4000-8000-000000000001', (current_date + -21), '16:00', 'follow_up', 'completed', 'Palpitations', null, ((current_date + -29) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000355', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000013', (current_date + -21), '16:00', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -24) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000255', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000004', (current_date + -21), '17:00', 'follow_up', 'completed', 'Growth check-up', null, ((current_date + -29) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000077', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000009', (current_date + -21), '17:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -27) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000228', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000003', (current_date + -20), '15:30', 'consultation', 'cancelled', 'Lower back pain', 'Cancelled by patient over phone', ((current_date + -30) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000315', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000009', (current_date + -19), '09:00', 'consultation', 'completed', 'Imaging review', null, ((current_date + -26) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000074', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000002', (current_date + -19), '12:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000280', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000011', (current_date + -19), '15:00', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000132', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000005', (current_date + -18), '09:00', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -26) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000303', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000002', (current_date + -18), '09:30', 'checkup', 'completed', 'Numbness in hands', null, ((current_date + -28) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000098', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000004', (current_date + -18), '16:00', 'follow_up', 'completed', 'Loose motions', null, ((current_date + -27) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000035', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000007', (current_date + -18), '16:30', 'follow_up', 'completed', 'Itching', null, ((current_date + -26) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000091', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000005', (current_date + -16), '11:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -19) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000196', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000001', (current_date + -16), '14:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -25) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000220', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000007', (current_date + -16), '15:00', 'consultation', 'completed', 'Skin rash', null, ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000102', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000004', (current_date + -16), '16:30', 'follow_up', 'completed', 'Loose motions', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000127', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000005', (current_date + -16), '17:00', 'follow_up', 'no_show', 'Diabetes follow-up', null, ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000145', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000005', (current_date + -16), '17:30', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -22) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000248', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000011', (current_date + -15), '09:00', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -24) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000025', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', (current_date + -15), '10:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000122', 'd0c00004-0000-4000-8000-000000000014', 'd0c00002-0000-4000-8000-000000000013', (current_date + -15), '12:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000325', 'd0c00004-0000-4000-8000-000000000045', 'd0c00002-0000-4000-8000-000000000004', (current_date + -15), '12:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -24) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000244', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000009', (current_date + -15), '17:00', 'follow_up', 'completed', 'CT follow-up', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000076', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000002', (current_date + -14), '09:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000178', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000002', (current_date + -14), '10:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000292', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000012', (current_date + -14), '10:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -22) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000141', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000005', (current_date + -14), '11:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000309', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000009', (current_date + -14), '12:00', 'follow_up', 'completed', 'Imaging review', null, ((current_date + -24) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000294', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000003', (current_date + -14), '12:30', 'consultation', 'cancelled', 'Ankle sprain', 'Cancelled by patient over phone', ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000252', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000002', (current_date + -14), '14:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000137', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000007', (current_date + -14), '14:30', 'follow_up', 'completed', 'Hair fall', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000015', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000001', (current_date + -14), '15:00', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000027', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000003', (current_date + -14), '15:00', 'checkup', 'no_show', 'Lower back pain', null, ((current_date + -18) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000241', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000009', (current_date + -14), '16:00', 'consultation', 'no_show', 'CT follow-up', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000101', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000009', (current_date + -14), '16:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000231', 'd0c00004-0000-4000-8000-000000000075', 'd0c00002-0000-4000-8000-000000000006', (current_date + -13), '09:00', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -22) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000125', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000005', (current_date + -13), '10:30', 'checkup', 'completed', 'Fever for 3 days', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000209', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000009', (current_date + -13), '10:30', 'consultation', 'cancelled', 'Imaging review', 'Cancelled by patient over phone', ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000239', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000002', (current_date + -13), '11:00', 'checkup', 'cancelled', 'Seizure follow-up', 'Cancelled by patient over phone', ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000082', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000006', (current_date + -13), '11:30', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -23) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000320', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000006', (current_date + -13), '12:00', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000192', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000013', (current_date + -13), '12:30', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -18) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000030', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000001', (current_date + -13), '16:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000166', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000009', (current_date + -13), '16:00', 'follow_up', 'completed', 'Ultrasound abdomen', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000060', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000012', (current_date + -13), '17:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000118', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000010', (current_date + -13), '17:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000316', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000009', (current_date + -12), '09:00', 'checkup', 'no_show', 'Imaging review', null, ((current_date + -18) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000031', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000002', (current_date + -12), '11:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -19) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000151', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000004', (current_date + -12), '11:00', 'consultation', 'completed', 'Fever and cough', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000133', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000007', (current_date + -12), '15:00', 'checkup', 'completed', 'Skin rash', null, ((current_date + -18) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000312', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000007', (current_date + -12), '16:00', 'consultation', 'no_show', 'Itching', null, ((current_date + -19) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000340', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000010', (current_date + -12), '16:30', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000232', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000013', (current_date + -12), '17:00', 'follow_up', 'completed', 'Shoulder stiffness', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000256', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000003', (current_date + -11), '09:30', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -19) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000317', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000006', (current_date + -11), '10:00', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000322', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', (current_date + -11), '11:00', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000269', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000010', (current_date + -11), '11:30', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000194', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000007', (current_date + -11), '12:00', 'consultation', 'completed', 'Itching', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000202', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000002', (current_date + -11), '12:30', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000262', 'd0c00004-0000-4000-8000-000000000054', 'd0c00002-0000-4000-8000-000000000009', (current_date + -11), '14:00', 'checkup', 'completed', 'Ultrasound abdomen', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000263', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000010', (current_date + -11), '14:00', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -20) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000319', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000005', (current_date + -11), '14:30', 'follow_up', 'completed', 'Fever for 3 days', null, ((current_date + -21) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000222', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000010', (current_date + -11), '15:00', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000092', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000011', (current_date + -11), '15:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -12) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000184', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', (current_date + -11), '15:30', 'consultation', 'completed', 'Numbness in hands', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000080', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000011', (current_date + -11), '16:00', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -12) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000258', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000007', (current_date + -10), '09:00', 'consultation', 'completed', 'Hair fall', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000275', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000013', (current_date + -10), '09:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000321', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000003', (current_date + -10), '10:30', 'follow_up', 'completed', 'Shoulder stiffness', null, ((current_date + -19) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000191', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000011', (current_date + -10), '12:00', 'consultation', 'completed', 'Palpitations', null, ((current_date + -12) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000154', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000004', (current_date + -10), '14:30', 'consultation', 'completed', 'Growth check-up', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000235', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000010', (current_date + -10), '14:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000216', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000013', (current_date + -10), '15:00', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000028', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000005', (current_date + -10), '16:00', 'consultation', 'completed', 'Diabetes follow-up', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000003', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000001', (current_date + -9), '09:00', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -16) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000308', 'd0c00004-0000-4000-8000-000000000073', 'd0c00002-0000-4000-8000-000000000009', (current_date + -9), '09:00', 'follow_up', 'completed', 'CT follow-up', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000130', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000002', (current_date + -9), '09:30', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000053', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000007', (current_date + -9), '10:00', 'checkup', 'completed', 'Acne', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000036', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000011', (current_date + -9), '10:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -18) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000112', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000002', (current_date + -9), '15:30', 'checkup', 'completed', 'Recurrent headaches', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000210', 'd0c00004-0000-4000-8000-000000000075', 'd0c00002-0000-4000-8000-000000000002', (current_date + -9), '16:00', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000271', 'd0c00004-0000-4000-8000-000000000019', 'd0c00002-0000-4000-8000-000000000010', (current_date + -9), '17:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000281', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000002', (current_date + -8), '09:00', 'follow_up', 'completed', 'Numbness in hands', null, ((current_date + -18) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000143', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', (current_date + -8), '10:00', 'checkup', 'completed', 'High blood pressure review', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000212', 'd0c00004-0000-4000-8000-000000000065', 'd0c00002-0000-4000-8000-000000000012', (current_date + -8), '10:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000223', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000009', (current_date + -8), '10:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000078', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000010', (current_date + -8), '12:00', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000329', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000010', (current_date + -8), '16:00', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -14) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000249', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', (current_date + -7), '09:30', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000108', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', (current_date + -7), '10:00', 'checkup', 'no_show', 'Shortness of breath', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000305', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000005', (current_date + -7), '10:00', 'consultation', 'cancelled', 'Acidity and bloating', 'Cancelled by patient over phone', ((current_date + -12) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000090', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000007', (current_date + -7), '11:00', 'checkup', 'completed', 'Itching', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000204', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000006', (current_date + -7), '11:30', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000075', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000005', (current_date + -7), '12:00', 'follow_up', 'completed', 'General weakness', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000259', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000013', (current_date + -7), '16:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -10) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000100', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000011', (current_date + -7), '16:30', 'consultation', 'completed', 'Palpitations', null, ((current_date + -17) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000282', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '09:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -16) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000165', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', (current_date + -6), '09:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000350', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000002', (current_date + -6), '11:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000208', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000011', (current_date + -6), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000061', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000012', (current_date + -6), '12:30', 'checkup', 'completed', 'Diabetes follow-up', null, ((current_date + -15) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000131', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000003', (current_date + -6), '12:30', 'checkup', 'completed', 'Knee pain', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000277', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '14:00', 'consultation', 'cancelled', 'Lower back pain', 'Cancelled by patient over phone', ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000144', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000005', (current_date + -6), '15:00', 'checkup', 'completed', 'Acidity and bloating', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000095', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '15:30', 'checkup', 'completed', 'Shoulder stiffness', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000234', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000010', (current_date + -6), '15:30', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000033', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000010', (current_date + -6), '16:00', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000345', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '16:00', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000169', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000002', (current_date + -6), '17:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000032', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000003', (current_date + -5), '09:00', 'consultation', 'cancelled', 'Ankle sprain', 'Cancelled by patient over phone', ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000152', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000006', (current_date + -5), '09:30', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -10) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000195', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000002', (current_date + -5), '09:30', 'checkup', 'completed', 'Seizure follow-up', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000203', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000011', (current_date + -5), '10:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000040', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000004', (current_date + -5), '11:00', 'consultation', 'completed', 'Vaccination', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000123', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000011', (current_date + -5), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -14) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000174', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000012', (current_date + -5), '12:00', 'checkup', 'completed', 'Diabetes follow-up', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000225', 'd0c00004-0000-4000-8000-000000000067', 'd0c00002-0000-4000-8000-000000000005', (current_date + -5), '14:30', 'checkup', 'completed', 'Acidity and bloating', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000242', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000003', (current_date + -5), '14:30', 'checkup', 'completed', 'Shoulder stiffness', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000039', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000001', (current_date + -5), '15:00', 'checkup', 'completed', 'High blood pressure review', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000119', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000007', (current_date + -5), '15:30', 'consultation', 'cancelled', 'Itching', 'Cancelled by patient over phone', ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000240', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000011', (current_date + -5), '17:00', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000189', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000001', (current_date + -5), '17:30', 'follow_up', 'no_show', 'High blood pressure review', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000288', 'd0c00004-0000-4000-8000-000000000047', 'd0c00002-0000-4000-8000-000000000003', (current_date + -5), '17:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000268', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000007', (current_date + -4), '09:00', 'follow_up', 'completed', 'Acne', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000247', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000011', (current_date + -4), '09:30', 'follow_up', 'completed', 'Shortness of breath', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000314', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000010', (current_date + -4), '09:30', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000331', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000002', (current_date + -4), '09:30', 'follow_up', 'completed', 'Numbness in hands', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000221', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000007', (current_date + -4), '10:00', 'consultation', 'cancelled', 'Hair fall', 'Cancelled by patient over phone', ((current_date + -14) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000327', 'd0c00004-0000-4000-8000-000000000078', 'd0c00002-0000-4000-8000-000000000006', (current_date + -4), '11:00', 'follow_up', 'completed', 'Pelvic pain', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000065', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000006', (current_date + -4), '12:30', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000351', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000001', (current_date + -4), '14:30', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000052', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000005', (current_date + -4), '15:30', 'consultation', 'completed', 'Diabetes follow-up', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000323', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000004', (current_date + -3), '09:30', 'follow_up', 'completed', 'Vaccination', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000311', 'd0c00004-0000-4000-8000-000000000047', 'd0c00002-0000-4000-8000-000000000003', (current_date + -3), '10:00', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000049', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000007', (current_date + -3), '11:00', 'consultation', 'completed', 'Hair fall', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000004', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000007', (current_date + -3), '12:00', 'follow_up', 'cancelled', 'Hair fall', 'Cancelled by patient over phone', ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000233', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000011', (current_date + -3), '14:00', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000254', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000007', (current_date + -3), '15:00', 'consultation', 'completed', 'Hair fall', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000042', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000011', (current_date + -3), '15:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000272', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', (current_date + -3), '17:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000087', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000012', (current_date + -3), '17:30', 'consultation', 'completed', 'Acidity and bloating', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000270', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000003', (current_date + -3), '17:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000019', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000001', (current_date + -2), '10:30', 'follow_up', 'completed', 'Palpitations', null, ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000352', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000006', (current_date + -2), '10:30', 'consultation', 'completed', 'Irregular periods', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000055', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000009', (current_date + -2), '11:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000257', 'd0c00004-0000-4000-8000-000000000021', 'd0c00002-0000-4000-8000-000000000013', (current_date + -2), '11:30', 'consultation', 'no_show', 'Knee pain', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000172', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000013', (current_date + -2), '12:00', 'follow_up', 'completed', 'Ankle sprain', null, ((current_date + -9) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000149', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000011', (current_date + -2), '12:30', 'checkup', 'no_show', 'Shortness of breath', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000034', 'd0c00004-0000-4000-8000-000000000079', 'd0c00002-0000-4000-8000-000000000012', (current_date + -2), '15:30', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000339', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000007', (current_date + -2), '16:00', 'consultation', 'no_show', 'Skin rash', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000158', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', (current_date + -2), '16:30', 'consultation', 'completed', 'Dizziness', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000073', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000013', (current_date + -1), '10:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000114', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000009', (current_date + -1), '11:30', 'consultation', 'no_show', 'CT follow-up', null, ((current_date + -11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000328', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', (current_date + -1), '14:30', 'checkup', 'cancelled', 'Shortness of breath', 'Cancelled by patient over phone', ((current_date + -10) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000187', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000006', (current_date + -1), '15:00', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000299', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', (current_date + -1), '15:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000313', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000004', (current_date + -1), '15:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000336', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000010', (current_date + -1), '15:30', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000168', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000002', (current_date + -1), '16:00', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000157', 'd0c00004-0000-4000-8000-000000000029', 'd0c00002-0000-4000-8000-000000000013', (current_date + -1), '16:30', 'consultation', 'completed', 'Knee pain', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000304', 'd0c00004-0000-4000-8000-000000000058', 'd0c00002-0000-4000-8000-000000000006', (current_date + -1), '17:00', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000064', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000001', (current_date + -1), '17:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000136', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000006', (current_date + 0), '09:00', 'consultation', 'confirmed', 'Antenatal check-up', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000012', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '09:30', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + -8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000175', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000013', (current_date + 0), '09:30', 'checkup', 'confirmed', 'Shoulder stiffness', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000011', 'd0c00004-0000-4000-8000-000000000014', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '10:30', 'follow_up', 'completed', 'Chest pain on exertion', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000206', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000013', (current_date + 0), '11:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000104', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000010', (current_date + 0), '11:30', 'emergency', 'scheduled', 'Road traffic injury', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000007', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '12:00', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000008', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '12:30', 'follow_up', 'confirmed', 'Palpitations', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000093', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000007', (current_date + 0), '12:30', 'follow_up', 'confirmed', 'Acne', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000086', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000003', (current_date + 0), '14:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000261', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000012', (current_date + 0), '14:30', 'consultation', 'confirmed', 'Diabetes follow-up', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000171', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000005', (current_date + 0), '15:00', 'checkup', 'confirmed', 'Acidity and bloating', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000009', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '17:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000181', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000007', (current_date + 0), '17:00', 'consultation', 'confirmed', 'Itching', null, ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000214', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000002', (current_date + 0), '17:00', 'consultation', 'checked_in', 'Numbness in hands', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000010', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '17:30', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000295', 'd0c00004-0000-4000-8000-000000000032', 'd0c00002-0000-4000-8000-000000000009', (current_date + 0), '17:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000024', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000001', (current_date + 1), '09:30', 'follow_up', 'scheduled', 'Shortness of breath', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000182', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000007', (current_date + 1), '10:00', 'consultation', 'scheduled', 'Skin rash', null, ((current_date + -9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000297', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000006', (current_date + 1), '10:30', 'follow_up', 'scheduled', 'Antenatal check-up', null, ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000330', 'd0c00004-0000-4000-8000-000000000021', 'd0c00002-0000-4000-8000-000000000013', (current_date + 1), '11:00', 'consultation', 'scheduled', 'Lower back pain', null, ((current_date + -3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000265', 'd0c00004-0000-4000-8000-000000000071', 'd0c00002-0000-4000-8000-000000000011', (current_date + 1), '12:00', 'consultation', 'confirmed', 'Shortness of breath', null, ((current_date + 0) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000335', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000005', (current_date + 1), '14:30', 'consultation', 'confirmed', 'Acidity and bloating', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000224', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000013', (current_date + 1), '15:30', 'checkup', 'scheduled', 'Knee pain', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000341', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000013', (current_date + 1), '16:30', 'consultation', 'scheduled', 'Lower back pain', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000140', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000012', (current_date + 2), '10:30', 'consultation', 'confirmed', 'Fever for 3 days', null, ((current_date + -7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000226', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000013', (current_date + 2), '17:30', 'consultation', 'scheduled', 'Shoulder stiffness', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000089', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000009', (current_date + 3), '10:00', 'consultation', 'confirmed', 'Ultrasound abdomen', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000238', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000011', (current_date + 3), '10:00', 'follow_up', 'scheduled', 'Chest pain on exertion', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000217', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000013', (current_date + 3), '11:30', 'consultation', 'scheduled', 'Knee pain', null, ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000334', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000011', (current_date + 3), '14:00', 'follow_up', 'confirmed', 'Palpitations', null, ((current_date + -3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000163', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000007', (current_date + 3), '15:30', 'follow_up', 'confirmed', 'Hair fall', null, ((current_date + 0) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000115', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000007', (current_date + 3), '16:30', 'follow_up', 'confirmed', 'Hair fall', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000005', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000001', (current_date + 4), '09:00', 'follow_up', 'confirmed', 'Palpitations', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000063', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000007', (current_date + 4), '10:00', 'consultation', 'scheduled', 'Itching', null, ((current_date + -1) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000097', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000001', (current_date + 4), '10:30', 'consultation', 'confirmed', 'Chest pain on exertion', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000326', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000013', (current_date + 4), '11:30', 'follow_up', 'confirmed', 'Lower back pain', null, ((current_date + -6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000044', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000002', (current_date + 4), '12:00', 'consultation', 'confirmed', 'Seizure follow-up', null, ((current_date + -3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000353', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000005', (current_date + 4), '12:00', 'consultation', 'confirmed', 'General weakness', null, ((current_date + 3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000246', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000010', (current_date + 4), '12:30', 'emergency', 'confirmed', 'High fever with chills', null, ((current_date + -5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000342', 'd0c00004-0000-4000-8000-000000000060', 'd0c00002-0000-4000-8000-000000000002', (current_date + 4), '12:30', 'consultation', 'confirmed', 'Numbness in hands', null, ((current_date + 0) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000128', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000002', (current_date + 4), '14:00', 'consultation', 'scheduled', 'Numbness in hands', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000037', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000011', (current_date + 4), '16:30', 'consultation', 'confirmed', 'Chest pain on exertion', null, ((current_date + 0) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000070', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000010', (current_date + 5), '09:00', 'emergency', 'scheduled', 'High fever with chills', null, ((current_date + 1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000274', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000002', (current_date + 5), '09:30', 'consultation', 'scheduled', 'Numbness in hands', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000190', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000004', (current_date + 5), '10:00', 'follow_up', 'confirmed', 'Loose motions', null, ((current_date + -3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000332', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000007', (current_date + 5), '10:30', 'follow_up', 'scheduled', 'Itching', null, ((current_date + -4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000164', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000010', (current_date + 5), '14:00', 'emergency', 'confirmed', 'Road traffic injury', null, ((current_date + 2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000134', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000012', (current_date + 5), '14:30', 'follow_up', 'confirmed', 'Diabetes follow-up', null, ((current_date + 1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000072', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000005', (current_date + 6), '11:00', 'follow_up', 'confirmed', 'Acidity and bloating', null, ((current_date + 3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000162', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000004', (current_date + 6), '12:00', 'follow_up', 'scheduled', 'Growth check-up', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000180', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000005', (current_date + 6), '14:00', 'follow_up', 'confirmed', 'Diabetes follow-up', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000301', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000012', (current_date + 6), '14:00', 'consultation', 'confirmed', 'Acidity and bloating', null, ((current_date + 4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000307', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000013', (current_date + 6), '14:30', 'follow_up', 'scheduled', 'Shoulder stiffness', null, ((current_date + 1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000153', 'd0c00004-0000-4000-8000-000000000029', 'd0c00002-0000-4000-8000-000000000003', (current_date + 6), '15:30', 'consultation', 'scheduled', 'Lower back pain', null, ((current_date + 1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000159', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000009', (current_date + 6), '16:30', 'consultation', 'scheduled', 'Imaging review', null, ((current_date + 0) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000324', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000009', (current_date + 6), '17:00', 'consultation', 'scheduled', 'Ultrasound abdomen', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000067', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000012', (current_date + 7), '09:30', 'follow_up', 'scheduled', 'Fever for 3 days', null, ((current_date + 6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000113', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000003', (current_date + 7), '12:30', 'follow_up', 'scheduled', 'Knee pain', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000287', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000006', (current_date + 7), '14:00', 'consultation', 'confirmed', 'Irregular periods', null, ((current_date + 5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000318', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000011', (current_date + 7), '14:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + 4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000099', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000005', (current_date + 7), '15:30', 'checkup', 'confirmed', 'Acidity and bloating', null, ((current_date + -1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000147', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000001', (current_date + 7), '15:30', 'follow_up', 'scheduled', 'Shortness of breath', null, ((current_date + -2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000310', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000011', (current_date + 9), '11:30', 'follow_up', 'confirmed', 'High blood pressure review', null, ((current_date + 2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000023', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000001', (current_date + 9), '14:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + 0) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000022', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000001', (current_date + 9), '15:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + 6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000021', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000001', (current_date + 9), '15:30', 'checkup', 'scheduled', 'Shortness of breath', null, ((current_date + 7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000193', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000011', (current_date + 9), '16:30', 'follow_up', 'confirmed', 'Shortness of breath', null, ((current_date + 8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000346', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000010', (current_date + 10), '10:00', 'emergency', 'confirmed', 'High fever with chills', null, ((current_date + 4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000058', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000004', (current_date + 10), '11:30', 'consultation', 'scheduled', 'Fever and cough', null, ((current_date + 3) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000264', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000003', (current_date + 10), '14:30', 'follow_up', 'confirmed', 'Lower back pain', null, ((current_date + 6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000349', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000006', (current_date + 10), '17:00', 'consultation', 'confirmed', 'Antenatal check-up', null, ((current_date + 5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000179', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000010', (current_date + 10), '17:30', 'emergency', 'confirmed', 'High fever with chills', null, ((current_date + 1) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000207', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000002', (current_date + 11), '12:00', 'checkup', 'confirmed', 'Recurrent headaches', null, ((current_date + 5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000218', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000005', (current_date + 11), '14:30', 'consultation', 'confirmed', 'General weakness', null, ((current_date + 7) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000006', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000012', (current_date + 11), '16:30', 'consultation', 'scheduled', 'Fever for 3 days', null, ((current_date + 2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000038', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000011', (current_date + 11), '17:00', 'follow_up', 'scheduled', 'Shortness of breath', null, ((current_date + 6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000273', 'd0c00004-0000-4000-8000-000000000060', 'd0c00002-0000-4000-8000-000000000006', (current_date + 11), '17:00', 'consultation', 'confirmed', 'Pelvic pain', null, ((current_date + 8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000045', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000006', (current_date + 12), '09:00', 'follow_up', 'scheduled', 'Antenatal check-up', null, ((current_date + 2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000176', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000003', (current_date + 12), '14:00', 'consultation', 'confirmed', 'Shoulder stiffness', null, ((current_date + 5) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000121', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000009', (current_date + 12), '15:00', 'consultation', 'scheduled', 'CT follow-up', null, ((current_date + 2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000229', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000011', (current_date + 12), '16:30', 'consultation', 'scheduled', 'High blood pressure review', null, ((current_date + 2) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000286', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000013', (current_date + 12), '16:30', 'follow_up', 'confirmed', 'Shoulder stiffness', null, ((current_date + 11) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000083', 'd0c00004-0000-4000-8000-000000000060', 'd0c00002-0000-4000-8000-000000000003', (current_date + 13), '09:00', 'consultation', 'confirmed', 'Lower back pain', null, ((current_date + 12) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000267', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000007', (current_date + 13), '09:00', 'consultation', 'scheduled', 'Acne', null, ((current_date + 9) + time '09:00'));
-insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at) values
-  ('d0c00005-0000-4000-8000-000000000177', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000001', (current_date + 13), '11:00', 'consultation', 'scheduled', 'High blood pressure review', null, ((current_date + 4) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000302', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000007', (current_date + 13), '14:00', 'consultation', 'scheduled', 'Acne', null, ((current_date + 8) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000344', 'd0c00004-0000-4000-8000-000000000054', 'd0c00002-0000-4000-8000-000000000013', (current_date + 14), '09:00', 'consultation', 'confirmed', 'Shoulder stiffness', null, ((current_date + 9) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000096', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000004', (current_date + 14), '10:00', 'consultation', 'scheduled', 'Loose motions', null, ((current_date + 6) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000333', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000009', (current_date + 14), '10:30', 'consultation', 'confirmed', 'CT follow-up', null, ((current_date + 13) + time '09:00')),
-  ('d0c00005-0000-4000-8000-000000000354', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000007', (current_date + 14), '15:30', 'consultation', 'scheduled', 'Hair fall', null, ((current_date + 12) + time '09:00'));
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000043', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000002', (current_date + -45), '10:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -48) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000170', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000010', (current_date + -45), '11:00', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -52) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000215', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000011', (current_date + -45), '11:00', 'follow_up', 'completed', 'High blood pressure review', null, ((current_date + -46) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000278', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000003', (current_date + -45), '15:00', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -53) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000243', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000005', (current_date + -45), '17:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -53) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000056', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000005', (current_date + -44), '09:30', 'checkup', 'completed', 'Acidity and bloating', null, ((current_date + -50) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000291', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000012', (current_date + -44), '09:30', 'consultation', 'completed', 'Acidity and bloating', null, ((current_date + -46) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000051', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000013', (current_date + -44), '11:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -48) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000094', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000010', (current_date + -44), '11:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -48) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000167', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000007', (current_date + -44), '12:30', 'follow_up', 'completed', 'Itching', null, ((current_date + -48) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000211', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000005', (current_date + -43), '10:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -47) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000198', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000009', (current_date + -43), '15:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -46) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000188', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000013', (current_date + -43), '16:00', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -50) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000356', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000006', (current_date + -43), '17:00', 'follow_up', 'no_show', 'Pelvic pain', null, ((current_date + -49) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000284', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000013', (current_date + -43), '17:30', 'checkup', 'completed', 'Knee pain', null, ((current_date + -53) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000047', 'd0c00004-0000-4000-8000-000000000073', 'd0c00002-0000-4000-8000-000000000003', (current_date + -42), '11:00', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -49) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000124', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000007', (current_date + -41), '11:30', 'consultation', 'completed', 'Hair fall', null, ((current_date + -45) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000173', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000010', (current_date + -41), '11:30', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -45) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000018', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000001', (current_date + -40), '12:30', 'follow_up', 'completed', 'High blood pressure review', null, ((current_date + -41) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000219', 'd0c00004-0000-4000-8000-000000000078', 'd0c00002-0000-4000-8000-000000000006', (current_date + -40), '14:30', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -50) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000109', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000013', (current_date + -40), '17:00', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -43) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000014', 'd0c00004-0000-4000-8000-000000000047', 'd0c00002-0000-4000-8000-000000000001', (current_date + -39), '09:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -44) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000338', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000010', (current_date + -39), '09:30', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -49) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000183', 'd0c00004-0000-4000-8000-000000000044', 'd0c00002-0000-4000-8000-000000000009', (current_date + -39), '11:00', 'checkup', 'completed', 'Ultrasound abdomen', null, ((current_date + -42) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000066', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000004', (current_date + -39), '12:30', 'follow_up', 'completed', 'Fever and cough', null, ((current_date + -45) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000026', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000001', (current_date + -39), '15:00', 'checkup', 'completed', 'Palpitations', null, ((current_date + -48) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000155', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000013', (current_date + -38), '12:00', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -41) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000001', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000001', (current_date + -38), '14:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -40) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000103', 'd0c00004-0000-4000-8000-000000000067', 'd0c00002-0000-4000-8000-000000000006', (current_date + -38), '15:00', 'consultation', 'completed', 'Pelvic pain', null, ((current_date + -39) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000283', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000010', (current_date + -37), '10:00', 'emergency', 'cancelled', 'Acute abdominal pain', 'Cancelled by patient over phone', ((current_date + -45) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000116', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000013', (current_date + -37), '16:30', 'follow_up', 'completed', 'Ankle sprain', null, ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000057', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000001', (current_date + -37), '17:30', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -42) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000197', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000010', (current_date + -36), '09:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -43) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000079', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000001', (current_date + -36), '16:30', 'consultation', 'cancelled', 'High blood pressure review', 'Cancelled by patient over phone', ((current_date + -45) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000156', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000005', (current_date + -36), '17:30', 'follow_up', 'completed', 'General weakness', null, ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000236', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', (current_date + -35), '12:00', 'consultation', 'completed', 'Acidity and bloating', null, ((current_date + -37) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000296', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000011', (current_date + -35), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -37) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000347', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000002', (current_date + -35), '12:00', 'follow_up', 'completed', 'Seizure follow-up', null, ((current_date + -44) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000279', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000009', (current_date + -35), '15:00', 'follow_up', 'completed', 'Ultrasound abdomen', null, ((current_date + -36) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000059', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000011', (current_date + -35), '15:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -45) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000185', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000001', (current_date + -35), '17:00', 'consultation', 'no_show', 'Palpitations', null, ((current_date + -37) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000200', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000013', (current_date + -35), '17:00', 'follow_up', 'completed', 'Knee pain', null, ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000138', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000005', (current_date + -35), '17:30', 'consultation', 'cancelled', 'Acidity and bloating', 'Cancelled by patient over phone', ((current_date + -42) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000348', 'd0c00004-0000-4000-8000-000000000065', 'd0c00002-0000-4000-8000-000000000013', (current_date + -35), '17:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -42) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000069', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000010', (current_date + -34), '09:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -39) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000298', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000001', (current_date + -34), '09:30', 'consultation', 'no_show', 'Chest pain on exertion', null, ((current_date + -41) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000290', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000005', (current_date + -34), '10:00', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000013', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', (current_date + -34), '12:00', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -39) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000107', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000003', (current_date + -34), '14:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -37) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000237', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000005', (current_date + -34), '17:00', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -41) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000293', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000002', (current_date + -34), '17:00', 'follow_up', 'completed', 'Seizure follow-up', null, ((current_date + -44) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000016', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000001', (current_date + -33), '09:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000135', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000013', (current_date + -33), '12:30', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -43) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000029', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000009', (current_date + -33), '15:00', 'consultation', 'completed', 'CT follow-up', null, ((current_date + -34) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000046', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000003', (current_date + -33), '15:30', 'consultation', 'cancelled', 'Lower back pain', 'Cancelled by patient over phone', ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000343', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000004', (current_date + -33), '16:00', 'consultation', 'completed', 'Vaccination', null, ((current_date + -37) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000337', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000004', (current_date + -32), '11:00', 'follow_up', 'completed', 'Loose motions', null, ((current_date + -40) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000020', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', (current_date + -32), '14:00', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -40) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000227', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000004', (current_date + -32), '16:00', 'consultation', 'completed', 'Growth check-up', null, ((current_date + -34) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000084', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000010', (current_date + -32), '16:30', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000230', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000012', (current_date + -31), '09:30', 'follow_up', 'cancelled', 'General weakness', 'Cancelled by patient over phone', ((current_date + -34) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000111', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', (current_date + -31), '11:30', 'consultation', 'completed', 'Dizziness', null, ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000253', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000002', (current_date + -31), '14:00', 'checkup', 'completed', 'Recurrent headaches', null, ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000250', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000005', (current_date + -31), '14:30', 'consultation', 'completed', 'Diabetes follow-up', null, ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000129', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000011', (current_date + -30), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -31) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000266', 'd0c00004-0000-4000-8000-000000000078', 'd0c00002-0000-4000-8000-000000000006', (current_date + -30), '16:30', 'follow_up', 'cancelled', 'Pelvic pain', 'Cancelled by patient over phone', ((current_date + -38) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000199', 'd0c00004-0000-4000-8000-000000000032', 'd0c00002-0000-4000-8000-000000000011', (current_date + -29), '10:00', 'consultation', 'completed', 'Palpitations', null, ((current_date + -31) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000120', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000010', (current_date + -29), '10:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000048', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000007', (current_date + -29), '11:30', 'follow_up', 'no_show', 'Skin rash', null, ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000146', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000006', (current_date + -29), '12:00', 'follow_up', 'completed', 'Post-natal visit', null, ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000117', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000009', (current_date + -29), '14:00', 'checkup', 'cancelled', 'CT follow-up', 'Cancelled by patient over phone', ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000139', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000013', (current_date + -28), '15:30', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -33) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000201', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000004', (current_date + -28), '16:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -36) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000081', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000004', (current_date + -27), '11:30', 'consultation', 'completed', 'Fever and cough', null, ((current_date + -31) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000260', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000005', (current_date + -27), '14:30', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -29) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000050', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000009', (current_date + -27), '15:30', 'consultation', 'completed', 'Imaging review', null, ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000160', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000010', (current_date + -27), '16:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -33) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000126', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000013', (current_date + -27), '17:00', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -35) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000205', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000012', (current_date + -26), '10:30', 'follow_up', 'completed', 'Fever for 3 days', null, ((current_date + -30) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000276', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000006', (current_date + -26), '15:30', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -31) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000285', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000003', (current_date + -26), '15:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -28) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000054', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000003', (current_date + -26), '17:00', 'checkup', 'completed', 'Knee pain', null, ((current_date + -29) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000041', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000006', (current_date + -25), '12:00', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -29) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000251', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000004', (current_date + -25), '15:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -31) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000306', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000003', (current_date + -25), '15:30', 'consultation', 'no_show', 'Shoulder stiffness', null, ((current_date + -26) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000150', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000005', (current_date + -25), '17:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -33) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000186', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000006', (current_date + -24), '09:00', 'consultation', 'completed', 'Irregular periods', null, ((current_date + -28) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000148', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000005', (current_date + -24), '09:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000017', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000001', (current_date + -24), '10:30', 'follow_up', 'completed', 'Shortness of breath', null, ((current_date + -30) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000062', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000006', (current_date + -24), '10:30', 'checkup', 'completed', 'Antenatal check-up', null, ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000213', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000006', (current_date + -24), '12:30', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -29) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000105', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000012', (current_date + -24), '14:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -34) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000071', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000011', (current_date + -24), '17:30', 'consultation', 'completed', 'Palpitations', null, ((current_date + -31) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000289', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000011', (current_date + -23), '10:30', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000068', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000013', (current_date + -23), '12:00', 'follow_up', 'completed', 'Ankle sprain', null, ((current_date + -32) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000088', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000010', (current_date + -23), '12:00', 'emergency', 'no_show', 'Acute abdominal pain', null, ((current_date + -25) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000142', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000003', (current_date + -23), '12:00', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -28) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000110', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000007', (current_date + -22), '12:00', 'checkup', 'completed', 'Acne', null, ((current_date + -25) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000161', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000001', (current_date + -22), '17:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -30) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000106', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000013', (current_date + -21), '09:30', 'follow_up', 'completed', 'Shoulder stiffness', null, ((current_date + -23) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000085', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000012', (current_date + -21), '10:00', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -27) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000002', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000005', (current_date + -21), '10:30', 'follow_up', 'completed', 'Fever for 3 days', null, ((current_date + -28) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000300', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000013', (current_date + -21), '14:30', 'consultation', 'no_show', 'Shoulder stiffness', null, ((current_date + -30) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000245', 'd0c00004-0000-4000-8000-000000000071', 'd0c00002-0000-4000-8000-000000000001', (current_date + -21), '16:00', 'follow_up', 'completed', 'Palpitations', null, ((current_date + -29) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000355', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000013', (current_date + -21), '16:00', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -24) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000255', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000004', (current_date + -21), '17:00', 'follow_up', 'completed', 'Growth check-up', null, ((current_date + -29) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000077', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000009', (current_date + -21), '17:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -27) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000228', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000003', (current_date + -20), '15:30', 'consultation', 'cancelled', 'Lower back pain', 'Cancelled by patient over phone', ((current_date + -30) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000315', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000009', (current_date + -19), '09:00', 'consultation', 'completed', 'Imaging review', null, ((current_date + -26) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000074', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000002', (current_date + -19), '12:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000280', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000011', (current_date + -19), '15:00', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000132', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000005', (current_date + -18), '09:00', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -26) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000303', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000002', (current_date + -18), '09:30', 'checkup', 'completed', 'Numbness in hands', null, ((current_date + -28) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000098', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000004', (current_date + -18), '16:00', 'follow_up', 'completed', 'Loose motions', null, ((current_date + -27) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000035', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000007', (current_date + -18), '16:30', 'follow_up', 'completed', 'Itching', null, ((current_date + -26) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000091', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000005', (current_date + -16), '11:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -19) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000196', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000001', (current_date + -16), '14:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -25) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000220', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000007', (current_date + -16), '15:00', 'consultation', 'completed', 'Skin rash', null, ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000102', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000004', (current_date + -16), '16:30', 'follow_up', 'completed', 'Loose motions', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000127', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000005', (current_date + -16), '17:00', 'follow_up', 'no_show', 'Diabetes follow-up', null, ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000145', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000005', (current_date + -16), '17:30', 'consultation', 'completed', 'Fever for 3 days', null, ((current_date + -22) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000248', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000011', (current_date + -15), '09:00', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -24) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000025', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', (current_date + -15), '10:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000122', 'd0c00004-0000-4000-8000-000000000014', 'd0c00002-0000-4000-8000-000000000013', (current_date + -15), '12:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000325', 'd0c00004-0000-4000-8000-000000000045', 'd0c00002-0000-4000-8000-000000000004', (current_date + -15), '12:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -24) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000244', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000009', (current_date + -15), '17:00', 'follow_up', 'completed', 'CT follow-up', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000076', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000002', (current_date + -14), '09:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000178', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000002', (current_date + -14), '10:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000292', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000012', (current_date + -14), '10:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -22) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000141', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000005', (current_date + -14), '11:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000309', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000009', (current_date + -14), '12:00', 'follow_up', 'completed', 'Imaging review', null, ((current_date + -24) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000294', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000003', (current_date + -14), '12:30', 'consultation', 'cancelled', 'Ankle sprain', 'Cancelled by patient over phone', ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000252', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000002', (current_date + -14), '14:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000137', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000007', (current_date + -14), '14:30', 'follow_up', 'completed', 'Hair fall', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000015', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000001', (current_date + -14), '15:00', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000027', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000003', (current_date + -14), '15:00', 'checkup', 'no_show', 'Lower back pain', null, ((current_date + -18) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000241', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000009', (current_date + -14), '16:00', 'consultation', 'no_show', 'CT follow-up', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000101', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000009', (current_date + -14), '16:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000231', 'd0c00004-0000-4000-8000-000000000075', 'd0c00002-0000-4000-8000-000000000006', (current_date + -13), '09:00', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -22) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000125', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000005', (current_date + -13), '10:30', 'checkup', 'completed', 'Fever for 3 days', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000209', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000009', (current_date + -13), '10:30', 'consultation', 'cancelled', 'Imaging review', 'Cancelled by patient over phone', ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000239', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000002', (current_date + -13), '11:00', 'checkup', 'cancelled', 'Seizure follow-up', 'Cancelled by patient over phone', ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000082', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000006', (current_date + -13), '11:30', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -23) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000320', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000006', (current_date + -13), '12:00', 'follow_up', 'completed', 'Irregular periods', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000192', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000013', (current_date + -13), '12:30', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -18) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000030', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000001', (current_date + -13), '16:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000166', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000009', (current_date + -13), '16:00', 'follow_up', 'completed', 'Ultrasound abdomen', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000060', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000012', (current_date + -13), '17:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000118', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000010', (current_date + -13), '17:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000316', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000009', (current_date + -12), '09:00', 'checkup', 'no_show', 'Imaging review', null, ((current_date + -18) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000031', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000002', (current_date + -12), '11:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -19) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000151', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000004', (current_date + -12), '11:00', 'consultation', 'completed', 'Fever and cough', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000133', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000007', (current_date + -12), '15:00', 'checkup', 'completed', 'Skin rash', null, ((current_date + -18) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000312', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000007', (current_date + -12), '16:00', 'consultation', 'no_show', 'Itching', null, ((current_date + -19) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000340', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000010', (current_date + -12), '16:30', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000232', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000013', (current_date + -12), '17:00', 'follow_up', 'completed', 'Shoulder stiffness', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000256', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000003', (current_date + -11), '09:30', 'consultation', 'completed', 'Shoulder stiffness', null, ((current_date + -19) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000317', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000006', (current_date + -11), '10:00', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000322', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', (current_date + -11), '11:00', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000269', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000010', (current_date + -11), '11:30', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000194', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000007', (current_date + -11), '12:00', 'consultation', 'completed', 'Itching', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000202', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000002', (current_date + -11), '12:30', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000262', 'd0c00004-0000-4000-8000-000000000054', 'd0c00002-0000-4000-8000-000000000009', (current_date + -11), '14:00', 'checkup', 'completed', 'Ultrasound abdomen', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000263', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000010', (current_date + -11), '14:00', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -20) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000319', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000005', (current_date + -11), '14:30', 'follow_up', 'completed', 'Fever for 3 days', null, ((current_date + -21) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000222', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000010', (current_date + -11), '15:00', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000092', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000011', (current_date + -11), '15:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -12) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000184', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', (current_date + -11), '15:30', 'consultation', 'completed', 'Numbness in hands', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000080', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000011', (current_date + -11), '16:00', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -12) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000258', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000007', (current_date + -10), '09:00', 'consultation', 'completed', 'Hair fall', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000275', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000013', (current_date + -10), '09:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000321', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000003', (current_date + -10), '10:30', 'follow_up', 'completed', 'Shoulder stiffness', null, ((current_date + -19) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000191', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000011', (current_date + -10), '12:00', 'consultation', 'completed', 'Palpitations', null, ((current_date + -12) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000154', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000004', (current_date + -10), '14:30', 'consultation', 'completed', 'Growth check-up', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000235', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000010', (current_date + -10), '14:30', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000216', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000013', (current_date + -10), '15:00', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000028', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000005', (current_date + -10), '16:00', 'consultation', 'completed', 'Diabetes follow-up', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000003', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000001', (current_date + -9), '09:00', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -16) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000308', 'd0c00004-0000-4000-8000-000000000073', 'd0c00002-0000-4000-8000-000000000009', (current_date + -9), '09:00', 'follow_up', 'completed', 'CT follow-up', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000130', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000002', (current_date + -9), '09:30', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000053', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000007', (current_date + -9), '10:00', 'checkup', 'completed', 'Acne', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000036', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000011', (current_date + -9), '10:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -18) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000112', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000002', (current_date + -9), '15:30', 'checkup', 'completed', 'Recurrent headaches', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000210', 'd0c00004-0000-4000-8000-000000000075', 'd0c00002-0000-4000-8000-000000000002', (current_date + -9), '16:00', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000271', 'd0c00004-0000-4000-8000-000000000019', 'd0c00002-0000-4000-8000-000000000010', (current_date + -9), '17:00', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000281', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000002', (current_date + -8), '09:00', 'follow_up', 'completed', 'Numbness in hands', null, ((current_date + -18) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000143', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', (current_date + -8), '10:00', 'checkup', 'completed', 'High blood pressure review', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000212', 'd0c00004-0000-4000-8000-000000000065', 'd0c00002-0000-4000-8000-000000000012', (current_date + -8), '10:00', 'consultation', 'completed', 'General weakness', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000223', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000009', (current_date + -8), '10:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000078', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000010', (current_date + -8), '12:00', 'emergency', 'completed', 'Acute abdominal pain', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000329', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000010', (current_date + -8), '16:00', 'emergency', 'completed', 'Road traffic injury', null, ((current_date + -14) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000249', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', (current_date + -7), '09:30', 'checkup', 'completed', 'Chest pain on exertion', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000108', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', (current_date + -7), '10:00', 'checkup', 'no_show', 'Shortness of breath', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000305', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000005', (current_date + -7), '10:00', 'consultation', 'cancelled', 'Acidity and bloating', 'Cancelled by patient over phone', ((current_date + -12) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000090', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000007', (current_date + -7), '11:00', 'checkup', 'completed', 'Itching', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000204', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000006', (current_date + -7), '11:30', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000075', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000005', (current_date + -7), '12:00', 'follow_up', 'completed', 'General weakness', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000259', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000013', (current_date + -7), '16:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -10) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000100', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000011', (current_date + -7), '16:30', 'consultation', 'completed', 'Palpitations', null, ((current_date + -17) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000282', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '09:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -16) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000165', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', (current_date + -6), '09:30', 'consultation', 'completed', 'General weakness', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000350', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000002', (current_date + -6), '11:00', 'consultation', 'completed', 'Seizure follow-up', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000208', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000011', (current_date + -6), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000061', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000012', (current_date + -6), '12:30', 'checkup', 'completed', 'Diabetes follow-up', null, ((current_date + -15) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000131', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000003', (current_date + -6), '12:30', 'checkup', 'completed', 'Knee pain', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000277', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '14:00', 'consultation', 'cancelled', 'Lower back pain', 'Cancelled by patient over phone', ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000144', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000005', (current_date + -6), '15:00', 'checkup', 'completed', 'Acidity and bloating', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000095', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '15:30', 'checkup', 'completed', 'Shoulder stiffness', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000234', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000010', (current_date + -6), '15:30', 'emergency', 'completed', 'Breathlessness', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000033', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000010', (current_date + -6), '16:00', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000345', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000013', (current_date + -6), '16:00', 'checkup', 'completed', 'Ankle sprain', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000169', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000002', (current_date + -6), '17:00', 'consultation', 'completed', 'Recurrent headaches', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000032', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000003', (current_date + -5), '09:00', 'consultation', 'cancelled', 'Ankle sprain', 'Cancelled by patient over phone', ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000152', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000006', (current_date + -5), '09:30', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -10) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000195', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000002', (current_date + -5), '09:30', 'checkup', 'completed', 'Seizure follow-up', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000203', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000011', (current_date + -5), '10:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000040', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000004', (current_date + -5), '11:00', 'consultation', 'completed', 'Vaccination', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000123', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000011', (current_date + -5), '12:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -14) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000174', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000012', (current_date + -5), '12:00', 'checkup', 'completed', 'Diabetes follow-up', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000225', 'd0c00004-0000-4000-8000-000000000067', 'd0c00002-0000-4000-8000-000000000005', (current_date + -5), '14:30', 'checkup', 'completed', 'Acidity and bloating', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000242', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000003', (current_date + -5), '14:30', 'checkup', 'completed', 'Shoulder stiffness', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000039', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000001', (current_date + -5), '15:00', 'checkup', 'completed', 'High blood pressure review', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000119', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000007', (current_date + -5), '15:30', 'consultation', 'cancelled', 'Itching', 'Cancelled by patient over phone', ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000240', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000011', (current_date + -5), '17:00', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000189', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000001', (current_date + -5), '17:30', 'follow_up', 'no_show', 'High blood pressure review', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000288', 'd0c00004-0000-4000-8000-000000000047', 'd0c00002-0000-4000-8000-000000000003', (current_date + -5), '17:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000268', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000007', (current_date + -4), '09:00', 'follow_up', 'completed', 'Acne', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000247', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000011', (current_date + -4), '09:30', 'follow_up', 'completed', 'Shortness of breath', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000314', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000010', (current_date + -4), '09:30', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000331', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000002', (current_date + -4), '09:30', 'follow_up', 'completed', 'Numbness in hands', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000221', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000007', (current_date + -4), '10:00', 'consultation', 'cancelled', 'Hair fall', 'Cancelled by patient over phone', ((current_date + -14) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000327', 'd0c00004-0000-4000-8000-000000000078', 'd0c00002-0000-4000-8000-000000000006', (current_date + -4), '11:00', 'follow_up', 'completed', 'Pelvic pain', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000065', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000006', (current_date + -4), '12:30', 'consultation', 'completed', 'Post-natal visit', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000351', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000001', (current_date + -4), '14:30', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000052', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000005', (current_date + -4), '15:30', 'consultation', 'completed', 'Diabetes follow-up', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000323', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000004', (current_date + -3), '09:30', 'follow_up', 'completed', 'Vaccination', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000311', 'd0c00004-0000-4000-8000-000000000047', 'd0c00002-0000-4000-8000-000000000003', (current_date + -3), '10:00', 'follow_up', 'completed', 'Lower back pain', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000049', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000007', (current_date + -3), '11:00', 'consultation', 'completed', 'Hair fall', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000004', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000007', (current_date + -3), '12:00', 'follow_up', 'cancelled', 'Hair fall', 'Cancelled by patient over phone', ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000233', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000011', (current_date + -3), '14:00', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000254', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000007', (current_date + -3), '15:00', 'consultation', 'completed', 'Hair fall', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000042', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000011', (current_date + -3), '15:30', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000272', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', (current_date + -3), '17:00', 'consultation', 'completed', 'Shortness of breath', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000087', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000012', (current_date + -3), '17:30', 'consultation', 'completed', 'Acidity and bloating', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000270', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000003', (current_date + -3), '17:30', 'consultation', 'completed', 'Lower back pain', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000019', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000001', (current_date + -2), '10:30', 'follow_up', 'completed', 'Palpitations', null, ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000352', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000006', (current_date + -2), '10:30', 'consultation', 'completed', 'Irregular periods', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000055', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000009', (current_date + -2), '11:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000257', 'd0c00004-0000-4000-8000-000000000021', 'd0c00002-0000-4000-8000-000000000013', (current_date + -2), '11:30', 'consultation', 'no_show', 'Knee pain', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000172', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000013', (current_date + -2), '12:00', 'follow_up', 'completed', 'Ankle sprain', null, ((current_date + -9) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000149', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000011', (current_date + -2), '12:30', 'checkup', 'no_show', 'Shortness of breath', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000034', 'd0c00004-0000-4000-8000-000000000079', 'd0c00002-0000-4000-8000-000000000012', (current_date + -2), '15:30', 'follow_up', 'completed', 'Diabetes follow-up', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000339', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000007', (current_date + -2), '16:00', 'consultation', 'no_show', 'Skin rash', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000158', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', (current_date + -2), '16:30', 'consultation', 'completed', 'Dizziness', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000073', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000013', (current_date + -1), '10:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000114', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000009', (current_date + -1), '11:30', 'consultation', 'no_show', 'CT follow-up', null, ((current_date + -11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000328', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', (current_date + -1), '14:30', 'checkup', 'cancelled', 'Shortness of breath', 'Cancelled by patient over phone', ((current_date + -10) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000187', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000006', (current_date + -1), '15:00', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000299', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', (current_date + -1), '15:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000313', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000004', (current_date + -1), '15:30', 'consultation', 'completed', 'Vaccination', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000336', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000010', (current_date + -1), '15:30', 'emergency', 'completed', 'High fever with chills', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000168', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000002', (current_date + -1), '16:00', 'follow_up', 'completed', 'Dizziness', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000157', 'd0c00004-0000-4000-8000-000000000029', 'd0c00002-0000-4000-8000-000000000013', (current_date + -1), '16:30', 'consultation', 'completed', 'Knee pain', null, ((current_date + -2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000304', 'd0c00004-0000-4000-8000-000000000058', 'd0c00002-0000-4000-8000-000000000006', (current_date + -1), '17:00', 'consultation', 'completed', 'Antenatal check-up', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000064', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000001', (current_date + -1), '17:30', 'consultation', 'completed', 'Chest pain on exertion', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000136', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000006', (current_date + 0), '09:00', 'consultation', 'confirmed', 'Antenatal check-up', null, ((current_date + -1) + time '09:00'), 'website', 'DCB-FV5H'),
+  ('d0c00005-0000-4000-8000-000000000012', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '09:30', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + -8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000175', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000013', (current_date + 0), '09:30', 'checkup', 'confirmed', 'Shoulder stiffness', null, ((current_date + -9) + time '09:00'), 'website', 'DCB-G7DF'),
+  ('d0c00005-0000-4000-8000-000000000011', 'd0c00004-0000-4000-8000-000000000014', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '10:30', 'follow_up', 'completed', 'Chest pain on exertion', null, ((current_date + -2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000206', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000013', (current_date + 0), '11:00', 'consultation', 'completed', 'Knee pain', null, ((current_date + -1) + time '09:00'), 'website', 'DCB-GJLD'),
+  ('d0c00005-0000-4000-8000-000000000104', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000010', (current_date + 0), '11:30', 'emergency', 'scheduled', 'Road traffic injury', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000007', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '12:00', 'consultation', 'completed', 'High blood pressure review', null, ((current_date + -2) + time '09:00'), 'website', 'DCB-GVTB'),
+  ('d0c00005-0000-4000-8000-000000000008', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '12:30', 'follow_up', 'confirmed', 'Palpitations', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000093', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000007', (current_date + 0), '12:30', 'follow_up', 'confirmed', 'Acne', null, ((current_date + -7) + time '09:00'), 'website', 'DCB-H819'),
+  ('d0c00005-0000-4000-8000-000000000086', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000003', (current_date + 0), '14:30', 'consultation', 'completed', 'Ankle sprain', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000261', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000012', (current_date + 0), '14:30', 'consultation', 'confirmed', 'Diabetes follow-up', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000171', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000005', (current_date + 0), '15:00', 'checkup', 'confirmed', 'Acidity and bloating', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000009', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '17:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000181', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000007', (current_date + 0), '17:00', 'consultation', 'confirmed', 'Itching', null, ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000214', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000002', (current_date + 0), '17:00', 'consultation', 'checked_in', 'Numbness in hands', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000010', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000001', (current_date + 0), '17:30', 'checkup', 'completed', 'Shortness of breath', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000295', 'd0c00004-0000-4000-8000-000000000032', 'd0c00002-0000-4000-8000-000000000009', (current_date + 0), '17:30', 'consultation', 'completed', 'Ultrasound abdomen', null, ((current_date + -2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000024', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000001', (current_date + 1), '09:30', 'follow_up', 'scheduled', 'Shortness of breath', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000182', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000007', (current_date + 1), '10:00', 'consultation', 'scheduled', 'Skin rash', null, ((current_date + -9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000297', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000006', (current_date + 1), '10:30', 'follow_up', 'scheduled', 'Antenatal check-up', null, ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000330', 'd0c00004-0000-4000-8000-000000000021', 'd0c00002-0000-4000-8000-000000000013', (current_date + 1), '11:00', 'consultation', 'scheduled', 'Lower back pain', null, ((current_date + -3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000265', 'd0c00004-0000-4000-8000-000000000071', 'd0c00002-0000-4000-8000-000000000011', (current_date + 1), '12:00', 'consultation', 'confirmed', 'Shortness of breath', null, ((current_date + 0) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000335', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000005', (current_date + 1), '14:30', 'consultation', 'confirmed', 'Acidity and bloating', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000224', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000013', (current_date + 1), '15:30', 'checkup', 'scheduled', 'Knee pain', null, ((current_date + -2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000341', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000013', (current_date + 1), '16:30', 'consultation', 'scheduled', 'Lower back pain', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000140', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000012', (current_date + 2), '10:30', 'consultation', 'confirmed', 'Fever for 3 days', null, ((current_date + -7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000226', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000013', (current_date + 2), '17:30', 'consultation', 'scheduled', 'Shoulder stiffness', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000089', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000009', (current_date + 3), '10:00', 'consultation', 'confirmed', 'Ultrasound abdomen', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000238', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000011', (current_date + 3), '10:00', 'follow_up', 'scheduled', 'Chest pain on exertion', null, ((current_date + -2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000217', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000013', (current_date + 3), '11:30', 'consultation', 'scheduled', 'Knee pain', null, ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000334', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000011', (current_date + 3), '14:00', 'follow_up', 'confirmed', 'Palpitations', null, ((current_date + -3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000163', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000007', (current_date + 3), '15:30', 'follow_up', 'confirmed', 'Hair fall', null, ((current_date + 0) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000115', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000007', (current_date + 3), '16:30', 'follow_up', 'confirmed', 'Hair fall', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000005', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000001', (current_date + 4), '09:00', 'follow_up', 'confirmed', 'Palpitations', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000063', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000007', (current_date + 4), '10:00', 'consultation', 'scheduled', 'Itching', null, ((current_date + -1) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000097', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000001', (current_date + 4), '10:30', 'consultation', 'confirmed', 'Chest pain on exertion', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000326', 'd0c00004-0000-4000-8000-000000000041', 'd0c00002-0000-4000-8000-000000000013', (current_date + 4), '11:30', 'follow_up', 'confirmed', 'Lower back pain', null, ((current_date + -6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000044', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000002', (current_date + 4), '12:00', 'consultation', 'confirmed', 'Seizure follow-up', null, ((current_date + -3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000353', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000005', (current_date + 4), '12:00', 'consultation', 'confirmed', 'General weakness', null, ((current_date + 3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000246', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000010', (current_date + 4), '12:30', 'emergency', 'confirmed', 'High fever with chills', null, ((current_date + -5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000342', 'd0c00004-0000-4000-8000-000000000060', 'd0c00002-0000-4000-8000-000000000002', (current_date + 4), '12:30', 'consultation', 'confirmed', 'Numbness in hands', null, ((current_date + 0) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000128', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000002', (current_date + 4), '14:00', 'consultation', 'scheduled', 'Numbness in hands', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000037', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000011', (current_date + 4), '16:30', 'consultation', 'confirmed', 'Chest pain on exertion', null, ((current_date + 0) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000070', 'd0c00004-0000-4000-8000-000000000031', 'd0c00002-0000-4000-8000-000000000010', (current_date + 5), '09:00', 'emergency', 'scheduled', 'High fever with chills', null, ((current_date + 1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000274', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000002', (current_date + 5), '09:30', 'consultation', 'scheduled', 'Numbness in hands', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000190', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000004', (current_date + 5), '10:00', 'follow_up', 'confirmed', 'Loose motions', null, ((current_date + -3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000332', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000007', (current_date + 5), '10:30', 'follow_up', 'scheduled', 'Itching', null, ((current_date + -4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000164', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000010', (current_date + 5), '14:00', 'emergency', 'confirmed', 'Road traffic injury', null, ((current_date + 2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000134', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000012', (current_date + 5), '14:30', 'follow_up', 'confirmed', 'Diabetes follow-up', null, ((current_date + 1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000072', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000005', (current_date + 6), '11:00', 'follow_up', 'confirmed', 'Acidity and bloating', null, ((current_date + 3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000162', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000004', (current_date + 6), '12:00', 'follow_up', 'scheduled', 'Growth check-up', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000180', 'd0c00004-0000-4000-8000-000000000042', 'd0c00002-0000-4000-8000-000000000005', (current_date + 6), '14:00', 'follow_up', 'confirmed', 'Diabetes follow-up', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000301', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000012', (current_date + 6), '14:00', 'consultation', 'confirmed', 'Acidity and bloating', null, ((current_date + 4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000307', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000013', (current_date + 6), '14:30', 'follow_up', 'scheduled', 'Shoulder stiffness', null, ((current_date + 1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000153', 'd0c00004-0000-4000-8000-000000000029', 'd0c00002-0000-4000-8000-000000000003', (current_date + 6), '15:30', 'consultation', 'scheduled', 'Lower back pain', null, ((current_date + 1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000159', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000009', (current_date + 6), '16:30', 'consultation', 'scheduled', 'Imaging review', null, ((current_date + 0) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000324', 'd0c00004-0000-4000-8000-000000000028', 'd0c00002-0000-4000-8000-000000000009', (current_date + 6), '17:00', 'consultation', 'scheduled', 'Ultrasound abdomen', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000067', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000012', (current_date + 7), '09:30', 'follow_up', 'scheduled', 'Fever for 3 days', null, ((current_date + 6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000113', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000003', (current_date + 7), '12:30', 'follow_up', 'scheduled', 'Knee pain', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000287', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000006', (current_date + 7), '14:00', 'consultation', 'confirmed', 'Irregular periods', null, ((current_date + 5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000318', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000011', (current_date + 7), '14:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + 4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000099', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000005', (current_date + 7), '15:30', 'checkup', 'confirmed', 'Acidity and bloating', null, ((current_date + -1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000147', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000001', (current_date + 7), '15:30', 'follow_up', 'scheduled', 'Shortness of breath', null, ((current_date + -2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000310', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000011', (current_date + 9), '11:30', 'follow_up', 'confirmed', 'High blood pressure review', null, ((current_date + 2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000023', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000001', (current_date + 9), '14:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + 0) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000022', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000001', (current_date + 9), '15:00', 'consultation', 'scheduled', 'Shortness of breath', null, ((current_date + 6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000021', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000001', (current_date + 9), '15:30', 'checkup', 'scheduled', 'Shortness of breath', null, ((current_date + 7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000193', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000011', (current_date + 9), '16:30', 'follow_up', 'confirmed', 'Shortness of breath', null, ((current_date + 8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000346', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000010', (current_date + 10), '10:00', 'emergency', 'confirmed', 'High fever with chills', null, ((current_date + 4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000058', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000004', (current_date + 10), '11:30', 'consultation', 'scheduled', 'Fever and cough', null, ((current_date + 3) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000264', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000003', (current_date + 10), '14:30', 'follow_up', 'confirmed', 'Lower back pain', null, ((current_date + 6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000349', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000006', (current_date + 10), '17:00', 'consultation', 'confirmed', 'Antenatal check-up', null, ((current_date + 5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000179', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000010', (current_date + 10), '17:30', 'emergency', 'confirmed', 'High fever with chills', null, ((current_date + 1) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000207', 'd0c00004-0000-4000-8000-000000000077', 'd0c00002-0000-4000-8000-000000000002', (current_date + 11), '12:00', 'checkup', 'confirmed', 'Recurrent headaches', null, ((current_date + 5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000218', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000005', (current_date + 11), '14:30', 'consultation', 'confirmed', 'General weakness', null, ((current_date + 7) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000006', 'd0c00004-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000012', (current_date + 11), '16:30', 'consultation', 'scheduled', 'Fever for 3 days', null, ((current_date + 2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000038', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000011', (current_date + 11), '17:00', 'follow_up', 'scheduled', 'Shortness of breath', null, ((current_date + 6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000273', 'd0c00004-0000-4000-8000-000000000060', 'd0c00002-0000-4000-8000-000000000006', (current_date + 11), '17:00', 'consultation', 'confirmed', 'Pelvic pain', null, ((current_date + 8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000045', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000006', (current_date + 12), '09:00', 'follow_up', 'scheduled', 'Antenatal check-up', null, ((current_date + 2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000176', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000003', (current_date + 12), '14:00', 'consultation', 'confirmed', 'Shoulder stiffness', null, ((current_date + 5) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000121', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000009', (current_date + 12), '15:00', 'consultation', 'scheduled', 'CT follow-up', null, ((current_date + 2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000229', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000011', (current_date + 12), '16:30', 'consultation', 'scheduled', 'High blood pressure review', null, ((current_date + 2) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000286', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000013', (current_date + 12), '16:30', 'follow_up', 'confirmed', 'Shoulder stiffness', null, ((current_date + 11) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000083', 'd0c00004-0000-4000-8000-000000000060', 'd0c00002-0000-4000-8000-000000000003', (current_date + 13), '09:00', 'consultation', 'confirmed', 'Lower back pain', null, ((current_date + 12) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000267', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000007', (current_date + 13), '09:00', 'consultation', 'scheduled', 'Acne', null, ((current_date + 9) + time '09:00'), default, default);
+insert into public.appointments (id, patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, notes, created_at, source, booking_ref) values
+  ('d0c00005-0000-4000-8000-000000000177', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000001', (current_date + 13), '11:00', 'consultation', 'scheduled', 'High blood pressure review', null, ((current_date + 4) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000302', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000007', (current_date + 13), '14:00', 'consultation', 'scheduled', 'Acne', null, ((current_date + 8) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000344', 'd0c00004-0000-4000-8000-000000000054', 'd0c00002-0000-4000-8000-000000000013', (current_date + 14), '09:00', 'consultation', 'confirmed', 'Shoulder stiffness', null, ((current_date + 9) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000096', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000004', (current_date + 14), '10:00', 'consultation', 'scheduled', 'Loose motions', null, ((current_date + 6) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000333', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000009', (current_date + 14), '10:30', 'consultation', 'confirmed', 'CT follow-up', null, ((current_date + 13) + time '09:00'), default, default),
+  ('d0c00005-0000-4000-8000-000000000354', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000007', (current_date + 14), '15:30', 'consultation', 'scheduled', 'Hair fall', null, ((current_date + 12) + time '09:00'), default, default);
 
 -- prescriptions (186)
 insert into public.prescriptions (id, patient_id, doctor_id, diagnosis, symptoms, medications, advice, follow_up_date, prescribed_on, created_at) values
@@ -3317,6 +3447,51 @@ insert into public.site_enquiries (id, ref, name, phone, email, topic, specialit
   ('d0c00016-0000-4000-8000-000000000006', 'DCH-482286', 'Karan Sethi', '9650067890', 'karan.sethi@gmail.com', 'Careers', null, 'I am a BSc Nursing graduate with 3 years of ICU experience. Are there any openings?', 'in_progress', 'CV forwarded to HR.', ((current_date + -6) + time '14:40')),
   ('d0c00016-0000-4000-8000-000000000007', 'DCH-482323', 'Win Big Offers', '9000000000', 'promo@spam.example', 'Something else', null, 'Get 10,000 followers instantly!!! Visit our site now.', 'spam', null, ((current_date + -7) + time '15:15'));
 
+-- doctor_leaves (8)
+insert into public.doctor_leaves (id, doctor_id, kind, start_date, end_date, start_time, end_time, status, reason, created_at) values
+  ('d0c00017-0000-4000-8000-000000000001', 'd0c00002-0000-4000-8000-000000000008', 'leave', (current_date + -3), (current_date + 12), null, null, 'approved', 'Medical leave', ((current_date + -5) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', 'conference', (current_date + 9), (current_date + 10), null, null, 'approved', 'Cardiological Society of India — annual conference', ((current_date + -3) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000011', 'surgery', (current_date + 1), (current_date + 1), '10:00', '13:00', 'approved', 'CABG — OT 2', ((current_date + -4) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000005', 'meeting', (current_date + 2), (current_date + 2), '16:00', '17:00', 'approved', 'Quality & NABH committee', ((current_date + -5) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000013', 'surgery', (current_date + 3), (current_date + 3), '09:00', '12:00', 'approved', 'Spinal fusion — OT 1', ((current_date + -6) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000002', 'leave', (current_date + 20), (current_date + 22), null, null, 'pending', 'Family function', ((current_date + -7) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000012', 'training', (current_date + 14), (current_date + 14), '14:00', '17:00', 'pending', 'Insulin pump certification', ((current_date + -8) + time '11:00')),
+  ('d0c00017-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000006', 'leave', (current_date + 5), (current_date + 5), null, null, 'rejected', 'Personal work — clashes with scheduled deliveries', ((current_date + -9) + time '11:00'));
+
+-- holidays (10)
+insert into public.holidays (id, holiday_date, name, note, created_at) values
+  ('d0c00018-0000-4000-8000-000000000001', '2026-01-26', 'Republic Day', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000002', '2026-08-15', 'Independence Day', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000003', '2026-10-02', 'Gandhi Jayanti', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000004', '2026-10-20', 'Dussehra', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000005', '2026-11-08', 'Diwali', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000006', '2026-12-25', 'Christmas', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000007', '2027-01-26', 'Republic Day', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000008', '2027-08-15', 'Independence Day', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000009', '2027-10-02', 'Gandhi Jayanti', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00')),
+  ('d0c00018-0000-4000-8000-000000000010', '2027-12-25', 'Christmas', 'OPD closed · Emergency & pharmacy open 24×7', ((current_date + -120) + time '10:00'));
+
+-- audit_log (18)
+insert into public.audit_log (id, table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes, created_at) values
+  ('d0c00019-0000-4000-8000-000000000012', 'payments', 'd0c00012-0000-4000-8000-000000000001', 'insert', 'd0c00000-0000-4000-8000-000000000004', 'Rahul Verma', 'accountant', '₹1092 · CARD', '{"amount":{"to":1092},"method":{"to":"card"},"reference":{"to":"CAR478540"}}'::jsonb, ((current_date + 0) + time '13:10')),
+  ('d0c00019-0000-4000-8000-000000000005', 'patients', 'd0c00004-0000-4000-8000-000000000004', 'update', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Ashok Gupta (DCH-100004)', '{"phone":{"from":"+91 98111 00000","to":"+91 98245 91865"},"address":{"from":null,"to":"Mayur Vihar Phase 1, New Delhi"}}'::jsonb, ((current_date + 0) + time '10:05')),
+  ('d0c00019-0000-4000-8000-000000000007', 'appointments', 'd0c00005-0000-4000-8000-000000000012', 'update', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', '09:30 · Anita Bose', '{"status":{"from":"scheduled","to":"scheduled"}}'::jsonb, ((current_date + 0) + time '09:41')),
+  ('d0c00019-0000-4000-8000-000000000001', 'patients', 'd0c00004-0000-4000-8000-000000000077', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Abhishek Chopra (DCH-100077)', '{"full_name":{"to":"Abhishek Chopra"},"phone":{"to":"+91 98201 89678"},"gender":{"to":"male"}}'::jsonb, ((current_date + 0) + time '09:10')),
+  ('d0c00019-0000-4000-8000-000000000006', 'appointments', 'd0c00005-0000-4000-8000-000000000136', 'update', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', '09:00 · Nisha Malhotra', '{"status":{"from":"scheduled","to":"confirmed"}}'::jsonb, ((current_date + 0) + time '08:40')),
+  ('d0c00019-0000-4000-8000-000000000008', 'appointments', 'd0c00005-0000-4000-8000-000000000175', 'update', 'd0c00000-0000-4000-8000-000000000002', 'Dr. Arjun Mehta', 'doctor', '09:30 · Pooja Kaur', '{"status":{"from":"scheduled","to":"confirmed"}}'::jsonb, ((current_date + 0) + time '010:42')),
+  ('d0c00019-0000-4000-8000-000000000017', 'prescriptions', 'd0c00006-0000-4000-8000-000000000003', 'insert', 'd0c00000-0000-4000-8000-000000000002', 'Dr. Arjun Mehta', 'doctor', 'Dyslipidemia', '{"diagnosis":{"to":"Dyslipidemia"},"medications":{"to":"3 medicines"}}'::jsonb, ((current_date + -3) + time '13:32')),
+  ('d0c00019-0000-4000-8000-000000000004', 'patients', 'd0c00004-0000-4000-8000-000000000080', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Yash Malhotra (DCH-100080)', '{"full_name":{"to":"Yash Malhotra"},"phone":{"to":"+91 98537 62308"},"gender":{"to":"male"}}'::jsonb, ((current_date + -3) + time '09:31')),
+  ('d0c00019-0000-4000-8000-000000000011', 'invoices', 'd0c00011-0000-4000-8000-000000000003', 'update', 'd0c00000-0000-4000-8000-000000000001', 'Avinash Tosoni', 'owner', 'INV-10003', '{"notes":{"from":null,"to":"Senior citizen concession approved by management"}}'::jsonb, ((current_date + -2) + time '17:45')),
+  ('d0c00019-0000-4000-8000-000000000014', 'payments', 'd0c00012-0000-4000-8000-000000000003', 'insert', 'd0c00000-0000-4000-8000-000000000004', 'Rahul Verma', 'accountant', '₹3885 · CASH', '{"amount":{"to":3885},"method":{"to":"cash"},"reference":{"to":null}}'::jsonb, ((current_date + -2) + time '15:12')),
+  ('d0c00019-0000-4000-8000-000000000018', 'doctor_leaves', 'd0c00017-0000-4000-8000-000000000002', 'update', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Dr. Arjun Mehta — conference', '{"status":{"from":"pending","to":"approved"}}'::jsonb, ((current_date + -2) + time '15:05')),
+  ('d0c00019-0000-4000-8000-000000000016', 'prescriptions', 'd0c00006-0000-4000-8000-000000000002', 'update', 'd0c00000-0000-4000-8000-000000000002', 'Dr. Arjun Mehta', 'doctor', 'Viral fever', '{"advice":{"from":"Review after 2 weeks","to":"Review after 1 week with fasting sugar report"}}'::jsonb, ((current_date + -2) + time '12:31')),
+  ('d0c00019-0000-4000-8000-000000000003', 'patients', 'd0c00004-0000-4000-8000-000000000079', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Sakshi Reddy (DCH-100079)', '{"full_name":{"to":"Sakshi Reddy"},"phone":{"to":"+91 98636 35581"},"gender":{"to":"female"}}'::jsonb, ((current_date + -2) + time '09:24')),
+  ('d0c00019-0000-4000-8000-000000000013', 'payments', 'd0c00012-0000-4000-8000-000000000002', 'insert', 'd0c00000-0000-4000-8000-000000000004', 'Rahul Verma', 'accountant', '₹109326 · CARD', '{"amount":{"to":109326},"method":{"to":"card"},"reference":{"to":"CAR978389"}}'::jsonb, ((current_date + -1) + time '14:11')),
+  ('d0c00019-0000-4000-8000-000000000009', 'invoices', 'd0c00011-0000-4000-8000-000000000001', 'update', 'd0c00000-0000-4000-8000-000000000004', 'Rahul Verma', 'accountant', 'INV-10001', '{"discount":{"from":0,"to":60},"total":{"from":1152,"to":1092}}'::jsonb, ((current_date + -1) + time '12:20')),
+  ('d0c00019-0000-4000-8000-000000000015', 'prescriptions', 'd0c00006-0000-4000-8000-000000000001', 'insert', 'd0c00000-0000-4000-8000-000000000002', 'Dr. Arjun Mehta', 'doctor', 'Paroxysmal SVT', '{"diagnosis":{"to":"Paroxysmal SVT"},"medications":{"to":"1 medicines"}}'::jsonb, ((current_date + -1) + time '11:30')),
+  ('d0c00019-0000-4000-8000-000000000010', 'invoices', 'd0c00011-0000-4000-8000-000000000002', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'INV-10002', '{"total":{"to":109326},"status":{"to":"unpaid"}}'::jsonb, ((current_date + -1) + time '11:02')),
+  ('d0c00019-0000-4000-8000-000000000002', 'patients', 'd0c00004-0000-4000-8000-000000000078', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Suresh Agarwal (DCH-100078)', '{"full_name":{"to":"Suresh Agarwal"},"phone":{"to":"+91 99209 96031"},"gender":{"to":"male"}}'::jsonb, ((current_date + -1) + time '09:17'));
+
 alter table public.admissions enable trigger trg_admissions_sync;
 
 -- 7c. Backfill profiles for any pre-existing auth users (e.g. if you re-run this script on a live project)
@@ -3324,6 +3499,99 @@ insert into public.profiles (id, full_name, email, role)
 select u.id, coalesce(u.raw_user_meta_data ->> 'full_name', split_part(u.email, '@', 1)), u.email, 'patient'
 from auth.users u
 where not exists (select 1 from public.profiles p where p.id = u.id);
+
+
+-- =====================================================================================================
+--  7d. AUDIT TRAIL — who changed what, and when
+--
+--  Every insert / update / delete on the clinical + financial tables writes one row to public.audit_log
+--  with the acting user (auth.uid() → profiles), a short summary of the record and a column-level diff
+--  ({"column": {"from": old, "to": new}}). The trigger runs as SECURITY DEFINER, so users cannot write,
+--  edit or delete audit rows themselves: RLS allows the owner to read everything and every other staff
+--  member to read only their own actions (see ROW_RULES in src/auth/permissions.ts).
+--
+--  Created AFTER the demo data is loaded, so the seed itself is not logged
+--  (a short demo history is seeded directly instead).
+--  Server-side callers without a user (e.g. the public booking API) can label themselves with
+--    perform set_config('app.actor_name', 'Website booking', true);
+--    perform set_config('app.actor_role', 'public', true);
+-- =====================================================================================================
+
+create or replace function public.audit_summary(p_table text, r jsonb)
+returns text language sql immutable set search_path = public as $$
+  select left(case p_table
+    when 'patients'      then concat_ws(' ', r ->> 'full_name', '(' || (r ->> 'mrn') || ')')
+    when 'invoices'      then r ->> 'invoice_number'
+    when 'appointments'  then concat_ws(' · ', r ->> 'appointment_date', r ->> 'appointment_time')
+    when 'payments'      then '₹' || (r ->> 'amount') || ' · ' || upper(coalesce(r ->> 'method', ''))
+    when 'prescriptions' then r ->> 'diagnosis'
+    when 'lab_tests'     then r ->> 'test_name'
+    when 'doctor_leaves' then concat_ws(' ', r ->> 'kind', r ->> 'start_date',
+                                case when r ->> 'end_date' <> r ->> 'start_date' then '→ ' || (r ->> 'end_date') end)
+    when 'holidays'      then concat_ws(' · ', r ->> 'name', r ->> 'holiday_date')
+    when 'expenses'      then r ->> 'description'
+    else coalesce(r ->> 'full_name', r ->> 'name', r ->> 'title')
+  end, 160)
+$$;
+
+create or replace function public.audit_row()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_old     jsonb := case when tg_op in ('UPDATE', 'DELETE') then to_jsonb(old) end;
+  v_new     jsonb := case when tg_op in ('INSERT', 'UPDATE') then to_jsonb(new) end;
+  v_row     jsonb := coalesce(v_new, v_old);
+  v_changes jsonb := '{}'::jsonb;
+  v_actor   uuid  := auth.uid();
+  v_name    text;
+  v_role    text;
+  k         text;
+begin
+  if tg_op = 'UPDATE' then
+    for k in select jsonb_object_keys(v_new) loop
+      continue when k in ('id', 'created_at', 'updated_at');
+      if (v_new -> k) is distinct from (v_old -> k) then
+        v_changes := v_changes || jsonb_build_object(k, jsonb_build_object('from', v_old -> k, 'to', v_new -> k));
+      end if;
+    end loop;
+    if v_changes = '{}'::jsonb then return new; end if;   -- nothing meaningful changed
+  else
+    for k in select jsonb_object_keys(v_row) loop
+      continue when k in ('id', 'created_at', 'updated_at') or jsonb_typeof(v_row -> k) = 'null';
+      v_changes := v_changes || jsonb_build_object(k, jsonb_build_object(case when tg_op = 'INSERT' then 'to' else 'from' end, v_row -> k));
+    end loop;
+  end if;
+
+  if v_actor is not null then
+    select p.full_name, p.role::text into v_name, v_role from public.profiles p where p.id = v_actor;
+  end if;
+
+  insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
+  values (
+    tg_table_name,
+    (v_row ->> 'id')::uuid,
+    lower(tg_op),
+    v_actor,
+    coalesce(v_name, nullif(current_setting('app.actor_name', true), ''), case when v_actor is null then 'System' else 'Unknown user' end),
+    coalesce(v_role, nullif(current_setting('app.actor_role', true), ''), 'system'),
+    public.audit_summary(tg_table_name, v_row),
+    v_changes
+  );
+  return coalesce(new, old);
+end $$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
+                           'doctors', 'doctor_leaves', 'holidays', 'profiles', 'staff', 'expenses'] loop
+    execute format('drop trigger if exists trg_%1$s_audit on public.%1$I', t);
+    execute format('create trigger trg_%1$s_audit after insert or update or delete on public.%1$I
+                    for each row execute function public.audit_row()', t);
+  end loop;
+end $$;
+
+-- the log is append-only for everyone (only the definer trigger writes to it)
+revoke insert, update, delete, truncate on public.audit_log from anon, authenticated;
 
 
 -- =====================================================================================================
@@ -3424,6 +3692,307 @@ create policy site_media_public_read on storage.objects for select to anon, auth
 create policy site_media_owner_insert on storage.objects for insert to authenticated with check (bucket_id = 'site-media' and public.has_role('owner'));
 create policy site_media_owner_update on storage.objects for update to authenticated using (bucket_id = 'site-media' and public.has_role('owner'));
 create policy site_media_owner_delete on storage.objects for delete to authenticated using (bucket_id = 'site-media' and public.has_role('owner'));
+
+-- 8e. profile photos: public read; each user writes only inside their own "<user id>/" folder
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 2097152, array['image/png', 'image/jpeg', 'image/webp'])
+on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists avatars_public_read on storage.objects;
+drop policy if exists avatars_own_insert on storage.objects;
+drop policy if exists avatars_own_update on storage.objects;
+drop policy if exists avatars_own_delete on storage.objects;
+create policy avatars_public_read on storage.objects for select to anon, authenticated using (bucket_id = 'avatars');
+create policy avatars_own_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy avatars_own_update on storage.objects for update to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy avatars_own_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+
+-- =====================================================================================================
+--  9. ONLINE BOOKING (public website → /book)
+--
+--  Anonymous visitors never touch the tables directly. They call these SECURITY DEFINER functions:
+--    public_doctors()                          bookable doctors (no private fields)
+--    public_availability(doctor, from, to)     booked slots, approved leave/blocks, hospital holidays
+--    request_booking_otp(phone)                sends a 6-digit code (rate limited: 1 / 30 s, 5 / hour)
+--    verify_booking_otp(phone, code)           5 attempts per code, 10 minute expiry → one-time token
+--    public_book_appointment(token, …)         re-validates the slot server-side, then creates
+--                                              patient (if new) → appointment → unpaid invoice
+--
+--  SMS: codes are delivered by public.send_booking_otp(). Out of the box it does nothing and — while the
+--  CMS setting "Show the OTP on screen" is ON — the code is returned to the browser for testing.
+--  Connect a provider (MSG91, Twilio, Gupshup…) inside send_booking_otp() and switch that setting OFF.
+--  All dates/times are Indian Standard Time.
+-- =====================================================================================================
+
+drop function if exists public.public_doctors() cascade;
+drop function if exists public.public_availability(uuid, date, date) cascade;
+drop function if exists public.request_booking_otp(text) cascade;
+drop function if exists public.verify_booking_otp(text, text) cascade;
+drop function if exists public.public_book_appointment(uuid, uuid, date, text, text, text, date, text, text) cascade;
+drop function if exists public.send_booking_otp(text, text) cascade;
+drop function if exists public.booking_setting(text, text, text) cascade;
+drop function if exists public.norm_phone(text) cascade;
+
+alter table public.booking_otps enable row level security;   -- no policies: unreachable through the API
+revoke all on public.booking_otps from anon, authenticated;
+
+create or replace function public.norm_phone(p text)
+returns text language sql immutable as $$
+  select right(regexp_replace(coalesce(p, ''), '\D', '', 'g'), 10)
+$$;
+
+-- reads site_content.settings → <group> → <key> (the CMS "Online booking" / "Billing" groups)
+create or replace function public.booking_setting(p_key text, p_default text, p_group text default 'booking')
+returns text language sql stable security definer set search_path = public as $$
+  select coalesce((select data -> p_group ->> p_key from public.site_content where key = 'settings'), p_default)
+$$;
+
+-- ▶ plug your SMS gateway in here. Example (MSG91 via pg_net — enable the pg_net extension first):
+--   perform net.http_post(
+--     url     := 'https://control.msg91.com/api/v5/otp?template_id=<TEMPLATE>&mobile=91' || p_phone || '&otp=' || p_code,
+--     headers := jsonb_build_object('authkey', '<AUTH KEY>', 'Content-Type', 'application/json'));
+create or replace function public.send_booking_otp(p_phone text, p_code text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  null;
+end $$;
+
+create or replace function public.public_doctors()
+returns table (id uuid, full_name text, specialization text, department text, consultation_fee numeric,
+               available_days text[], shift text, status text)
+language sql stable security definer set search_path = public as $$
+  select d.id, d.full_name, d.specialization, dep.name, d.consultation_fee, d.available_days, d.shift, d.status
+  from public.doctors d
+  left join public.departments dep on dep.id = d.department_id
+  where d.status = 'active'
+  order by d.full_name
+$$;
+
+create or replace function public.public_availability(p_doctor uuid, p_from date, p_to date)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with r as (select p_from as f, least(p_to, p_from + 62) as t)
+  select jsonb_build_object(
+    'booked', coalesce((
+      select jsonb_agg(jsonb_build_object('doctor_id', a.doctor_id, 'appointment_date', a.appointment_date,
+                                          'appointment_time', a.appointment_time, 'status', a.status))
+      from public.appointments a, r
+      where (p_doctor is null or a.doctor_id = p_doctor) and a.appointment_date between r.f and r.t
+        and a.status not in ('cancelled', 'no_show')), '[]'::jsonb),
+    'leaves', coalesce((
+      select jsonb_agg(jsonb_build_object('id', l.id, 'doctor_id', l.doctor_id, 'kind', l.kind, 'status', l.status,
+                                          'start_date', l.start_date, 'end_date', l.end_date,
+                                          'start_time', l.start_time, 'end_time', l.end_time))
+      from public.doctor_leaves l, r
+      where (p_doctor is null or l.doctor_id = p_doctor) and l.status = 'approved'
+        and l.start_date <= r.t and l.end_date >= r.f), '[]'::jsonb),
+    'holidays', coalesce((
+      select jsonb_agg(jsonb_build_object('id', h.id, 'holiday_date', h.holiday_date, 'name', h.name))
+      from public.holidays h, r where h.holiday_date between r.f and r.t), '[]'::jsonb))
+$$;
+
+create or replace function public.request_booking_otp(p_phone text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_phone text := public.norm_phone(p_phone);
+  v_code  text;
+begin
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+  if v_phone !~ '^[6-9][0-9]{9}$' then
+    raise exception 'Please enter a valid 10-digit Indian mobile number.';
+  end if;
+  if exists (select 1 from public.booking_otps where phone = v_phone and created_at > now() - interval '30 seconds') then
+    raise exception 'Please wait 30 seconds before requesting another code.';
+  end if;
+  if (select count(*) from public.booking_otps where phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
+    raise exception 'Too many codes requested for this number. Please try again in an hour.';
+  end if;
+
+  v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
+  insert into public.booking_otps (phone, code_hash, expires_at)
+  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes');
+  perform public.send_booking_otp(v_phone, v_code);
+
+  return jsonb_build_object('sent', true, 'expires_in', 600,
+    'demo_code', case when public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
+end $$;
+
+-- returns {ok:true, token} or {ok:false, error} (no exception, so the failed-attempt counter is kept)
+create or replace function public.verify_booking_otp(p_phone text, p_code text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_phone text := public.norm_phone(p_phone);
+  o       public.booking_otps;
+  v_token uuid;
+begin
+  select * into o from public.booking_otps
+  where phone = v_phone and verified_at is null
+  order by created_at desc limit 1
+  for update;
+
+  if not found or o.expires_at < now() then
+    return jsonb_build_object('ok', false, 'error', 'This code has expired. Please request a new one.');
+  end if;
+  if o.attempts >= 5 then
+    return jsonb_build_object('ok', false, 'error', 'Too many wrong attempts. Please request a new code.');
+  end if;
+  if coalesce(p_code, '') !~ '^[0-9]{6}$' or o.code_hash <> extensions.crypt(p_code, o.code_hash) then
+    update public.booking_otps set attempts = attempts + 1 where id = o.id;
+    return jsonb_build_object('ok', false, 'error',
+      case when o.attempts + 1 >= 5 then 'Too many wrong attempts. Please request a new code.'
+           else format('That code is not correct — %s attempt%s left.', 4 - o.attempts, case when 4 - o.attempts = 1 then '' else 's' end) end);
+  end if;
+
+  v_token := gen_random_uuid();
+  update public.booking_otps set verified_at = now(), token = v_token where id = o.id;
+  return jsonb_build_object('ok', true, 'token', v_token);
+end $$;
+
+create or replace function public.public_book_appointment(
+  p_token uuid, p_doctor uuid, p_date date, p_time text,
+  p_name text, p_gender text, p_dob date, p_email text, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  o         public.booking_otps;
+  d         public.doctors;
+  v_patient public.patients;
+  v_appt    public.appointments;
+  v_inv     public.invoices;
+  v_dep     text;
+  v_now     timestamp := now() at time zone 'Asia/Kolkata';
+  v_new     boolean := false;
+  v_name    text := regexp_replace(trim(coalesce(p_name, '')), '\s+', ' ', 'g');
+  v_min     int;
+  v_shift   text[];
+  v_ref     text;
+  v_seq     int;
+  v_fee     numeric;
+  v_rate    numeric;
+  v_tax     numeric;
+  v_advance int := coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30);
+  v_notice  int := coalesce(nullif(public.booking_setting('minNoticeMinutes', '60'), '')::int, 60);
+begin
+  perform set_config('app.actor_name', 'Website booking', true);
+  perform set_config('app.actor_role', 'public', true);
+
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+
+  -- 1. verified phone (one booking per verification, valid 30 minutes)
+  select * into o from public.booking_otps where token = p_token for update;
+  if not found or o.verified_at is null or o.token_used_at is not null or o.verified_at < now() - interval '30 minutes' then
+    raise exception 'OTP_REQUIRED: Please verify your mobile number again.';
+  end if;
+
+  -- 2. input
+  if char_length(v_name) < 2 or char_length(v_name) > 80 then raise exception 'Please enter the patient''s full name.'; end if;
+  if p_gender is null or p_gender not in ('male', 'female', 'other') then p_gender := 'other'; end if;
+  if p_dob is not null and (p_dob > v_now::date or p_dob < v_now::date - 43830) then raise exception 'Please check the date of birth.'; end if;
+  if nullif(trim(p_email), '') is not null and trim(p_email) !~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please check the email address.'; end if;
+  if coalesce(p_time, '') !~ '^[0-2][0-9]:[0-5][0-9]$' then raise exception 'SLOT_UNAVAILABLE: Invalid time.'; end if;
+  v_min := split_part(p_time, ':', 1)::int * 60 + split_part(p_time, ':', 2)::int;
+
+  -- 3. the slot must really be free (same rules as src/lib/schedule.ts)
+  select * into d from public.doctors where id = p_doctor;
+  if not found or d.status <> 'active' then raise exception 'SLOT_UNAVAILABLE: This doctor is not taking bookings right now.'; end if;
+  if p_date < v_now::date or p_date > v_now::date + v_advance then
+    raise exception 'SLOT_UNAVAILABLE: Please choose a date within the next % days.', v_advance;
+  end if;
+  if p_date + make_interval(mins => v_min) < v_now + make_interval(mins => v_notice) then
+    raise exception 'SLOT_UNAVAILABLE: This time is too soon — please pick a later slot.';
+  end if;
+  if v_min % 30 <> 0 or v_min < 480 or v_min > 1110 then raise exception 'SLOT_UNAVAILABLE: Invalid time.'; end if;
+  if exists (select 1 from public.holidays where holiday_date = p_date) then
+    raise exception 'SLOT_UNAVAILABLE: The OPD is closed on this day.';
+  end if;
+  if not (to_char(p_date, 'Dy') = any (coalesce(nullif(d.available_days, '{}'), array['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']))) then
+    raise exception 'SLOT_UNAVAILABLE: The doctor does not consult on this day.';
+  end if;
+  v_shift := regexp_match(coalesce(d.shift, ''), '(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})');
+  if v_shift is not null and (v_min < v_shift[1]::int * 60 + v_shift[2]::int or v_min >= v_shift[3]::int * 60 + v_shift[4]::int) then
+    raise exception 'SLOT_UNAVAILABLE: Outside the doctor''s consulting hours.';
+  end if;
+  if exists (
+    select 1 from public.doctor_leaves l
+    where l.doctor_id = d.id and l.status = 'approved' and p_date between l.start_date and l.end_date
+      and (l.start_time is null
+           or (v_min >= split_part(l.start_time, ':', 1)::int * 60 + split_part(l.start_time, ':', 2)::int
+               and v_min < split_part(l.end_time, ':', 1)::int * 60 + split_part(l.end_time, ':', 2)::int))
+  ) then
+    raise exception 'SLOT_UNAVAILABLE: The doctor is unavailable at this time.';
+  end if;
+
+  -- 4. patient: same mobile AND same name → existing record (families often share one phone)
+  select * into v_patient from public.patients
+  where public.norm_phone(phone) = o.phone and lower(regexp_replace(trim(full_name), '\s+', ' ', 'g')) = lower(v_name)
+  order by created_at limit 1;
+
+  if v_patient.id is not null then
+    if exists (select 1 from public.appointments where patient_id = v_patient.id and doctor_id = d.id
+               and appointment_date = p_date and status not in ('cancelled', 'no_show')) then
+      raise exception 'You already have a booking with this doctor on this day.';
+    end if;
+  else
+    perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
+    select coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::int), 100000) + 1 into v_seq from public.patients;
+    insert into public.patients (mrn, full_name, gender, date_of_birth, phone, email, status)
+    values ('DCH-' || v_seq, v_name, p_gender, p_dob, '+91 ' || substr(o.phone, 1, 5) || ' ' || substr(o.phone, 6),
+            nullif(lower(trim(p_email)), ''), 'outpatient')
+    returning * into v_patient;
+    v_new := true;
+  end if;
+
+  -- 5. appointment (the partial unique index settles a race for the same slot)
+  v_ref := 'DCB-' || upper(encode(extensions.gen_random_bytes(3), 'hex'));
+  begin
+    insert into public.appointments (patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, source, booking_ref)
+    values (v_patient.id, d.id, p_date, p_time, 'consultation', 'scheduled', nullif(left(trim(p_reason), 500), ''), 'website', v_ref)
+    returning * into v_appt;
+  exception when unique_violation then
+    raise exception 'SLOT_TAKEN: Sorry — someone just booked this slot. Please pick another time.';
+  end;
+
+  -- 6. unpaid invoice (GST % from CMS → Billing; 0 = exempt → Bill of Supply)
+  v_fee  := d.consultation_fee;
+  v_rate := coalesce(nullif(public.booking_setting('gstRate', '0', 'billing'), '')::numeric, 0);
+  v_tax  := round(v_fee * v_rate / 100, 2);
+  perform pg_advisory_xact_lock(hashtext('dch_invoice_number'));
+  select coalesce(max(nullif(regexp_replace(invoice_number, '\D', '', 'g'), '')::int), 10000) + 1 into v_seq from public.invoices;
+  insert into public.invoices (invoice_number, patient_id, issue_date, due_date, items, subtotal, tax, discount, total, amount_paid, status, notes)
+  values ('INV-' || lpad(v_seq::text, 5, '0'), v_patient.id, v_now::date, p_date,
+          jsonb_build_array(jsonb_build_object(
+            'description', format('Consultation — %s (%s) · %s, %s', d.full_name, d.specialization, to_char(p_date, 'DD Mon YYYY'), p_time),
+            'quantity', 1, 'unit_price', v_fee)),
+          v_fee, v_tax, 0, v_fee + v_tax, 0, 'unpaid', 'Online booking ' || v_ref)
+  returning * into v_inv;
+
+  update public.booking_otps set token_used_at = now() where id = o.id;
+  select name into v_dep from public.departments where id = d.department_id;
+
+  return jsonb_build_object(
+    'ref', v_ref,
+    'is_new_patient', v_new,
+    'appointment', to_jsonb(v_appt) - 'notes',
+    'patient', jsonb_build_object('id', v_patient.id, 'full_name', v_patient.full_name, 'mrn', v_patient.mrn,
+                                  'phone', v_patient.phone, 'email', v_patient.email, 'gender', v_patient.gender,
+                                  'address', v_patient.address),
+    'doctor', jsonb_build_object('id', d.id, 'full_name', d.full_name, 'specialization', d.specialization, 'department', v_dep),
+    'invoice', to_jsonb(v_inv));
+end $$;
+
+revoke all on function public.send_booking_otp(text, text) from public, anon, authenticated;
+revoke all on function public.booking_setting(text, text, text) from public, anon;
+grant execute on function public.public_doctors() to anon, authenticated;
+grant execute on function public.public_availability(uuid, date, date) to anon, authenticated;
+grant execute on function public.request_booking_otp(text) to anon, authenticated;
+grant execute on function public.verify_booking_otp(text, text) to anon, authenticated;
+grant execute on function public.public_book_appointment(uuid, uuid, date, text, text, text, date, text, text) to anon, authenticated;
 
 commit;
 

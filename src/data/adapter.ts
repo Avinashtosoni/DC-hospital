@@ -22,6 +22,12 @@ export interface AuthAdapter {
   signIn(email: string, password: string): Promise<Profile>
   signUp(input: SignUpInput): Promise<Profile>
   signOut(): Promise<void>
+  /** change the signed-in user's password (current password is re-checked) */
+  changePassword(current: string, next: string): Promise<void>
+  /** end every session of this user (all devices) */
+  signOutEverywhere(): Promise<void>
+  /** upload a profile photo and return its public URL */
+  uploadAvatar(userId: string, file: Blob): Promise<string>
   onChange(cb: () => void): () => void
 }
 

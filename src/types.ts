@@ -90,6 +90,48 @@ export interface Appointment extends BaseRow {
   status: AppointmentStatus
   reason?: string | null
   notes?: string | null
+  /** where the booking came from */
+  source?: 'desk' | 'website' | 'portal' | null
+  /** public reference shown to patients who book online, e.g. DCB-4K7Q2M */
+  booking_ref?: string | null
+  /** when the front desk last contacted the patient about rescheduling */
+  contacted_at?: string | null
+}
+
+export type LeaveKind = 'leave' | 'surgery' | 'meeting' | 'conference' | 'training' | 'other'
+export type LeaveStatus = 'pending' | 'approved' | 'rejected'
+/** Full-day leave (no times) or a blocked time range (surgery, meeting…) for a doctor. */
+export interface DoctorLeave extends BaseRow {
+  doctor_id: string
+  kind: LeaveKind
+  start_date: string
+  end_date: string
+  /** both empty = whole day(s) */
+  start_time?: string | null
+  end_time?: string | null
+  status: LeaveStatus
+  reason?: string | null
+}
+
+/** Hospital-wide OPD closure. */
+export interface Holiday extends BaseRow {
+  holiday_date: string
+  name: string
+  note?: string | null
+}
+
+export type AuditAction = 'insert' | 'update' | 'delete'
+/** Append-only change history (written by database triggers / the demo adapter — never by the UI). */
+export interface AuditEntry extends BaseRow {
+  table_name: string
+  record_id: string | null
+  action: AuditAction
+  actor_id?: string | null
+  actor_name?: string | null
+  actor_role?: string | null
+  summary?: string | null
+  /** update: { column: { from, to } } · insert/delete: { column: { to } | { from } } */
+  changes: Record<string, { from?: unknown; to?: unknown }>
 }
 
 export interface Medication {
@@ -240,10 +282,14 @@ export interface DB {
   inventory: InventoryItem
   notices: Notice
   site_enquiries: SiteEnquiry
+  doctor_leaves: DoctorLeave
+  holidays: Holiday
+  audit_log: AuditEntry
 }
 
 export type TableName = keyof DB
 export const TABLES: TableName[] = [
   'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions',
   'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries',
+  'doctor_leaves', 'holidays', 'audit_log',
 ]

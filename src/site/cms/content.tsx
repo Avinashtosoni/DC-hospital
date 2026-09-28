@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { cn } from '../../lib/utils'
 import { DEFAULT_CONTENT } from './defaults'
 import { cms, type ContentRows } from './store'
-import { CONTENT_KEYS, type ContentKey, type SiteContent, type SiteDoctor } from './types'
+import { CONTENT_KEYS, type ContentKey, type SiteContent, type SiteDoctor, type SiteSettings } from './types'
 
 export const CONTENT_QK = ['site-content'] as const
 const CACHE_KEY = 'dch:site-cache:v1'
@@ -69,8 +69,9 @@ export function toPublic(c: SiteContent): SiteContent {
 const readCache = (): ContentRows | undefined => { try { const v = localStorage.getItem(CACHE_KEY); return v ? JSON.parse(v) : undefined } catch { return undefined } }
 
 /** Raw saved rows (what the CMS edits). Cached in localStorage so repeat visits render instantly. */
-export function useContentRows() {
+export function useContentRows(opts: { enabled?: boolean } = {}) {
   return useQuery({
+    enabled: opts.enabled ?? true,
     queryKey: CONTENT_QK,
     queryFn: async () => {
       const rows = await cms.fetchAll()
@@ -120,6 +121,13 @@ export function useSite(): SiteContent {
   return c?.content ?? toPublic(DEFAULT_CONTENT)
 }
 export const useIsPreview = () => useContext(Ctx)?.preview ?? false
+
+/** Live site settings anywhere — inside the public site (provider) or the dashboard (fetches the CMS rows). */
+export function useSiteSettings(): SiteSettings {
+  const c = useContext(Ctx)
+  const q = useContentRows({ enabled: !c })
+  return useMemo(() => c?.content.settings ?? mergeRows(q.data).settings, [c, q.data])
+}
 
 // ------------------------------------------------------------------ helpers used by pages
 export const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`

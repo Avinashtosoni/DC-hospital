@@ -12,7 +12,7 @@ export default function ServiceDetail() {
   const { services: SERVICES, doctors, servicesPage: pg } = useSite()
   const c = useContact()
   const s = SERVICES.find((x) => x.slug === slug)
-  const book = useBookHref()
+  const book = useBookHref({ service: slug })
   useSeo(s ? `${s.name} — ${s.tagline}` : 'Service not found', s?.summary)
   if (!s) return <NotFound />
 

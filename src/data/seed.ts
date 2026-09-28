@@ -3,7 +3,7 @@
  * (scripts/build-master-sql.ts). Dates are expressed relative to "today" through a DateHelper so the
  * data always feels current — locally they become ISO strings, in SQL they become `current_date + n`.
  */
-import type { SiteEnquiry,
+import type { SiteEnquiry, AuditEntry, DoctorLeave, Holiday,
   Admission, Appointment, Bed, DB, Department, Doctor, Expense, InventoryItem, Invoice, LabTest,
   LineItem, Medication, Notice, Patient, Payment, Prescription, Profile, Role, Staff, Ward,
 } from '../types'
@@ -588,9 +588,67 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
     created_at: d.ts(day, `${String(9 + i).padStart(2, '0')}:${i % 2 ? '40' : '15'}`),
   }))
 
+  // ---------------------------------------------------------------- doctor leave & blocked time
+  const docId = (name: string) => doctors.find((x) => x.full_name === name)!.id
+  const leaveDefs: [string, DoctorLeave['kind'], number, number, string | null, string | null, DoctorLeave['status'], string][] = [
+    ['Dr. Sneha Patil', 'leave', -3, 12, null, null, 'approved', 'Medical leave'],
+    ['Dr. Arjun Mehta', 'conference', 9, 10, null, null, 'approved', 'Cardiological Society of India — annual conference'],
+    ['Dr. Nikhil Joshi', 'surgery', 1, 1, '10:00', '13:00', 'approved', 'CABG — OT 2'],
+    ['Dr. Vikram Singh', 'meeting', 2, 2, '16:00', '17:00', 'approved', 'Quality & NABH committee'],
+    ['Dr. Aditya Kulkarni', 'surgery', 3, 3, '09:00', '12:00', 'approved', 'Spinal fusion — OT 1'],
+    ['Dr. Kavita Rao', 'leave', 20, 22, null, null, 'pending', 'Family function'],
+    ['Dr. Pooja Bansal', 'training', 14, 14, '14:00', '17:00', 'pending', 'Insulin pump certification'],
+    ['Dr. Meera Nair', 'leave', 5, 5, null, null, 'rejected', 'Personal work — clashes with scheduled deliveries'],
+  ]
+  const doctor_leaves: DoctorLeave[] = leaveDefs.map(([name, kind, from, to, st, et, status, reason], i) => ({
+    id: sid(17, i + 1), doctor_id: docId(name), kind, start_date: d.date(from), end_date: d.date(to), start_time: st, end_time: et, status, reason,
+    created_at: d.ts(Math.min(from, 0) - 2 - i, '11:00'),
+  }))
+
+  // ---------------------------------------------------------------- hospital holidays (OPD closed; emergency stays open)
+  const year = new Date().getFullYear()
+  const holidayDefs: [string, string][] = [
+    [`${year}-01-26`, 'Republic Day'], [`${year}-08-15`, 'Independence Day'], [`${year}-10-02`, 'Gandhi Jayanti'], [`${year}-12-25`, 'Christmas'],
+    [`${year + 1}-01-26`, 'Republic Day'], [`${year + 1}-08-15`, 'Independence Day'], [`${year + 1}-10-02`, 'Gandhi Jayanti'], [`${year + 1}-12-25`, 'Christmas'],
+    ...(year === 2026 ? [['2026-11-08', 'Diwali'], ['2026-10-20', 'Dussehra']] as [string, string][] : []),
+  ]
+  const holidays: Holiday[] = holidayDefs.sort((x, y) => x[0].localeCompare(y[0])).map(([holiday_date, name], i) => ({
+    id: sid(18, i + 1), holiday_date, name, note: 'OPD closed · Emergency & pharmacy open 24×7', created_at: d.ts(-120, '10:00'),
+  }))
+
+  // ---------------------------------------------------------------- a few online bookings, so the source filter has data
+  appointments.filter((a) => offsetOf(a.appointment_date) >= 0 && a.status !== 'cancelled').slice(0, 9).forEach((a, i) => {
+    if (i % 2) return
+    a.source = 'website'
+    a.booking_ref = `DCB-${(740213 + i * 7919).toString(36).toUpperCase()}`
+  })
+
+  // ---------------------------------------------------------------- audit trail (recent activity so the log isn't empty)
+  const AU = Object.fromEntries(DEMO_USERS.map((u) => [u.role, u])) as Record<Role, (typeof DEMO_USERS)[number]>
+  const audit_log: AuditEntry[] = []
+  const log = (table: string, record: { id: string } | undefined, action: AuditEntry['action'], who: Role, summary: string, changes: AuditEntry['changes'], day: number, time: string) => {
+    if (!record) return
+    audit_log.push({ id: sid(19, audit_log.length + 1), table_name: table, record_id: record.id, action, actor_id: AU[who].id, actor_name: AU[who].full_name, actor_role: who, summary, changes, created_at: d.ts(day, time) })
+  }
+  const pt = patients.slice(-4)
+  pt.forEach((p, i) => log('patients', p, 'insert', 'receptionist', `${p.full_name} (${p.mrn})`, { full_name: { to: p.full_name }, phone: { to: p.phone }, gender: { to: p.gender } }, -i, `09:${10 + i * 7}`))
+  const p0 = patients[3]
+  log('patients', p0, 'update', 'receptionist', `${p0.full_name} (${p0.mrn})`, { phone: { from: '+91 98111 00000', to: p0.phone }, address: { from: null, to: p0.address } }, 0, '10:05')
+  const todayAppts = appointments.filter((a) => offsetOf(a.appointment_date) === 0)
+  todayAppts.slice(0, 3).forEach((a, i) => log('appointments', a, 'update', i === 2 ? 'doctor' : 'receptionist', `${a.appointment_time} · ${patients.find((p) => p.id === a.patient_id)?.full_name ?? ''}`, { status: { from: 'scheduled', to: a.status } }, 0, `0${8 + i}:4${i}`))
+  const inv = invoices.slice(0, 4)
+  if (inv[0]) log('invoices', inv[0], 'update', 'accountant', inv[0].invoice_number, { discount: { from: 0, to: inv[0].discount || 200 }, total: { from: inv[0].total + (inv[0].discount || 200), to: inv[0].total } }, -1, '12:20')
+  if (inv[1]) log('invoices', inv[1], 'insert', 'receptionist', inv[1].invoice_number, { total: { to: inv[1].total }, status: { to: 'unpaid' } }, -1, '11:02')
+  if (inv[2]) log('invoices', inv[2], 'update', 'owner', inv[2].invoice_number, { notes: { from: null, to: 'Senior citizen concession approved by management' } }, -2, '17:45')
+  payments.slice(0, 3).forEach((p, i) => log('payments', p, 'insert', 'accountant', `₹${p.amount} · ${p.method.toUpperCase()}`, { amount: { to: p.amount }, method: { to: p.method }, reference: { to: p.reference ?? null } }, -i, `1${3 + i}:1${i}`))
+  prescriptions.slice(0, 3).forEach((r, i) => log('prescriptions', r, i === 1 ? 'update' : 'insert', 'doctor', r.diagnosis,
+    i === 1 ? { advice: { from: 'Review after 2 weeks', to: 'Review after 1 week with fasting sugar report' } } : { diagnosis: { to: r.diagnosis }, medications: { to: `${r.medications.length} medicines` } }, -i - 1, `1${1 + i}:3${i}`))
+  log('doctor_leaves', doctor_leaves[1], 'update', 'receptionist', 'Dr. Arjun Mehta — conference', { status: { from: 'pending', to: 'approved' } }, -2, '15:05')
+  audit_log.sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)))
+
   return {
     profiles, departments, doctors, staff, patients, appointments, prescriptions, lab_tests, wards, beds,
-    admissions, invoices, payments, expenses, inventory, notices, site_enquiries,
+    admissions, invoices, payments, expenses, inventory, notices, site_enquiries, doctor_leaves, holidays, audit_log,
   }
 
 }

@@ -115,6 +115,16 @@ Sections that were never edited fall back to the defaults in `src/site/cms/defau
 the hospital demo data but **keeps your website content, history and images**. In demo mode the same features use
 browser storage.
 
+## Online booking, leave calendar, invoices & audit log
+
+- **Online booking (`/book`)** — the patient picks a speciality, then a doctor, then a live free slot, verifies their phone with a one-time code and gets an instant confirmation. The confirmation includes an invoice and booking reference `DCB-XXXXXX`, a calendar (.ics) download, WhatsApp sharing and a print/PDF option. On the database side, `public_book_appointment` creates or reuses the patient record (matched by phone), the appointment and an unpaid invoice in one transaction. A unique index stops two patients booking the same slot. Doctor profile pages show real free slots too.
+  - **OTP / SMS:** the code is generated and stored hashed in `booking_otps`. Limits: one code per phone every 30 s, 5 codes per hour, 5 attempts per code, and codes expire after 10 min. Until an SMS gateway (MSG91, Twilio, etc.) is connected, turn on **CMS → Settings → Online booking → Show demo OTP** so the code appears on screen. Turn it off once real SMS is live. To connect a gateway, send the SMS from a Supabase Edge Function or database webhook on `booking_otps` inserts.
+  - Booking rules (on/off, how many days ahead, minimum notice, pay-at-hospital note) and invoice details (legal name, GSTIN, PAN, SAC, GST rate, UPI) are set in **CMS → Settings**. When the GST rate is 0, which is standard for clinical consultations, invoices print as a *Bill of Supply*. When a rate is set, they print as a *Tax Invoice* with CGST/SGST.
+- **Leave & Holidays (`/schedule`)** — date-range leave; blocked time for surgery, meetings, conferences or training; and hospital holidays. Doctors request leave and the owner or reception approves it. Approved entries close those slots everywhere, including online booking. Patients already booked into those slots appear in the **Reschedule queue**.
+- **Invoices** — A4 letterhead layout with GSTIN, SAC, amount in words and a status stamp. **Print / PDF** prints only the invoice.
+- **Audit log (`/audit`)** — database triggers record every create, update and delete on patients, appointments, prescriptions, lab orders, admissions, invoices, payments and leave: who did it, their role, when, and a field-by-field before/after. The log can't be edited or deleted. The owner sees everything, and other staff see their own changes. A *History* tab also appears on patient and invoice pages.
+- **My profile (`/profile`)** — photo upload, personal details, password change, preferences and your own recent activity.
+
 ## Deploy with Docker / Coolify
 
 The repo ships a production **multi-stage Dockerfile**. Node builds the app, and **nginx** (Alpine) serves it with SPA routing, gzip, long-lived caching for build assets, security headers and a `/healthz` endpoint.

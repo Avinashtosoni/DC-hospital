@@ -47,6 +47,15 @@
 }
 html { scroll-behavior: smooth; }
 
+/* Invoice / bill of supply: print only the document, on A4 (see src/components/InvoiceDocument.tsx) */
+@page { size: A4; margin: 10mm 12mm; }
+@media print {
+  html.print-doc body * { visibility: hidden !important; }
+  html.print-doc .invoice-doc, html.print-doc .invoice-doc * { visibility: visible !important; }
+  html.print-doc .invoice-doc { position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; max-width: none !important; margin: 0 !important; box-shadow: none !important; border: 0 !important; border-radius: 0 !important; }
+  .invoice-doc { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .invoice-doc .avoid-break { break-inside: avoid; }
+}
 @media print {
   body { background: white !important; }
   .no-print { display: none !important; }

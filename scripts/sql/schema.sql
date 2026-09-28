@@ -7,6 +7,7 @@ create extension if not exists pgcrypto with schema extensions;
 drop trigger if exists on_auth_user_created on auth.users;
 
 drop table if exists
+  public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
   public.site_enquiries, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
   public.staff, public.doctors, public.departments, public.profiles
@@ -20,6 +21,8 @@ drop function if exists public.has_role(public.app_role[]) cascade;
 drop function if exists public.is_staff() cascade;
 drop function if exists public.my_patient_id() cascade;
 drop function if exists public.current_app_role() cascade;
+drop function if exists public.my_doctor_id() cascade;
+drop function if exists public.protect_patient_fields() cascade;
 drop type if exists public.app_role cascade;
 
 -- =====================================================================================================
@@ -116,6 +119,9 @@ create table public.appointments (
   status            text not null default 'scheduled' check (status in ('scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show')),
   reason            text,
   notes             text,
+  source            text not null default 'desk' check (source in ('desk', 'website', 'portal')),
+  booking_ref       text unique,
+  contacted_at      timestamptz,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now()
 );
@@ -268,6 +274,61 @@ create table public.site_enquiries (
   updated_at  timestamptz not null default now()
 );
 
+-- Doctor leave (whole days) and blocked time (surgery, meetings…). Only approved rows affect availability.
+create table public.doctor_leaves (
+  id          uuid primary key default gen_random_uuid(),
+  doctor_id   uuid not null references public.doctors (id) on delete cascade,
+  kind        text not null default 'leave' check (kind in ('leave', 'surgery', 'meeting', 'conference', 'training', 'other')),
+  start_date  date not null,
+  end_date    date not null,
+  start_time  text check (start_time is null or start_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  end_time    text check (end_time is null or end_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  status      text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  reason      text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  check (end_date >= start_date),
+  check ((start_time is null) = (end_time is null)),
+  check (start_time is null or end_time > start_time)
+);
+
+-- Hospital-wide OPD closures (emergency stays open)
+create table public.holidays (
+  id            uuid primary key default gen_random_uuid(),
+  holiday_date  date not null unique,
+  name          text not null check (char_length(name) between 2 and 80),
+  note          text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+-- Append-only change history, written only by the audit triggers (see section 7d)
+create table public.audit_log (
+  id           uuid primary key default gen_random_uuid(),
+  table_name   text not null,
+  record_id    uuid,
+  action       text not null check (action in ('insert', 'update', 'delete')),
+  actor_id     uuid,
+  actor_name   text,
+  actor_role   text,
+  summary      text,
+  changes      jsonb not null default '{}'::jsonb,
+  created_at   timestamptz not null default now()
+);
+
+-- One-time codes for online booking (never readable through the API; see section 9)
+create table public.booking_otps (
+  id             uuid primary key default gen_random_uuid(),
+  phone          text not null,
+  code_hash      text not null,
+  attempts       int not null default 0,
+  expires_at     timestamptz not null,
+  verified_at    timestamptz,
+  token          uuid unique,
+  token_used_at  timestamptz,
+  created_at     timestamptz not null default now()
+);
+
 -- Indexes for foreign keys and common filters
 create index on public.doctors (department_id);
 create index on public.staff (department_id);
@@ -287,6 +348,14 @@ create index on public.payments (invoice_id);
 create index on public.payments (patient_id);
 create index on public.expenses (expense_date);
 create index on public.site_enquiries (status, created_at desc);
+create index on public.doctor_leaves (doctor_id, start_date, end_date);
+create index on public.audit_log (created_at desc);
+create index on public.audit_log (table_name, record_id);
+create index on public.audit_log (actor_id, created_at desc);
+create index on public.booking_otps (phone, created_at desc);
+-- a doctor can never hold two live bookings in the same slot (desk, portal or website)
+create unique index appointments_one_per_slot on public.appointments (doctor_id, appointment_date, appointment_time)
+  where status not in ('cancelled', 'no_show');
 
 -- =====================================================================================================
 --  4. HELPER FUNCTIONS (security definer so they can be used inside RLS without recursion)
@@ -304,6 +373,11 @@ $$;
 create or replace function public.is_staff()
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and role <> 'patient')
+$$;
+
+create or replace function public.my_doctor_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.doctors where profile_id = auth.uid() limit 1
 $$;
 
 create or replace function public.my_patient_id()
@@ -326,7 +400,8 @@ do $$
 declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
-                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries']
+                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries',
+                           'doctor_leaves','holidays']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);
   end loop;
@@ -371,6 +446,21 @@ end $$;
 
 create trigger trg_profiles_protect_role before update on public.profiles
   for each row execute function public.protect_profile_role();
+
+-- 5c-2. patients may update their own contact details, but never their MRN, status or account link
+create or replace function public.protect_patient_fields()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and public.has_role('patient') then
+    new.mrn := old.mrn;
+    new.status := old.status;
+    new.profile_id := old.profile_id;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_patients_protect before update on public.patients
+  for each row execute function public.protect_patient_fields();
 
 -- 5d. admissions keep bed + patient status consistent (idempotent with the client-side updates)
 create or replace function public.sync_admission()

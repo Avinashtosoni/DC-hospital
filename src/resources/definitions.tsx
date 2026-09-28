@@ -1,15 +1,18 @@
 import {
   BedDouble, Building2, CalendarCheck, CalendarDays, CheckCircle2, ClipboardList, CreditCard, Eye, FileText, FlaskConical,
+  CalendarOff, CalendarX2, PartyPopper, ThumbsDown, ThumbsUp, UserX,
   Inbox, Mail, Phone, LogOut, Megaphone, Package, PackagePlus, Pill, Printer, Receipt, Stethoscope, UserCheck, UserCog, Users, Wallet, XCircle, Ban, PlayCircle, TestTube,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { differenceInCalendarDays, parseISO } from 'date-fns'
-import type { Admission, Appointment, Department, Doctor, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, SiteEnquiry, Staff } from '../types'
+import { toast } from 'sonner'
+import type { Admission, Appointment, Department, Doctor, DoctorLeave, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, SiteEnquiry, Staff } from '../types'
 import { ROLE_LABEL } from '../types'
 import { Avatar, Badge, StatusBadge } from '../components/ui'
 import { age, fmtDate, fmtTime, money, today, titleCase } from '../lib/utils'
 import { deriveInvoiceStatus, invoiceBalance } from '../lib/billing'
 import { defineResource, type Option, type ResourceCtx } from './types'
+import { LEAVE_LABEL, conflictOf, isFullDay, type ScheduleExt } from '../lib/schedule'
 
 // ------------------------------------------------------------------ helpers
 const opts = (...values: string[]): Option[] => values.map((v) => ({ value: v, label: titleCase(v) }))
@@ -97,7 +100,7 @@ export const appointmentsRes = defineResource({
   table: 'appointments', path: '/appointments', singular: 'Appointment', icon: CalendarCheck,
   title: (role) => (role === 'patient' || role === 'doctor' ? 'My Appointments' : 'Appointments'),
   description: (role) => role === 'patient' ? 'Book, track or cancel your visits.' : role === 'doctor' ? 'Your consultation schedule.' : 'Schedule and manage OPD appointments across departments.',
-  relations: ['patients', 'doctors', 'departments'],
+  relations: ['patients', 'doctors', 'departments', 'doctor_leaves', 'holidays'],
   defaultSort: { key: 'appointment_date', dir: 'desc' },
   scope: (r, c) => (isPatient(c) ? r.patient_id === c.me.patient?.id : c.role === 'doctor' ? r.doctor_id === c.me.doctor?.id : true),
   searchText: (r, c) => `${pName(c, r.patient_id)} ${dName(c, r.doctor_id)} ${r.reason} ${r.status}`,
@@ -144,11 +147,15 @@ export const appointmentsRes = defineResource({
     { name: 'notes', label: 'Internal notes', type: 'textarea', hidden: (c) => isPatient(c) },
   ],
   beforeSave: (v, c) => (isPatient(c) ? { ...v, patient_id: c.me.patient?.id, status: v.status ?? 'scheduled' } : v),
-  validate: (v, _c, rows, existing): Record<string, string> => {
+  validate: (v, c, rows, existing): Record<string, string> => {
     if (INACTIVE_APPT.includes(v.status)) return {}
     const clash = rows.find((r) => r.id !== existing?.id && r.doctor_id === v.doctor_id && r.appointment_date === v.appointment_date
       && r.appointment_time === v.appointment_time && !INACTIVE_APPT.includes(r.status))
-    return clash ? { appointment_time: `This doctor is already booked at ${fmtTime(v.appointment_time)} — pick another slot` } : {}
+    if (clash) return { appointment_time: `This doctor is already booked at ${fmtTime(v.appointment_time)} — pick another slot` }
+    // new booking or moved slot → must not fall on leave, blocked time or a hospital holiday
+    const moved = !existing || existing.doctor_id !== v.doctor_id || existing.appointment_date !== v.appointment_date || existing.appointment_time !== v.appointment_time
+    const why = moved && conflictOf({ ...(existing ?? {}), ...v, status: 'scheduled' } as Appointment, c.lk.doctors.get(v.doctor_id), scheduleExt(c))
+    return why ? { appointment_date: `Unavailable: ${why}` } : {}
   },
 })
 
@@ -307,6 +314,10 @@ export const doctorsRes = defineResource({
   ],
   rowActions: (r, c) => [
     (isPatient(c) || c.role === 'receptionist' || c.role === 'owner') && r.status === 'active' && { label: 'Book appointment', icon: CalendarDays, onClick: () => c.navigate(`/appointments?new=1&doctor_id=${r.id}`) },
+    (c.role === 'receptionist' || c.role === 'owner') && { label: 'Add leave / block time', icon: CalendarOff, onClick: () => c.navigate(`/schedule?new=1&doctor_id=${r.id}`) },
+    (c.role === 'receptionist' || c.role === 'owner') && r.status !== 'active' && { label: 'Set status: Active', icon: UserCheck, onClick: () => c.patch('doctors', r.id, { status: 'active' }) },
+    (c.role === 'receptionist' || c.role === 'owner') && r.status !== 'on_leave' && { label: 'Set status: On leave (indefinite)', icon: CalendarX2, onClick: async () => { await c.patch('doctors', r.id, { status: 'on_leave' }); flagAffected(c, (a) => a.doctor_id === r.id, `${r.full_name} is now on leave`) } },
+    c.role === 'owner' && r.status !== 'inactive' && { label: 'Set status: Inactive', icon: UserX, tone: 'danger' as const, onClick: async () => { await c.patch('doctors', r.id, { status: 'inactive' }); flagAffected(c, (a) => a.doctor_id === r.id, `${r.full_name} marked inactive`) } },
   ],
   fields: [
     { name: 'full_name', label: 'Full name', type: 'text', required: true, placeholder: 'Dr. …' },
@@ -625,3 +636,137 @@ export const enquiriesRes = defineResource({
 
 // re-export row types used by pages (keeps imports tidy)
 export type { Appointment, Department, Doctor, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, Staff }
+
+// ================================================================== LEAVE, BLOCKED TIME & HOLIDAYS
+export const scheduleExt = (c: ResourceCtx): ScheduleExt => ({ leaves: [...c.lk.doctor_leaves.values()], holidays: [...c.lk.holidays.values()] })
+const QUEUE = '/schedule?tab=reschedule'
+/**
+ * After leave / a holiday takes effect, count the upcoming bookings that now clash and tell the user.
+ * `extra` lets callers include the change that was just saved (lookups refresh a moment later).
+ */
+export function flagAffected(c: ResourceCtx, match: (a: Appointment) => boolean, what: string, extra: ScheduleExt = {}) {
+  const t = today()
+  const ext = scheduleExt(c)
+  const merged: ScheduleExt = {
+    leaves: [...(ext.leaves ?? []).filter((l) => !extra.leaves?.some((x) => x.id === l.id)), ...(extra.leaves ?? [])],
+    holidays: [...(ext.holidays ?? []).filter((h) => !extra.holidays?.some((x) => x.id === h.id)), ...(extra.holidays ?? [])],
+  }
+  const n = [...c.lk.appointments.values()].filter((a) => a.appointment_date >= t && match(a)
+    && (conflictOf(a, c.lk.doctors.get(a.doctor_id), merged) || (c.lk.doctors.get(a.doctor_id)?.status !== 'active' && (a.status === 'scheduled' || a.status === 'confirmed')))).length
+  if (n) toast.warning(`${what} — ${n} booked patient${n === 1 ? '' : 's'} flagged for rescheduling`, { duration: 9000, action: { label: 'Open queue', onClick: () => c.navigate(QUEUE) } })
+  else toast.success(`${what} — no existing bookings are affected`)
+}
+const affectedBy = (l: DoctorLeave, c: ResourceCtx) => {
+  const t = today()
+  return [...c.lk.appointments.values()].filter((a) => a.doctor_id === l.doctor_id && a.appointment_date >= t && a.appointment_date >= l.start_date && a.appointment_date <= l.end_date
+    && (a.status === 'scheduled' || a.status === 'confirmed') && (isFullDay(l) || (a.appointment_time.slice(0, 5) >= l.start_time! && a.appointment_time.slice(0, 5) < l.end_time!))).length
+}
+const isDoctor = (c: ResourceCtx) => c.role === 'doctor'
+const canApprove = (c: ResourceCtx) => c.role === 'owner' || c.role === 'receptionist'
+const LEAVE_TONE = { leave: 'amber', surgery: 'red', meeting: 'blue', conference: 'violet', training: 'teal', other: 'slate' } as const
+const setLeave = (status: DoctorLeave['status']) => async (r: DoctorLeave, c: ResourceCtx) => {
+  await c.patch('doctor_leaves', r.id, { status })
+  if (status === 'approved') flagAffected(c, (a) => a.doctor_id === r.doctor_id, `${LEAVE_LABEL[r.kind]} approved`, { leaves: [{ ...r, status }] })
+  else toast.success(`${LEAVE_LABEL[r.kind]} request rejected`)
+}
+
+export const leavesRes = defineResource({
+  table: 'doctor_leaves', path: '/schedule', singular: 'Leave / block', icon: CalendarOff,
+  title: (role) => (role === 'doctor' ? 'My Leave & Blocked Time' : 'Leave & Holidays'),
+  description: (role) => role === 'doctor'
+    ? 'Request leave or block time for surgery and meetings. Reception approves it and reschedules affected patients.'
+    : 'Doctor leave, blocked time (surgery, meetings) and hospital holidays. Approved entries close those slots everywhere — including online booking.',
+  relations: ['doctors', 'departments', 'appointments', 'doctor_leaves', 'holidays'],
+  defaultSort: { key: 'start_date', dir: 'desc' },
+  scope: (r, c) => !isDoctor(c) || r.doctor_id === c.me.doctor?.id,
+  searchText: (r, c) => `${dName(c, r.doctor_id)} ${r.kind} ${r.reason ?? ''} ${r.status}`,
+  filters: [
+    { key: 'status', label: 'Status', options: opts('pending', 'approved', 'rejected') },
+    { key: 'kind', label: 'Type', options: Object.entries(LEAVE_LABEL).map(([value, label]) => ({ value, label })) },
+    { key: 'when', label: 'When', options: [{ value: 'upcoming', label: 'Upcoming & ongoing' }, { value: 'past', label: 'Past' }], predicate: (r, v) => (v === 'past' ? r.end_date < today() : r.end_date >= today()) },
+  ],
+  columns: [
+    { key: 'doctor', header: 'Doctor', render: (r, c) => <Person name={dName(c, r.doctor_id)} sub={deptName(c, c.lk.doctors.get(r.doctor_id)?.department_id)} />, sortValue: (r, c) => dName(c, r.doctor_id), hideFor: ['doctor'] },
+    { key: 'kind', header: 'Type', render: (r) => <Badge tone={LEAVE_TONE[r.kind]}>{LEAVE_LABEL[r.kind]}</Badge> },
+    { key: 'start_date', header: 'When', sortValue: (r) => r.start_date + (r.start_time ?? ''), render: (r) => {
+      const days = differenceInCalendarDays(parseISO(r.end_date), parseISO(r.start_date)) + 1
+      return <div><div className="font-medium text-slate-800">{fmtDate(r.start_date, 'EEE, dd MMM')}{r.end_date !== r.start_date && <> → {fmtDate(r.end_date, 'EEE, dd MMM')}</>}</div>
+        <div className="text-xs text-slate-500">{isFullDay(r) ? `Full day${days > 1 ? ` · ${days} days` : ''}` : `${fmtTime(r.start_time)} – ${fmtTime(r.end_time)}`}</div></div>
+    } },
+    { key: 'reason', header: 'Reason', render: (r) => <span className="line-clamp-1 max-w-[16rem] text-slate-600">{r.reason || '—'}</span>, hideBelow: 'lg' },
+    { key: 'affected', header: 'Bookings hit', sortValue: (r, c) => affectedBy(r, c), render: (r, c) => {
+      const n = affectedBy(r, c)
+      return n ? <Badge tone={r.status === 'approved' ? 'red' : 'amber'}>{n} patient{n === 1 ? '' : 's'}</Badge> : <Muted>None</Muted>
+    }, hideBelow: 'md' },
+    { key: 'status', header: 'Status', render: (r) => <StatusBadge value={r.status} /> },
+  ],
+  rowActions: (r, c) => [
+    canApprove(c) && r.status !== 'approved' && { label: 'Approve', icon: ThumbsUp, onClick: setLeave('approved') },
+    canApprove(c) && r.status === 'pending' && { label: 'Reject', icon: ThumbsDown, tone: 'danger' as const, onClick: setLeave('rejected') },
+    r.status === 'approved' && affectedBy(r, c) > 0 && !isDoctor(c) && { label: 'Reschedule affected patients', icon: CalendarDays, onClick: () => c.navigate(`${QUEUE}&doctor=${r.doctor_id}`) },
+  ],
+  canEdit: (r, c) => !isDoctor(c) || (r.doctor_id === c.me.doctor?.id && r.status === 'pending'),
+  canDelete: (r, c) => !isDoctor(c) || (r.doctor_id === c.me.doctor?.id && r.status === 'pending'),
+  fields: [
+    { ...doctorField(), hidden: (c) => isDoctor(c), relation: { ...doctorField().relation, filter: (d: Doctor) => d.status !== 'inactive' } },
+    { name: 'kind', label: 'Type', type: 'select', required: true, options: Object.entries(LEAVE_LABEL).map(([value, label]) => ({ value, label })), default: () => 'leave' },
+    { name: 'status', label: 'Status', type: 'select', required: true, options: opts('pending', 'approved', 'rejected'), default: (c) => (isDoctor(c) ? 'pending' : 'approved'), hidden: (c) => isDoctor(c), hint: 'Only approved entries close slots' },
+    { name: 'start_date', label: 'From', type: 'date', required: true, default: () => today() },
+    { name: 'end_date', label: 'To', type: 'date', hint: 'Leave empty for a single day' },
+    { name: 'start_time', label: 'Block from', type: 'select', options: [{ value: '', label: 'Full day' }, ...TIME_OPTS], hint: 'Pick times to block part of the day (e.g. surgery 10–1)', hidden: (_c, v) => v.kind === 'leave' },
+    { name: 'end_time', label: 'Block until', type: 'select', options: [{ value: '', label: '—' }, ...TIMES.slice(1).concat('19:00').map((t) => ({ value: t, label: fmtTime(t) }))], hidden: (_c, v) => v.kind === 'leave' || !v.start_time },
+    { name: 'reason', label: 'Reason / note', type: 'textarea', placeholder: 'e.g. Knee replacement — OT 2 · Family function · CME at AIIMS' },
+  ],
+  beforeSave: (v, c, existing) => {
+    const out: Record<string, any> = { ...v, end_date: v.end_date || v.start_date }
+    if (v.kind === 'leave' || !v.start_time || !v.end_time) { out.start_time = null; out.end_time = null }
+    if (isDoctor(c)) { out.doctor_id = c.me.doctor?.id; out.status = 'pending' }
+    if (!existing && !out.status) out.status = 'approved'
+    return out
+  },
+  validate: (v, c, rows, existing) => {
+    const e: Record<string, string> = {}
+    const end = v.end_date || v.start_date
+    if (end < v.start_date) e.end_date = 'Must be on or after the start date'
+    if (v.kind !== 'leave' && v.start_time && v.end_time && v.end_time <= v.start_time) e.end_time = 'Must be after the start time'
+    if (v.kind !== 'leave' && v.start_time && !v.end_time) e.end_time = 'Pick when the block ends'
+    const docId = isDoctor(c) ? c.me.doctor?.id : v.doctor_id
+    const full = v.kind === 'leave' || !v.start_time
+    const overlap = rows.find((r) => r.id !== existing?.id && r.doctor_id === docId && r.status !== 'rejected' && r.start_date <= end && r.end_date >= v.start_date
+      && (full || isFullDay(r) || (r.start_time! < v.end_time && r.end_time! > v.start_time)))
+    if (overlap) e.start_date = `Overlaps ${LEAVE_LABEL[overlap.kind].toLowerCase()} on ${fmtDate(overlap.start_date, 'dd MMM')}${overlap.end_date !== overlap.start_date ? `–${fmtDate(overlap.end_date, 'dd MMM')}` : ''}`
+    return e
+  },
+  afterSave: (saved, c, existing) => {
+    if (saved.status === 'approved' && existing?.status !== 'approved' || (saved.status === 'approved' && existing && (existing.start_date !== saved.start_date || existing.end_date !== saved.end_date || existing.start_time !== saved.start_time)))
+      flagAffected(c, (a) => a.doctor_id === saved.doctor_id, `${LEAVE_LABEL[saved.kind]} saved`, { leaves: [saved] })
+    else if (saved.status === 'pending' && !existing) toast.info('Request sent — reception will review it')
+  },
+  emptyText: 'No leave or blocked time yet.',
+})
+
+export const holidaysRes = defineResource({
+  table: 'holidays', path: '/schedule', title: 'Leave & Holidays', singular: 'Holiday', icon: PartyPopper,
+  description: 'Hospital-wide OPD closures. Emergency, ICU and pharmacy stay open 24×7. Holidays close all slots, including online booking.',
+  relations: ['doctors', 'appointments', 'doctor_leaves', 'holidays'],
+  defaultSort: { key: 'holiday_date', dir: 'asc' },
+  searchText: (r) => `${r.name} ${r.note ?? ''} ${r.holiday_date}`,
+  filters: [{ key: 'when', label: 'When', options: [{ value: 'upcoming', label: 'Upcoming' }, { value: 'past', label: 'Past' }], predicate: (r, v) => (v === 'past' ? r.holiday_date < today() : r.holiday_date >= today()) }],
+  columns: [
+    { key: 'holiday_date', header: 'Date', render: (r) => <div><div className="font-medium text-slate-800">{fmtDate(r.holiday_date, 'dd MMM yyyy')}</div><div className="text-xs text-slate-500">{fmtDate(r.holiday_date, 'EEEE')}</div></div> },
+    { key: 'name', header: 'Holiday', render: (r) => <div><div className="font-medium text-slate-900">{r.name}</div>{r.note && <div className="line-clamp-1 text-xs text-slate-500">{r.note}</div>}</div> },
+    { key: 'affected', header: 'Bookings hit', render: (r, c) => {
+      const n = [...c.lk.appointments.values()].filter((a) => a.appointment_date === r.holiday_date && (a.status === 'scheduled' || a.status === 'confirmed')).length
+      return n && r.holiday_date >= today() ? <Badge tone="red">{n} patient{n === 1 ? '' : 's'}</Badge> : <Muted>None</Muted>
+    }, hideBelow: 'sm' },
+    { key: 'in', header: '', render: (r) => r.holiday_date >= today() ? <Muted>in {differenceInCalendarDays(parseISO(r.holiday_date), new Date())} days</Muted> : <Muted>Past</Muted>, hideBelow: 'md', align: 'right' },
+  ],
+  fields: [
+    { name: 'holiday_date', label: 'Date', type: 'date', required: true },
+    { name: 'name', label: 'Holiday name', type: 'text', required: true, placeholder: 'e.g. Holi' },
+    { name: 'note', label: 'Note (shown in calendars)', type: 'textarea', placeholder: 'e.g. OPD closed · Emergency & pharmacy open 24×7' },
+  ],
+  validate: (v, _c, rows, existing): Record<string, string> => (rows.some((r) => r.id !== existing?.id && r.holiday_date === v.holiday_date) ? { holiday_date: 'There is already a holiday on this date' } : {}),
+  afterSave: (saved, c) => flagAffected(c, (a) => a.appointment_date === saved.holiday_date, `${saved.name} added`, { holidays: [saved] }),
+  emptyText: 'No holidays added yet.',
+})

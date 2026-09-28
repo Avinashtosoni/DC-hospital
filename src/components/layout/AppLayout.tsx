@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, ChevronDown, Cross, Database, LogOut, Menu, Search, Settings, X } from 'lucide-react'
+import { Bell, ChevronDown, Cross, Database, LogOut, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { NAV, navLabel } from './nav'
 import { Avatar, Badge } from '../ui'
@@ -57,7 +57,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
       <div className="relative border-t border-white/[.07] p-3">
         <div className="flex items-center gap-3 rounded-xl bg-white/[.07] p-2.5 ring-1 ring-inset ring-white/[.06]">
-          <Avatar name={user.full_name} size="sm" />
+          <Avatar name={user.full_name} src={user.avatar_url} size="sm" />
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-semibold text-white">{user.full_name}</div>
             <div className="truncate text-[11px] text-brand-300">{ROLE_LABEL[user.role]}</div>
@@ -119,7 +119,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
         </div>
         <div className="relative">
           <button onClick={() => setMenu((m) => !m)} className="flex items-center gap-2 rounded-lg p-1 pr-2 hover:bg-slate-100">
-            <Avatar name={user?.full_name} size="sm" />
+            <Avatar name={user?.full_name} src={user?.avatar_url} size="sm" />
             <div className="hidden text-left leading-tight md:block">
               <div className="text-xs font-semibold text-slate-800">{user?.full_name}</div>
               <div className="text-[11px] text-slate-500">{user && ROLE_LABEL[user.role]}</div>
@@ -130,7 +130,8 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
             <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
             <div className="absolute right-0 z-50 mt-2 w-56 animate-pop-in rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
               <div className="border-b border-slate-100 px-3 py-2.5"><div className="truncate text-sm font-medium">{user?.full_name}</div><div className="truncate text-xs text-slate-500">{user?.email}</div></div>
-              <button onClick={() => { setMenu(false); navigate('/settings') }} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><Settings className="h-4 w-4" />Settings</button>
+              <button onClick={() => { setMenu(false); navigate('/profile') }} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><CircleUserRound className="h-4 w-4" />My profile</button>
+              <button onClick={() => { setMenu(false); navigate('/settings') }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><Settings className="h-4 w-4" />Settings</button>
               <button onClick={async () => { setMenu(false); await signOut(); navigate('/login') }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50"><LogOut className="h-4 w-4" />Sign out</button>
             </div>
           </>}

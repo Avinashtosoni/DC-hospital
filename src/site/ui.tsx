@@ -11,8 +11,16 @@ import { Reveal } from './parts'
 export const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`
 
 /** Where "Book" CTAs go: signed-in users book from the portal; guests sign up first. */
-export function useBookHref() {
+export function useBookHref(q?: { doctor?: string; service?: string }) {
   const { user } = useAuth()
+  const { settings } = useSite()
+  if (settings.booking?.enabled !== false) {
+    const p = new URLSearchParams()
+    if (q?.doctor) p.set('doctor', q.doctor)
+    if (q?.service) p.set('service', q.service)
+    const s = p.toString()
+    return `/book${s ? `?${s}` : ''}`
+  }
   return user ? '/appointments' : '/register'
 }
 /** "/" is the dashboard for signed-in users, so the public home lives at /welcome for them. */
@@ -97,7 +105,7 @@ const StarIcon = ({ className }: { className?: string }) => (
 )
 
 export function DoctorCard({ d, delay = 0, compact }: { d: SiteDoctor; delay?: number; compact?: boolean }) {
-  const book = useBookHref()
+  const book = useBookHref({ doctor: d.slug })
   const next = nextAvailable(d)
   return (
     <article className="group relative flex animate-pop-in flex-col overflow-hidden rounded-[1.75rem] border border-peri-200/80 bg-white shadow-soft transition duration-500 hover:-translate-y-1.5 hover:shadow-[0_30px_60px_-25px_rgba(41,41,102,.35)] focus-within:ring-4 focus-within:ring-peri-300" style={{ animationDelay: `${delay}ms`, animationFillMode: 'both' }}>

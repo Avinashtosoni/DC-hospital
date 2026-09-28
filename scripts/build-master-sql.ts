@@ -1,6 +1,7 @@
 /**
  * Builds supabase/master.sql — ONE file containing:
- *   schema (tables, indexes, helper functions, triggers) → RLS policies → demo auth users → demo data → website CMS
+ *   schema (tables, indexes, helper functions, triggers) → RLS policies → demo auth users → demo data
+ *   → audit triggers → website CMS → public online-booking API
  *
  * RLS policies are generated from src/auth/permissions.ts so the database always enforces exactly
  * what the UI shows. Demo data comes from src/data/seed.ts with dates expressed relative to
@@ -11,7 +12,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PERMISSIONS, type Action } from '../src/auth/permissions'
+import { PERMISSIONS, ROW_RULES, type Action } from '../src/auth/permissions'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from '../src/data/seed'
 import type { Role, TableName } from '../src/types'
 
@@ -30,6 +31,7 @@ const patientCondition: Partial<Record<TableName, string>> = {
   departments: 'true',
   doctors: "status = 'active'",
   notices: "audience in ('all', 'patients')",
+  holidays: 'true',
 }
 const staffNoticeCondition = "(audience in ('all', 'staff') or (audience = 'doctors' and public.has_role('doctor')))"
 
@@ -44,11 +46,15 @@ function policies(): string {
     for (const action of ['read', 'create', 'update', 'delete'] as Action[]) {
       const staffRoles = (Object.keys(matrix) as Role[]).filter((r) => r !== 'patient' && matrix[r]!.includes(action))
       const conds: string[] = []
-      if (staffRoles.length) {
-        let c = `public.has_role(${staffRoles.map((r) => `'${r}'`).join(', ')})`
+      // roles with an extra row rule (ROW_RULES) get their own "(has_role(x) and <rule>)" branch
+      const ruled = staffRoles.filter((r) => ROW_RULES[table]?.[r]?.[action])
+      const plain = staffRoles.filter((r) => !ruled.includes(r))
+      for (const r of ruled) conds.push(`(public.has_role('${r}') and ${ROW_RULES[table]![r]![action]})`)
+      if (plain.length) {
+        let c = `public.has_role(${plain.map((r) => `'${r}'`).join(', ')})`
         // non-owner staff only see notices meant for them
-        if (table === 'notices' && action === 'read') c = `(public.has_role('owner') or (public.has_role(${staffRoles.filter((r) => r !== 'owner').map((r) => `'${r}'`).join(', ')}) and ${staffNoticeCondition}))`
-        conds.push(c)
+        if (table === 'notices' && action === 'read') c = `(public.has_role('owner') or (public.has_role(${plain.filter((r) => r !== 'owner').map((r) => `'${r}'`).join(', ')}) and ${staffNoticeCondition}))`
+        conds.unshift(c)
       }
       if (matrix.patient?.includes(action)) {
         const pc = patientCondition[table]
@@ -113,7 +119,7 @@ function seedSql(): string {
   const identities = DEMO_USERS.map((u) => `  (gen_random_uuid(), '${u.id}', '${u.id}', '${JSON.stringify({ sub: u.id, email: u.email, email_verified: true })}'::jsonb, 'email', now(), now(), now())`).join(',\n')
   const roleUpdates = DEMO_USERS.map((u) => `update public.profiles set role = '${u.role}', phone = '${u.phone}' where id = '${u.id}';`).join('\n')
 
-  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries']
+  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries', 'doctor_leaves', 'holidays', 'audit_log']
   const body = order.map((t) => inserts(t, s[t] as unknown as Record<string, unknown>[])).join('\n\n')
 
   return `
@@ -166,6 +172,8 @@ ${DEMO_USERS.map((u) => `--         ${u.role.padEnd(13)} ${u.email}`).join('\n')
 `
 const schema = readFileSync(resolve(root, 'scripts/sql/schema.sql'), 'utf8')
 const cmsSql = readFileSync(resolve(root, 'scripts/sql/cms.sql'), 'utf8')
+const auditSql = readFileSync(resolve(root, 'scripts/sql/audit.sql'), 'utf8')
+const bookingSql = readFileSync(resolve(root, 'scripts/sql/booking.sql'), 'utf8')
 
 const sql = `${header}
 begin;
@@ -186,7 +194,11 @@ ${policies()}
 -- =====================================================================================================
 ${seedSql()}
 
+${auditSql}
+
 ${cmsSql}
+
+${bookingSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}

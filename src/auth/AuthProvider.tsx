@@ -15,6 +15,9 @@ interface AuthCtx {
   signUp: (input: SignUpInput) => Promise<Profile>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
+  changePassword: (current: string, next: string) => Promise<void>
+  signOutEverywhere: () => Promise<void>
+  uploadAvatar: (file: Blob) => Promise<string>
 }
 
 const Ctx = createContext<AuthCtx | null>(null)
@@ -38,6 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signIn: async (e, p) => { const u = await auth.signIn(e, p); qc.clear(); setUser(u); return u },
     signUp: async (input) => { const u = await auth.signUp(input); qc.clear(); setUser(u); return u },
     signOut: async () => { await auth.signOut(); qc.clear(); setUser(null) },
+    changePassword: (c, n) => auth.changePassword(c, n),
+    signOutEverywhere: async () => { await auth.signOutEverywhere(); qc.clear(); setUser(null) },
+    uploadAvatar: (file) => { if (!user) throw new Error('Not signed in'); return auth.uploadAvatar(user.id, file) },
   }), [user, loading, refresh, qc])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

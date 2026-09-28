@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowRight, Award, BadgeCheck, CalendarDays, Check, Clock, GraduationCap, Languages, MapPin, Phone, Share2, Stethoscope, ThumbsUp, Users } from 'lucide-react'
 import { toast } from 'sonner'
+import { parseISO } from 'date-fns'
+import { nameKey, useBookingData, useDoctorDays } from '../../booking/useBooking'
 import { cn } from '../../lib/utils'
 import { WEEK, nextAvailable, useContact, useSite } from '../cms/content'
 import { iconFor } from '../cms/icons'
@@ -11,10 +13,7 @@ import { Reveal, Stars } from '../parts'
 import { Breadcrumbs, DoctorCard, inr, useBookHref } from '../ui'
 import NotFound from './NotFound'
 
-const SLOTS = { morning: ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30'], afternoon: ['14:00', '14:30', '15:00', '15:30'], evening: ['17:00', '17:30', '18:00', '18:30'] }
-
-// Deterministic "booked" slots so the picker feels real without randomness on each render.
-const isTaken = (slug: string, day: number, slot: string) => ((slug.length * 7 + day * 13 + slot.charCodeAt(1) * 3 + slot.charCodeAt(3)) % 5) === 0
+const hm12 = (s: string) => { const [h, m] = s.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}` }
 
 /** Keyed by slug so date/slot state resets when moving between profiles. */
 export default function DoctorProfile() {
@@ -23,25 +22,28 @@ export default function DoctorProfile() {
 }
 
 function Profile({ slug }: { slug?: string }) {
-  const { doctors: DOCTORS, services } = useSite()
+  const { doctors: DOCTORS, services, settings } = useSite()
   const c = useContact()
   const d = DOCTORS.find((x) => x.slug === slug)
-  const book = useBookHref()
+  const book = useBookHref({ doctor: slug })
   const navigate = useNavigate()
   useSeo(d ? `${d.name} — ${d.role}` : 'Doctor not found', d ? `${d.name}, ${d.quals}. ${d.exp}+ years experience. Book an appointment at ${c.name}.` : undefined)
 
-  const days = useMemo(() => {
-    const out: { date: Date; dow: string; ok: boolean }[] = []
-    const now = new Date()
-    for (let i = 0; i < 7; i++) {
-      const dt = new Date(now); dt.setDate(now.getDate() + i)
-      const dow = WEEK[(dt.getDay() + 6) % 7]
-      out.push({ date: dt, dow, ok: !!d && !d.onLeave && d.days.includes(dow) })
-    }
-    return out
-  }, [d])
+  // Live availability from the hospital schedule (leave, holidays and booked slots included).
+  const { days: win, docsQ, availQ } = useBookingData(settings)
+  const dbDoc = useMemo(() => (d ? docsQ.data?.find((x) => nameKey(x.full_name) === nameKey(d.name)) : undefined), [d, docsQ.data])
+  const week = useMemo(() => win.slice(0, 7), [win])
+  const free = useDoctorDays(dbDoc, week, availQ.data, settings)
+  const loadingSlots = docsQ.isPending || availQ.isPending
+  const bookable = !!dbDoc && settings.booking.enabled
+  const days = week.map((ds) => {
+    const dt = parseISO(ds), dow = WEEK[(dt.getDay() + 6) % 7]
+    const slots = bookable && availQ.data ? free.get(ds) ?? [] : []
+    return { ds, date: dt, dow, slots, ok: slots.length > 0 }
+  })
   const firstOk = Math.max(0, days.findIndex((x) => x.ok))
-  const [day, setDay] = useState(firstOk)
+  const [dayPick, setDay] = useState<number | null>(null)
+  const day = dayPick ?? firstOk
   const [slot, setSlot] = useState<string | null>(null)
 
   if (!d) return <NotFound />
@@ -191,36 +193,35 @@ function Profile({ slug }: { slug?: string }) {
                   ))}
                 </div>
 
-                {d.onLeave || !selected?.ok ? (
+                {loadingSlots ? (
+                  <div className="mt-5 grid grid-cols-3 gap-1.5" aria-busy="true">{Array.from({ length: 9 }).map((_, i) => <div key={i} className="h-8 animate-pulse rounded-lg bg-peri-50" />)}</div>
+                ) : !bookable || d.onLeave || !selected?.ok ? (
                   <div className="mt-5 rounded-2xl bg-amber-50 p-4 text-sm text-amber-800">
-                    {d.onLeave ? `${d.name} is currently on leave. Please choose another specialist or call us to be notified when bookings reopen.` : 'No OPD on this day. Please choose another date.'}
+                    {!bookable ? 'Online slots aren’t available for this doctor yet — please call us to book.'
+                      : d.onLeave || !days.some((x) => x.ok) ? `${d.name} has no free slots in the next 7 days. Try a later date on the booking page, or call us.` : 'No free slots on this day. Please choose another date.'}
                   </div>
                 ) : (
                   <div className="mt-5 space-y-4">
-                    {(Object.entries(SLOTS) as [string, string[]][]).map(([part, slots]) => (
+                    {([['morning', selected.slots.filter((x) => x < '12:00')], ['afternoon', selected.slots.filter((x) => x >= '12:00' && x < '17:00')], ['evening', selected.slots.filter((x) => x >= '17:00')]] as [string, string[]][]).filter(([, l]) => l.length).map(([part, slots]) => (
                       <div key={part}>
                         <p className="text-xs font-semibold capitalize text-slate-500">{part}</p>
-                        <div className="mt-2 grid grid-cols-4 gap-1.5" role="radiogroup" aria-label={`${part} slots`}>
-                          {slots.map((s) => {
-                            const taken = isTaken(d.slug, day, s)
-                            return (
-                              <button key={s} type="button" role="radio" aria-checked={slot === s} disabled={taken} onClick={() => setSlot(s)}
-                                className={cn('rounded-lg border py-1.5 text-xs font-semibold transition',
-                                  taken ? 'cursor-not-allowed border-transparent bg-slate-50 text-slate-300 line-through'
-                                    : slot === s ? 'border-peri-700 bg-peri-800 text-white' : 'border-peri-200 text-peri-800 hover:border-peri-500')}>
-                                {s}
-                              </button>
-                            )
-                          })}
+                        <div className="mt-2 grid grid-cols-3 gap-1.5" role="radiogroup" aria-label={`${part} slots`}>
+                          {slots.map((s) => (
+                            <button key={s} type="button" role="radio" aria-checked={slot === s} onClick={() => setSlot(s)}
+                              className={cn('rounded-lg border py-1.5 text-xs font-semibold tabular-nums transition',
+                                slot === s ? 'border-peri-700 bg-peri-800 text-white' : 'border-peri-200 text-peri-800 hover:border-peri-500')}>
+                              {hm12(s)}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
 
-                <button type="button" disabled={!slot} onClick={() => { toast.success(`Slot ${slot} held — sign in to confirm`); navigate(book) }}
+                <button type="button" disabled={!slot} onClick={() => navigate(bookable && slot ? `/book?doctor=${d.slug}&date=${selected.ds}&time=${slot}` : book)}
                   className="btn-peri mt-6 w-full disabled:pointer-events-none disabled:opacity-50">
-                  {slot ? <><Check className="h-4 w-4" />Continue with {selected.dow}, {slot}</> : <>Select a time slot</>}
+                  {slot ? <><Check className="h-4 w-4" />Continue with {selected.dow}, {hm12(slot)}</> : <>Select a time slot</>}
                 </button>
                 <a href={c.tel} className="mt-3 flex items-center justify-center gap-2 text-sm font-semibold text-peri-700 transition hover:text-peri-900"><Phone className="h-4 w-4" />or call {c.phone}</a>
               </div>

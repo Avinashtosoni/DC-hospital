@@ -70,6 +70,25 @@ export const supabaseAuth: AuthAdapter = {
   async signOut() {
     await client().auth.signOut()
   },
+  async changePassword(current, next) {
+    const { data } = await client().auth.getUser()
+    const email = data.user?.email
+    if (!email) throw new Error('Not signed in')
+    // re-authenticate first so a borrowed, unlocked session can't silently change the password
+    const check = await client().auth.signInWithPassword({ email, password: current })
+    if (check.error) throw new Error('Your current password is incorrect')
+    const { error } = await client().auth.updateUser({ password: next })
+    if (error) throw new Error(error.message)
+  },
+  async signOutEverywhere() {
+    await client().auth.signOut({ scope: 'global' })
+  },
+  async uploadAvatar(userId, file) {
+    const path = `${userId}/avatar-${Date.now().toString(36)}.webp`
+    const { error } = await client().storage.from('avatars').upload(path, file, { contentType: file.type || 'image/webp', upsert: true, cacheControl: '3600' })
+    if (error) throw new Error(error.message.includes('Bucket not found') ? 'Storage bucket "avatars" is missing — re-run supabase/master.sql.' : error.message)
+    return client().storage.from('avatars').getPublicUrl(path).data.publicUrl
+  },
   onChange(cb) {
     const { data } = client().auth.onAuthStateChange(() => cb())
     return () => data.subscription.unsubscribe()

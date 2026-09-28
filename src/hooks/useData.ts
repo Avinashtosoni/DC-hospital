@@ -4,6 +4,7 @@ import { db, type NewRow, type Row } from '../data/adapter'
 import type { TableName } from '../types'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
+import { isAudited } from '../lib/audit'
 
 export const qk = (table: TableName) => ['table', table] as const
 
@@ -46,7 +47,7 @@ export function useCreate<T extends TableName>(table: T, opts: { silent?: boolea
       toast.error(`Could not create ${opts.label ?? 'record'}`, { description: err.message })
     },
     onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} created`) },
-    onSettled: () => qc.invalidateQueries({ queryKey: qk(table) }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
   })
 }
 
@@ -66,7 +67,7 @@ export function useUpdate<T extends TableName>(table: T, opts: { silent?: boolea
       toast.error(`Could not update ${opts.label ?? 'record'}`, { description: err.message })
     },
     onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} updated`) },
-    onSettled: () => qc.invalidateQueries({ queryKey: qk(table) }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
   })
 }
 
@@ -86,6 +87,6 @@ export function useRemove<T extends TableName>(table: T, opts: { silent?: boolea
       toast.error(`Could not delete ${opts.label ?? 'record'}`, { description: err.message })
     },
     onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} deleted`) },
-    onSettled: () => qc.invalidateQueries({ queryKey: qk(table) }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
   })
 }

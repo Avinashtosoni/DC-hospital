@@ -51,6 +51,25 @@ export const DEFAULT_CONTENT: SiteContent = {
     },
     pages: { about: true, services: true, doctors: true, packages: true, contact: true, faq: true },
     seoDescription: 'DC Hospital — multi-speciality care in New Delhi. Book appointments with top specialists in 30 seconds, get digital prescriptions & lab reports online, 24×7 emergency.',
+    booking: {
+      enabled: true,
+      advanceDays: 30,
+      minNoticeMinutes: 60,
+      payNote: 'Pay at the reception when you arrive — cash, card or UPI. Please come 15 minutes early with a photo ID.',
+      showDemoOtp: true,
+    },
+    billing: {
+      legalName: 'DC Hospital Private Limited',
+      gstin: '07AAACD1234F1Z5',
+      regNo: 'DL/CE/2019/004512',
+      pan: 'AAACD1234F',
+      sac: '999312',
+      gstRate: 0,
+      exemptNote: 'Healthcare services by a clinical establishment are exempt from GST — Notification No. 12/2017-Central Tax (Rate), Sr. No. 74.',
+      upiId: 'dchospital@icici',
+      footer: 'This is a computer-generated document and does not require a physical signature.',
+      signatory: 'Authorised signatory',
+    },
   },
 
   // ================================================================ home

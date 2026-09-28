@@ -25,7 +25,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition active:scale-[.98] disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-300/60',
+        'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg font-medium transition active:scale-[.98] disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-300/60',
         size === 'sm' && 'h-8 px-3 text-xs',
         size === 'md' && 'h-9 px-4 text-sm',
         size === 'icon' && 'h-9 w-9',
@@ -112,11 +112,13 @@ export function CardHeader({ title, subtitle, action, icon }: { title: ReactNode
 
 // ------------------------------------------------------------------ Avatar
 const avatarColors = ['bg-sky-100 text-sky-700', 'bg-emerald-100 text-emerald-700', 'bg-violet-100 text-violet-700', 'bg-amber-100 text-amber-700', 'bg-rose-100 text-rose-700', 'bg-brand-200 text-brand-900', 'bg-indigo-100 text-indigo-700']
-export function Avatar({ name, size = 'md', className }: { name?: string | null; size?: 'sm' | 'md' | 'lg' | 'xl'; className?: string }) {
+export function Avatar({ name, size = 'md', className, src }: { name?: string | null; size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'; className?: string; src?: string | null }) {
   const hash = [...(name ?? '')].reduce((a, c) => a + c.charCodeAt(0), 0)
+  const box = cn('shrink-0 rounded-full', size === 'sm' && 'h-7 w-7', size === 'md' && 'h-9 w-9', size === 'lg' && 'h-12 w-12', size === 'xl' && 'h-16 w-16', size === '2xl' && 'h-24 w-24')
+  if (src) return <img src={src} alt={name ?? ''} loading="lazy" decoding="async" className={cn(box, 'bg-brand-50 object-cover', className)} />
   return (
     <div className={cn('grid shrink-0 place-items-center rounded-full font-semibold', avatarColors[hash % avatarColors.length],
-      size === 'sm' && 'h-7 w-7 text-[10px]', size === 'md' && 'h-9 w-9 text-xs', size === 'lg' && 'h-12 w-12 text-sm', size === 'xl' && 'h-16 w-16 text-lg', className)}>
+      size === 'sm' && 'h-7 w-7 text-[10px]', size === 'md' && 'h-9 w-9 text-xs', size === 'lg' && 'h-12 w-12 text-sm', size === 'xl' && 'h-16 w-16 text-lg', size === '2xl' && 'h-24 w-24 text-2xl', className)}>
       {initials(name)}
     </div>
   )

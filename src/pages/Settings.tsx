@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Database, KeyRound, RefreshCw, Save, ShieldCheck, UserRound } from 'lucide-react'
+import { ArrowRight, Database, KeyRound, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../auth/AuthProvider'
 import { db } from '../data/adapter'
-import { Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, Field, Input, PageHeader } from '../components/ui'
+import { Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, PageHeader } from '../components/ui'
 import { ROLE_LABEL } from '../types'
 import { PERMISSIONS } from '../auth/permissions'
 import { isSupabaseConfigured } from '../lib/supabase'
@@ -13,20 +14,8 @@ import { titleCase } from '../lib/utils'
 export default function Settings() {
   const { user, refresh } = useAuth()
   const qc = useQueryClient()
-  const [form, setForm] = useState({ full_name: user!.full_name, phone: user!.phone ?? '' })
-  const [saving, setSaving] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
 
-  const save = async () => {
-    if (!form.full_name.trim()) return toast.error('Name is required')
-    setSaving(true)
-    try {
-      await db.update('profiles', user!.id, { full_name: form.full_name.trim(), phone: form.phone || null })
-      await refresh()
-      qc.invalidateQueries({ queryKey: ['table', 'profiles'] })
-      toast.success('Profile updated')
-    } catch (e) { toast.error((e as Error).message) } finally { setSaving(false) }
-  }
   const reset = async () => {
     setResetOpen(false)
     await db.reset?.()
@@ -38,23 +27,16 @@ export default function Settings() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeader title="Settings" description="Manage your profile and application preferences." />
+      <PageHeader title="Settings" description="Your access and application data." />
       <div className="space-y-6">
-        <Card>
-          <CardHeader title="Your profile" icon={<UserRound className="h-4 w-4" />} />
-          <div className="flex flex-col gap-6 p-5 sm:flex-row">
-            <div className="flex flex-col items-center gap-2 sm:w-40">
-              <Avatar name={form.full_name} size="xl" />
-              <Badge tone="teal">{ROLE_LABEL[user!.role]}</Badge>
-            </div>
-            <div className="grid flex-1 gap-4 sm:grid-cols-2">
-              <Field label="Full name" required><Input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} /></Field>
-              <Field label="Phone"><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-              <Field label="Email" hint="Email is tied to your login and can't be changed here" className="sm:col-span-2"><Input value={user!.email} disabled /></Field>
-              <div className="sm:col-span-2"><Button onClick={save} loading={saving} icon={<Save className="h-4 w-4" />}>Save changes</Button></div>
-            </div>
+        <Link to="/profile" className="card flex items-center gap-4 p-5 transition hover:shadow-md">
+          <Avatar name={user!.full_name} src={user!.avatar_url} size="lg" />
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-brand-950">{user!.full_name} <Badge tone="violet" className="ml-1">{ROLE_LABEL[user!.role]}</Badge></p>
+            <p className="text-sm text-slate-500">Photo, personal details, password and preferences now live on your profile page.</p>
           </div>
-        </Card>
+          <span className="inline-flex items-center gap-1 text-sm font-medium text-brand-700">My profile<ArrowRight className="h-4 w-4" /></span>
+        </Link>
 
         <Card>
           <CardHeader title="Your access" subtitle="Modules available to your role" icon={<ShieldCheck className="h-4 w-4" />} />

@@ -36,6 +36,33 @@ export interface SiteSettings {
   cta: Cta & { note: string }
   pages: { about: boolean; services: boolean; doctors: boolean; packages: boolean; contact: boolean; faq: boolean }
   seoDescription: string
+  /** Online appointment booking from the public website (/book). */
+  booking: {
+    enabled: boolean
+    /** how far ahead patients can book */
+    advanceDays: number
+    /** earliest bookable slot today = now + this many minutes */
+    minNoticeMinutes: number
+    /** shown on the confirmation + invoice */
+    payNote: string
+    /** show the OTP on screen when no SMS gateway is connected (demo / testing only) */
+    showDemoOtp: boolean
+  }
+  /** Letterhead + tax details printed on invoices / bills of supply. */
+  billing: {
+    legalName: string
+    gstin: string
+    regNo: string
+    pan: string
+    /** SAC code for services, e.g. 999312 (medical & dental services) */
+    sac: string
+    /** GST % applied to online consultation bookings (0 = exempt healthcare service) */
+    gstRate: number
+    exemptNote: string
+    upiId: string
+    footer: string
+    signatory: string
+  }
 }
 
 // ------------------------------------------------------------------ pages

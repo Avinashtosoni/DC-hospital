@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
 import { useLookup, useTable, useUpdate } from '../hooks/useData'
 import { useMe } from '../hooks/useScope'
+import { RecordHistory } from '../components/RecordHistory'
 import { useResourceCtx } from '../resources/useResourceCtx'
 import { patientsRes } from '../resources/definitions'
 import { ResourceFormDrawer } from '../components/ResourceForm'
@@ -14,7 +15,7 @@ import { age, fmtDate, fmtTime, money, titleCase } from '../lib/utils'
 import { invoiceBalance } from '../lib/billing'
 import type { Patient } from '../types'
 
-type Tab = 'overview' | 'appointments' | 'prescriptions' | 'labs' | 'admissions' | 'invoices'
+type Tab = 'overview' | 'appointments' | 'prescriptions' | 'labs' | 'admissions' | 'invoices' | 'history'
 
 export function MyRecord() {
   const me = useMe()
@@ -62,6 +63,7 @@ export default function PatientDetail() {
     { value: 'labs', label: 'Lab reports', count: data.labs.length, show: can(role, 'lab_tests', 'read') },
     { value: 'admissions', label: 'Admissions', count: data.adm.length, show: can(role, 'admissions', 'read') },
     { value: 'invoices', label: 'Billing', count: data.inv.length, show: can(role, 'invoices', 'read') },
+    { value: 'history', label: 'Change history', show: role === 'owner' },
   ]
   const outstanding = data.inv.filter((i) => !['cancelled', 'draft'].includes(i.status)).reduce((s, i) => s + invoiceBalance(i), 0)
   const lastVisit = data.appts.find((a) => a.status === 'completed')
@@ -172,6 +174,10 @@ export default function PatientDetail() {
         )}
       </div>
 
+        {tab === 'history' && (
+          <div className="mt-4"><RecordHistory table="patients" title="Everything that changed for this patient"
+            ids={[p.id, ...data.appts.map((x) => x.id), ...data.rx.map((x) => x.id), ...data.labs.map((x) => x.id), ...data.adm.map((x) => x.id), ...data.inv.map((x) => x.id)]} /></div>
+        )}
       {ctx && (
         <ResourceFormDrawer def={patientsRes} ctx={ctx} open={editOpen} onClose={() => setEditOpen(false)} initial={p} rows={patients.data ?? []}
           onSubmit={(v) => { setEditOpen(false); upd.mutate({ id: p.id, patch: v }) }} />

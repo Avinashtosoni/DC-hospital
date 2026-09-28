@@ -3,6 +3,7 @@ import type { DB, Profile, TableName } from '../types'
 import { TABLES } from '../types'
 import type { AuthAdapter, DataAdapter, NewRow, Row, SignUpInput } from './adapter'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from './seed'
+import { auditSummary, diffRows, isAudited } from '../lib/audit'
 
 const DB_KEY = 'dch:db:v3'
 const USERS_KEY = 'dch:auth-users:v1'
@@ -44,6 +45,30 @@ function load(): Store {
 }
 function persist() { if (cache) localStorage.setItem(DB_KEY, JSON.stringify(cache)) }
 
+/** Label writes made on behalf of a system process (e.g. the public booking API) instead of the signed-in user. */
+let actorOverride: { name: string; role: string } | null = null
+export async function asActor<T>(name: string, role: string, fn: () => Promise<T>): Promise<T> {
+  actorOverride = { name, role }
+  try { return await fn() } finally { actorOverride = null }
+}
+
+/** Demo-mode equivalent of the audit triggers in scripts/sql/audit.sql. */
+function audit(table: TableName, action: 'insert' | 'update' | 'delete', before: Record<string, unknown> | null, after: Record<string, unknown> | null) {
+  if (!isAudited(table)) return
+  const changes = diffRows(before, after)
+  if (action === 'update' && !Object.keys(changes).length) return
+  const store = load()
+  const actorId = actorOverride ? null : localStorage.getItem(SESSION_KEY)
+  const actor = actorId ? store.profiles.find((p) => p.id === actorId) : undefined
+  const row = (after ?? before) as Record<string, unknown>
+  store.audit_log.unshift({
+    id: uuid(), table_name: table, record_id: (row.id as string) ?? null, action, changes,
+    actor_id: actor?.id ?? null, actor_name: actor?.full_name ?? actorOverride?.name ?? 'System', actor_role: actor?.role ?? actorOverride?.role ?? 'system',
+    summary: auditSummary(table, row), created_at: new Date().toISOString(),
+  })
+  if (store.audit_log.length > 3000) store.audit_log.length = 3000
+}
+
 const latency = () => new Promise((r) => setTimeout(r, 180 + Math.random() * 260))
 const uuid = () => crypto.randomUUID()
 
@@ -58,6 +83,7 @@ export const localAdapter: DataAdapter = {
     const now = new Date().toISOString()
     const full = { ...row, id: row.id ?? uuid(), created_at: now, updated_at: now } as unknown as Row<T>
     ;(load()[table] as Row<T>[]).unshift(full)
+    audit(table, 'insert', null, full as unknown as Record<string, unknown>)
     persist()
     return structuredClone(full)
   },
@@ -66,14 +92,18 @@ export const localAdapter: DataAdapter = {
     const rows = load()[table] as Row<T>[]
     const idx = rows.findIndex((r) => r.id === id)
     if (idx < 0) throw new Error('Record not found')
+    const before = rows[idx]
     rows[idx] = { ...rows[idx], ...patch, id, updated_at: new Date().toISOString() }
+    audit(table, 'update', before as unknown as Record<string, unknown>, rows[idx] as unknown as Record<string, unknown>)
     persist()
     return structuredClone(rows[idx])
   },
   async remove(table, id) {
     await latency()
     const store = load() as Record<string, { id: string }[]>
+    const before = store[table].find((r) => r.id === id)
     store[table] = store[table].filter((r) => r.id !== id)
+    if (before) audit(table, 'delete', before as Record<string, unknown>, null)
     persist()
   },
   async reset() {
@@ -134,6 +164,24 @@ export const localAuth: AuthAdapter = {
   async signOut() {
     localStorage.removeItem(SESSION_KEY)
     emit()
+  },
+  async changePassword(current, next) {
+    await latency()
+    const id = localStorage.getItem(SESSION_KEY)
+    const list = users()
+    const u = list.find((x) => x.profile_id === id)
+    if (!u) throw new Error('No local login found for this account')
+    if (u.password !== current) throw new Error('Your current password is incorrect')
+    u.password = next
+    localStorage.setItem(USERS_KEY, JSON.stringify(list))
+  },
+  async signOutEverywhere() {
+    localStorage.removeItem(SESSION_KEY)
+    emit()
+  },
+  async uploadAvatar(_userId, file) {
+    // demo mode keeps the (already downscaled) image inline
+    return await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file) })
   },
   onChange(cb) {
     listeners.add(cb)

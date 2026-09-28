@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { db } from '../data/adapter'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
+import { isAudited } from '../lib/audit'
 import { qk } from '../hooks/useData'
 import { useMe } from '../hooks/useScope'
 import { TABLES, type TableName } from '../types'
@@ -35,11 +36,11 @@ export function useResourceCtx(relations: TableName[] = []): { ctx: ResourceCtx 
 
   const patch = useCallback<ResourceCtx['patch']>(async (table, id, p) => {
     try { await db.update(table, id, p) } catch (e) { toast.error((e as Error).message) }
-    qc.invalidateQueries({ queryKey: qk(table) })
+    qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') })
   }, [qc])
   const insert = useCallback<ResourceCtx['insert']>(async (table, row) => {
     try { await db.insert(table, row as never) } catch (e) { toast.error((e as Error).message) }
-    qc.invalidateQueries({ queryKey: qk(table) })
+    qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') })
   }, [qc])
 
   const ctx = useMemo<ResourceCtx | null>(() => (user ? {
