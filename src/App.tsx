@@ -35,6 +35,7 @@ const BedsPage = lazy(() => import('./pages/Beds'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Settings = lazy(() => import('./pages/Settings'))
 const CmsPage = lazy(() => import('./pages/cms/CmsPage'))
+const AppointmentsPage = lazy(() => import('./pages/appointments/AppointmentsPage'))
 
 const RESOURCES = [
   R.patientsRes, R.appointmentsRes, R.prescriptionsRes, R.labTestsRes, R.admissionsRes, R.doctorsRes, R.staffRes,
@@ -66,7 +67,8 @@ export default function App() {
           </RequireAuth>
         }>
           <Route index element={<Suspense fallback={<PageLoader />}><Dashboard /></Suspense>} />
-          {RESOURCES.map((def) => (
+          <Route path="/appointments" element={<RequireNav path="/appointments"><Suspense fallback={<PageLoader />}><AppointmentsPage /></Suspense></RequireNav>} />
+          {RESOURCES.filter((def) => def !== R.appointmentsRes).map((def) => (
             <Route key={def.path} path={def.path} element={<RequireNav path={def.path}><ResourcePage key={def.path} def={def} /></RequireNav>} />
           ))}
           <Route path="/me" element={<RequireNav path="/me"><Suspense fallback={<PageLoader />}><MyRecord /></Suspense></RequireNav>} />

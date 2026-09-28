@@ -55,6 +55,7 @@ export function ResourceFormDrawer({ def, ctx, open, onClose, initial, prefill, 
       if (f.type === 'medications' && Array.isArray(v) && v.some((m: Medication) => !m.name?.trim())) errs[f.name] = 'Every medicine needs a name'
       if (f.type === 'line_items' && Array.isArray(v) && v.some((m: LineItem) => !m.description?.trim())) errs[f.name] = 'Every line needs a description'
     }
+    if (!Object.keys(errs).length && def.validate) Object.assign(errs, def.validate(values, ctx, rows, (initial ?? undefined) as never))
     setErrors(errs)
     if (Object.keys(errs).length) return
     // normalise

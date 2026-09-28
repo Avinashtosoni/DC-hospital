@@ -91,6 +91,7 @@ export const patientsRes = defineResource({
 })
 
 // ================================================================== APPOINTMENTS
+const INACTIVE_APPT = ['cancelled', 'no_show']
 const setApptStatus = (status: Appointment['status']) => (r: Appointment, c: ResourceCtx) => c.patch('appointments', r.id, { status })
 export const appointmentsRes = defineResource({
   table: 'appointments', path: '/appointments', singular: 'Appointment', icon: CalendarCheck,
@@ -143,6 +144,12 @@ export const appointmentsRes = defineResource({
     { name: 'notes', label: 'Internal notes', type: 'textarea', hidden: (c) => isPatient(c) },
   ],
   beforeSave: (v, c) => (isPatient(c) ? { ...v, patient_id: c.me.patient?.id, status: v.status ?? 'scheduled' } : v),
+  validate: (v, _c, rows, existing): Record<string, string> => {
+    if (INACTIVE_APPT.includes(v.status)) return {}
+    const clash = rows.find((r) => r.id !== existing?.id && r.doctor_id === v.doctor_id && r.appointment_date === v.appointment_date
+      && r.appointment_time === v.appointment_time && !INACTIVE_APPT.includes(r.status))
+    return clash ? { appointment_time: `This doctor is already booked at ${fmtTime(v.appointment_time)} — pick another slot` } : {}
+  },
 })
 
 // ================================================================== PRESCRIPTIONS

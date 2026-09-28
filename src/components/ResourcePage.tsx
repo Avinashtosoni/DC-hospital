@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, MoreHorizontal, Pencil, Plus, Search, SearchX, Trash2, X } from 'lucide-react'
@@ -13,7 +13,7 @@ import { cn, downloadCsv } from '../lib/utils'
 const PAGE_SIZE = 12
 const hideCls = { sm: 'hidden sm:table-cell', md: 'hidden md:table-cell', lg: 'hidden lg:table-cell', xl: 'hidden xl:table-cell' }
 
-export function ResourcePage({ def }: { def: ResourceDef }) {
+export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExtra?: ReactNode }) {
   const { ctx, loading: ctxLoading } = useResourceCtx(def.relations)
   const q = useTable(def.table)
   const label = def.singular
@@ -119,6 +119,7 @@ export function ResourcePage({ def }: { def: ResourceDef }) {
     <div>
       <PageHeader title={title} description={description}
         actions={<>
+          {headerExtra}
           {role !== 'patient' && <Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!filtered.length}>Export</Button>}
           {canCreate && <Button icon={<Plus className="h-4 w-4" />} onClick={openCreate} disabled={!ctx}>New {label.toLowerCase()}</Button>}
         </>} />

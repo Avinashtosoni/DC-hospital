@@ -90,6 +90,8 @@ export interface ResourceDef<T extends TableName = TableName> {
   canDelete?: (row: Row<T>, ctx: ResourceCtx) => boolean
   allowCreate?: boolean
   beforeSave?: (values: Record<string, any>, ctx: ResourceCtx, existing?: Row<T>) => Record<string, any>
+  /** cross-field / cross-row checks; return { fieldName: message } */
+  validate?: (values: Record<string, any>, ctx: ResourceCtx, rows: Row<T>[], existing?: Row<T>) => Record<string, string>
   afterSave?: (saved: Row<T>, ctx: ResourceCtx, existing?: Row<T>) => void | Promise<void>
   afterDelete?: (row: Row<T>, ctx: ResourceCtx) => void | Promise<void>
   emptyText?: string
