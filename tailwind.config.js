@@ -8,9 +8,10 @@ export default {
         display: ['"Plus Jakarta Sans"', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       colors: {
+        // Dashboard palette built on #CCCCFF · #A3A3CC · #5C5C99 · #292966
         brand: {
-          50: '#eefcfb', 100: '#d4f7f4', 200: '#adeee9', 300: '#76e0da', 400: '#3cc9c3',
-          500: '#1fadaa', 600: '#168a8a', 700: '#166e70', 800: '#17585a', 900: '#18494c', 950: '#082b2e',
+          50: '#f5f5ff', 100: '#ebebff', 200: '#dcdcfa', 300: '#ccccff', 400: '#a3a3cc',
+          500: '#7a7ab3', 600: '#5c5c99', 700: '#484885', 800: '#363673', 900: '#292966', 950: '#1b1b47',
         },
         // Landing palette: #CCCCFF periwinkle → #A3A3CC → #5C5C99 → #292966 deep blue
         peri: {
@@ -19,7 +20,8 @@ export default {
         },
       },
       boxShadow: {
-        card: '0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06)',
+        card: '0 1px 2px rgba(41,41,102,.04), 0 2px 8px -2px rgba(41,41,102,.07)',
+        lift: '0 4px 10px -2px rgba(41,41,102,.08), 0 18px 40px -16px rgba(41,41,102,.22)',
         glass: '0 1px 0 rgba(255,255,255,.7) inset, 0 12px 40px -12px rgba(41,41,102,.25)',
         glow: '0 10px 40px -10px rgba(92,92,153,.55)',
         soft: '0 2px 4px rgba(41,41,102,.04), 0 12px 32px -8px rgba(41,41,102,.12)',

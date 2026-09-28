@@ -11,7 +11,7 @@ import type { ContentKey, SiteContent } from '../../site/cms/types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type Obj = Record<string, any>
-export interface Ctx { site: SiteContent; root: any }
+export interface Ctx { site: SiteContent; root: any; /** steer the live preview to a page (null = section default) */ focus?: (path: string | null) => void }
 
 interface Base { k: string; label: string; hint?: string; full?: boolean }
 export type FieldDef =
@@ -31,6 +31,8 @@ export type FieldDef =
   | (Base & {
     t: 'list'; item: FieldDef[]; title: (v: any, i: number) => string; subtitle?: (v: any) => string; thumb?: (v: any) => string | undefined
     newItem: (c: Ctx) => Obj; hideable?: boolean; fixed?: boolean; addLabel?: string
+    /** public page of an item — the live preview follows the item being edited */
+    preview?: (v: any) => string
   })
 
 // ------------------------------------------------------------------ reusable bits
@@ -330,7 +332,7 @@ export const SECTIONS: Section[] = [
     key: 'services', label: 'Specialities', group: 'Collections', icon: HeartPulse, preview: '/services',
     description: 'Every speciality with its own page — conditions, treatments, technology and key numbers.',
     fields: [{
-      k: '', t: 'list', label: 'Specialities', hideable: true, title: (v) => v.name, subtitle: (v) => v.tagline, addLabel: 'Add speciality',
+      k: '', t: 'list', label: 'Specialities', hideable: true, preview: (v) => `/services/${v.slug}`, title: (v) => v.name, subtitle: (v) => v.tagline, addLabel: 'Add speciality',
       newItem: ({ root }) => ({ slug: uniqueSlug('new-speciality', (root as Obj[]).map((s) => s.slug)), name: 'New speciality', icon: 'Stethoscope', tagline: '', summary: '', description: [''], conditions: [], treatments: [], technology: [], stats: [], hours: 'OPD Mon–Sat, 9:00 AM – 5:00 PM', featured: false }),
       item: [
         { k: 'name', t: 'text', label: 'Name' }, { k: 'slug', t: 'text', label: 'URL slug', hint: 'Page address: /services/slug — lowercase letters, numbers and dashes.' },
@@ -358,7 +360,7 @@ export const SECTIONS: Section[] = [
     key: 'doctors', label: 'Doctors', group: 'Collections', icon: UsersRound, preview: '/find-a-doctor',
     description: 'Public doctor profiles — photo, schedule, fees, education and expertise.',
     fields: [{
-      k: '', t: 'list', label: 'Doctors', hideable: true, title: (v) => v.name, subtitle: (v) => `${v.role}${v.onLeave ? ' · On leave' : ''}`, thumb: (v) => v.img, addLabel: 'Add doctor',
+      k: '', t: 'list', label: 'Doctors', hideable: true, preview: (v) => `/find-a-doctor/${v.slug}`, title: (v) => v.name, subtitle: (v) => `${v.role}${v.onLeave ? ' · On leave' : ''}`, thumb: (v) => v.img, addLabel: 'Add doctor',
       newItem: ({ root, site }) => ({
         slug: uniqueSlug('new-doctor', (root as Obj[]).map((d) => d.slug)), name: 'Dr. New Doctor', role: 'Consultant', dept: site.services[0]?.name ?? 'General Medicine', service: site.services[0]?.slug ?? '',
         img: '', exp: 5, rating: 4.8, reviews: 0, fee: 800, days: ['Mon', 'Wed', 'Fri'], time: '10:00 AM – 2:00 PM', langs: ['English', 'Hindi'], quals: 'MBBS, MD', bio: '', education: [], expertise: [], awards: [], featured: false,

@@ -70,9 +70,9 @@ export default function Reports() {
                 <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={moneyCompact} width={64} />
                 <Tooltip formatter={(v) => money(Number(v))} cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }} />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="billed" name="Billed" fill="#bae6fd" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="collected" name="Collected" fill="#1fadaa" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="expenses" name="Expenses" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="billed" name="Billed" fill="#ccccff" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="collected" name="Collected" fill="#5c5c99" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="expenses" name="Expenses" fill="#292966" radius={[4, 4, 0, 0]} maxBarSize={28} />
               </BarChart>
             </ResponsiveContainer>
           </div>

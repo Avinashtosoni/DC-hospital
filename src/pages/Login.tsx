@@ -15,8 +15,8 @@ const ROLE_ICON: Record<Role, typeof Crown> = { owner: Crown, doctor: Stethoscop
 export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
-      <div className="relative hidden overflow-hidden bg-slate-950 lg:block">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(31,173,170,.35),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(56,189,248,.18),transparent_50%)]" />
+      <div className="relative hidden overflow-hidden bg-brand-950 lg:block">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,rgba(204,204,255,.35),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(92,92,153,.45),transparent_50%)]" />
         <div className="absolute inset-0 opacity-[.07] [background-image:linear-gradient(white_1px,transparent_1px),linear-gradient(90deg,white_1px,transparent_1px)] [background-size:44px_44px]" />
         <div className="relative flex h-full flex-col justify-between p-12">
           <Link to="/" aria-label="Back to home" className="self-start"><Logo light /></Link>
@@ -28,7 +28,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
                 const I = Icon as typeof Users
                 return (
                   <div key={t as string} className="rounded-xl border border-white/10 bg-white/[.04] p-4 backdrop-blur">
-                    <I className="h-5 w-5 text-brand-400" />
+                    <I className="h-5 w-5 text-brand-300" />
                     <div className="mt-3 text-sm font-medium text-white">{t as string}</div>
                     <div className="text-xs text-slate-400">{s as string}</div>
                   </div>

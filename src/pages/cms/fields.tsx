@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
 import {
   ArrowDown, ArrowUp, Check, ChevronDown, Copy, Eye, EyeOff, ImageIcon, ImagePlus, Plus, Search, Trash2, X,
 } from 'lucide-react'
@@ -14,13 +14,16 @@ import type { Ctx, FieldDef, Obj } from './schema'
 const get = (o: any, k: string) => (k ? o?.[k] : o)
 const put = (o: any, k: string, v: any) => (k ? { ...o, [k]: v } : v)
 const move = <T,>(a: T[], from: number, to: number) => { const n = [...a]; const [x] = n.splice(from, 1); n.splice(to, 0, x); return n }
+const changed = (a: unknown, b: unknown) => b !== undefined && JSON.stringify(a) !== JSON.stringify(b)
+const EditedChip = () => <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-200"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" />Edited</span>
 
-export function FieldsForm({ fields, value, onChange, ctx, depth = 0 }: { fields: FieldDef[]; value: any; onChange: (v: any) => void; ctx: Ctx; depth?: number }) {
+/** `saved` is the published value at the same path — used to flag groups/lists with unpublished edits. */
+export function FieldsForm({ fields, value, saved, onChange, ctx, depth = 0 }: { fields: FieldDef[]; value: any; saved?: any; onChange: (v: any) => void; ctx: Ctx; depth?: number }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {fields.map((f, i) => (
         <div key={f.k + i} className={cn((f.full || f.t === 'group' || f.t === 'list' || f.t === 'tags' || f.t === 'strings' || f.t === 'cells') && 'sm:col-span-2')}>
-          <FieldView f={f} value={get(value, f.k)} onChange={(v) => onChange(put(value, f.k, v))} ctx={ctx} depth={depth} />
+          <FieldView f={f} value={get(value, f.k)} saved={saved === undefined ? undefined : get(saved, f.k)} onChange={(v) => onChange(put(value, f.k, v))} ctx={ctx} depth={depth} />
         </div>
       ))}
     </div>
@@ -39,7 +42,7 @@ const Hint = ({ f }: { f: FieldDef }) => (f.hint ? <p className="mt-1 text-[11px
 let uid = 0
 const useId = () => useState(() => `cf-${++uid}`)[0]
 
-function FieldView({ f, value, onChange, ctx, depth }: { f: FieldDef; value: any; onChange: (v: any) => void; ctx: Ctx; depth: number }) {
+function FieldView({ f, value, saved, onChange, ctx, depth }: { f: FieldDef; value: any; saved?: any; onChange: (v: any) => void; ctx: Ctx; depth: number }) {
   const id = useId()
   switch (f.t) {
     case 'text': case 'url':
@@ -70,8 +73,8 @@ function FieldView({ f, value, onChange, ctx, depth }: { f: FieldDef; value: any
     case 'strings': return <StringsField f={f} value={Array.isArray(value) ? value : []} onChange={onChange} />
     case 'days': return <DaysField f={f} value={Array.isArray(value) ? value : []} onChange={onChange} />
     case 'cells': return <CellsField f={f} value={Array.isArray(value) ? value : []} onChange={onChange} ctx={ctx} />
-    case 'group': return <Group f={f} value={value ?? {}} onChange={onChange} ctx={ctx} depth={depth} />
-    case 'list': return <ListField f={f} value={Array.isArray(value) ? value : []} onChange={onChange} ctx={ctx} depth={depth} />
+    case 'group': return <Group f={f} value={value ?? {}} saved={saved} onChange={onChange} ctx={ctx} depth={depth} />
+    case 'list': return <ListField f={f} value={Array.isArray(value) ? value : []} saved={Array.isArray(saved) ? saved : undefined} onChange={onChange} ctx={ctx} depth={depth} />
   }
 }
 
@@ -102,7 +105,7 @@ function ImageField({ f, value, onChange }: { f: FieldDef; value: string; onChan
         <div className="min-w-0 flex-1 space-y-2">
           <Input value={value.startsWith('data:') ? '(uploaded image)' : value} readOnly={value.startsWith('data:')} placeholder="https://… or choose from library" onChange={(e) => onChange(e.target.value)} />
           <div className="flex gap-2">
-            <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800"><ImagePlus className="h-3.5 w-3.5" />Choose / upload</button>
+            <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-md bg-brand-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-800"><ImagePlus className="h-3.5 w-3.5" />Choose / upload</button>
             {value && <button type="button" onClick={() => onChange('')} className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100"><X className="h-3.5 w-3.5" />Remove</button>}
           </div>
         </div>
@@ -252,25 +255,31 @@ function IconBtn({ label, onClick, children, disabled, danger }: { label: string
 }
 
 // ------------------------------------------------------------------ containers
-function Group({ f, value, onChange, ctx, depth }: { f: Extract<FieldDef, { t: 'group' }>; value: any; onChange: (v: any) => void; ctx: Ctx; depth: number }) {
+function Group({ f, value, saved, onChange, ctx, depth }: { f: Extract<FieldDef, { t: 'group' }>; value: any; saved?: any; onChange: (v: any) => void; ctx: Ctx; depth: number }) {
   const [open, setOpen] = useState(!f.collapsed)
   const top = depth === 0
+  const edited = depth < 2 && changed(value, saved)
   return (
-    <section className={cn(top ? 'rounded-xl border border-slate-200 bg-white shadow-sm' : 'rounded-lg border border-slate-200/80 bg-slate-50/60')}>
+    <section className={cn(top ? 'rounded-2xl border bg-white shadow-card transition' : 'rounded-xl border bg-brand-50/40', top && (edited ? 'border-amber-200' : 'border-[#e6e6f5]'), !top && 'border-[#e6e6f5]')}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className={cn('flex w-full items-center justify-between gap-3 text-left', top ? 'px-5 py-3.5' : 'px-4 py-2.5')}>
         <span className="min-w-0">
-          <span className={cn('block font-semibold text-slate-800', top ? 'text-sm' : 'text-xs')}>{f.label}</span>
+          <span className={cn('flex items-center gap-2 font-semibold text-brand-950', top ? 'text-sm' : 'text-xs')}>{f.label}{edited && <EditedChip />}</span>
           {f.hint && <span className="mt-0.5 block text-[11px] text-slate-400">{f.hint}</span>}
         </span>
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-slate-400 transition-transform', open && 'rotate-180')} />
       </button>
-      {open && <div className={cn('border-t border-slate-100', top ? 'p-5' : 'p-4')}><FieldsForm fields={f.fields} value={value} onChange={onChange} ctx={ctx} depth={depth + 1} /></div>}
+      {open && <div className={cn('border-t border-[#efeff8]', top ? 'p-5' : 'p-4')}><FieldsForm fields={f.fields} value={value} saved={saved} onChange={onChange} ctx={ctx} depth={depth + 1} /></div>}
     </section>
   )
 }
 
-function ListField({ f, value, onChange, ctx, depth }: { f: Extract<FieldDef, { t: 'list' }>; value: Obj[]; onChange: (v: Obj[]) => void; ctx: Ctx; depth: number }) {
+function ListField({ f, value, saved, onChange, ctx, depth }: { f: Extract<FieldDef, { t: 'list' }>; value: Obj[]; saved?: Obj[]; onChange: (v: Obj[]) => void; ctx: Ctx; depth: number }) {
   const [open, setOpen] = useState<number | null>(null)
+  const edited = depth < 2 && changed(value, saved)
+  // Collections with their own pages (doctors, specialities) steer the live preview to the item being edited.
+  const focusPath = open !== null && f.preview && value[open] && !value[open].hidden ? f.preview(value[open]) : null
+  useEffect(() => { if (f.preview) ctx.focus?.(focusPath) }, [focusPath]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (f.preview) ctx.focus?.(null) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const [q, setQ] = useState('')
   const [confirm, setConfirm] = useState<number | null>(null)
   const top = depth === 0
@@ -290,10 +299,10 @@ function ListField({ f, value, onChange, ctx, depth }: { f: Extract<FieldDef, { 
   const mv = (i: number, to: number) => { onChange(move(value, i, to)); if (open === i) setOpen(to); else if (open === to) setOpen(i) }
 
   return (
-    <div className={cn(top && 'rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5')}>
+    <div className={cn(top && 'rounded-2xl border bg-white p-4 shadow-card sm:p-5', top && (edited ? 'border-amber-200' : 'border-[#e6e6f5]'))}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className={cn('font-semibold text-slate-800', top ? 'text-sm' : 'text-xs')}>{f.label} <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{value.length}{hiddenCount ? ` · ${hiddenCount} hidden` : ''}</span></p>
+          <p className={cn('flex flex-wrap items-center gap-2 font-semibold text-brand-950', top ? 'text-sm' : 'text-xs')}>{f.label} <span className="rounded-full bg-brand-100 px-1.5 py-0.5 text-[10px] font-medium text-brand-800">{value.length}{hiddenCount ? ` · ${hiddenCount} hidden` : ''}</span>{edited && <EditedChip />}</p>
           {f.hint && <p className="mt-0.5 text-[11px] text-slate-400">{f.hint}</p>}
         </div>
         {searchable && (
@@ -310,7 +319,7 @@ function ListField({ f, value, onChange, ctx, depth }: { f: Extract<FieldDef, { 
             const isOpen = open === i
             const thumb = f.thumb?.(v)
             return (
-              <li key={i} className={cn('overflow-hidden rounded-lg border transition', isOpen ? 'border-brand-300 shadow-sm ring-2 ring-brand-500/10' : 'border-slate-200', v.hidden && 'bg-slate-50')}>
+              <li key={i} className={cn('overflow-hidden rounded-xl border transition', isOpen ? 'border-brand-400 shadow-card ring-4 ring-brand-200/50' : 'border-[#e6e6f5] hover:border-brand-200', v.hidden && 'bg-slate-50')}>
                 <div className="flex items-center gap-2 pr-1.5">
                   <button type="button" onClick={() => setOpen(isOpen ? null : i)} aria-expanded={isOpen} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left">
                     {f.thumb && (thumb ? <img src={thumb} alt="" className="h-9 w-9 shrink-0 rounded-md bg-slate-100 object-cover" /> : <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-300"><ImageIcon className="h-4 w-4" /></span>)}
@@ -330,7 +339,12 @@ function ListField({ f, value, onChange, ctx, depth }: { f: Extract<FieldDef, { 
                     <ChevronDown className={cn('ml-1 h-4 w-4 text-slate-400 transition-transform', isOpen && 'rotate-180')} aria-hidden="true" />
                   </div>
                 </div>
-                {isOpen && <div className="border-t border-slate-100 bg-white p-4"><FieldsForm fields={f.item} value={v} onChange={(nv) => update(i, nv)} ctx={ctx} depth={depth + 1} /></div>}
+                {isOpen && (
+                  <div className="border-t border-[#efeff8] bg-white p-4">
+                    {focusPath && <p className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-medium text-brand-700"><Eye className="h-3 w-3" />Live preview is showing {focusPath}</p>}
+                    <FieldsForm fields={f.item} value={v} onChange={(nv) => update(i, nv)} ctx={ctx} depth={depth + 1} />
+                  </div>
+                )}
               </li>
             )
           })}
@@ -338,7 +352,7 @@ function ListField({ f, value, onChange, ctx, depth }: { f: Extract<FieldDef, { 
         </ul>
       )}
       {!f.fixed && (
-        <button type="button" onClick={add} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 py-2 text-xs font-semibold text-slate-600 transition hover:border-brand-400 hover:bg-brand-50/50 hover:text-brand-700">
+        <button type="button" onClick={add} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-brand-300 py-2.5 text-xs font-semibold text-brand-700 transition hover:border-brand-500 hover:bg-brand-50 hover:text-brand-900">
           <Plus className="h-3.5 w-3.5" />{f.addLabel ?? 'Add item'}
         </button>
       )}

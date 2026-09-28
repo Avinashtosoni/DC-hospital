@@ -388,7 +388,7 @@ function PatientDashboard() {
         <Link to="/appointments?new=1"><Button icon={<CalendarPlus className="h-4 w-4" />}>Book appointment</Button></Link>
       </Greeting>
 
-      <div className="relative mb-6 overflow-hidden rounded-2xl bg-gradient-to-br from-brand-600 via-brand-700 to-slate-900 p-6 text-white shadow-lg">
+      <div className="relative mb-6 overflow-hidden rounded-2xl bg-gradient-to-br from-brand-600 via-brand-800 to-brand-950 p-6 text-white shadow-lg">
         <div className="absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
         <HeartPulse className="absolute bottom-4 right-6 h-24 w-24 text-white/10" />
         <p className="text-xs font-semibold uppercase tracking-wider text-brand-100">Next appointment</p>
@@ -400,7 +400,7 @@ function PatientDashboard() {
           </div>
         ) : (
           <div className="relative mt-2"><h2 className="text-xl font-semibold">No upcoming appointments</h2><p className="mt-1 text-brand-100">Book a consultation with one of our specialists.</p>
-            <Link to="/appointments?new=1"><Button variant="secondary" className="mt-4 bg-white text-slate-900 hover:bg-brand-50">Book now</Button></Link></div>
+            <Link to="/appointments?new=1"><Button variant="secondary" className="mt-4 bg-white text-brand-950 hover:bg-brand-50">Book now</Button></Link></div>
         )}
       </div>
 

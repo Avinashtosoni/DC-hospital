@@ -6,10 +6,10 @@ import { cn, initials, titleCase } from '../../lib/utils'
 // ------------------------------------------------------------------ Button
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'
 const variants: Record<Variant, string> = {
-  primary: 'bg-brand-600 text-white hover:bg-brand-700 shadow-sm shadow-brand-600/20',
-  secondary: 'bg-slate-900 text-white hover:bg-slate-800',
-  outline: 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-sm',
-  ghost: 'text-slate-600 hover:bg-slate-100',
+  primary: 'bg-brand-900 text-white hover:bg-brand-800 shadow-[0_6px_16px_-6px_rgba(41,41,102,.55)]',
+  secondary: 'bg-brand-600 text-white hover:bg-brand-700 shadow-sm shadow-brand-600/20',
+  outline: 'border border-[#e0e0f2] bg-white text-slate-700 hover:border-brand-300 hover:bg-brand-50/60 hover:text-brand-900 shadow-sm',
+  ghost: 'text-slate-600 hover:bg-brand-50 hover:text-brand-900',
   danger: 'bg-rose-600 text-white hover:bg-rose-700',
 }
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -25,7 +25,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition active:scale-[.98] disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/20',
+        'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition active:scale-[.98] disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-300/60',
         size === 'sm' && 'h-8 px-3 text-xs',
         size === 'md' && 'h-9 px-4 text-sm',
         size === 'icon' && 'h-9 w-9',
@@ -67,7 +67,7 @@ const tones: Record<Tone, string> = {
   red: 'bg-rose-50 text-rose-700 ring-rose-600/15',
   blue: 'bg-sky-50 text-sky-700 ring-sky-600/15',
   violet: 'bg-violet-50 text-violet-700 ring-violet-600/15',
-  teal: 'bg-brand-50 text-brand-700 ring-brand-600/15',
+  teal: 'bg-brand-100/70 text-brand-800 ring-brand-600/20',
   pink: 'bg-pink-50 text-pink-700 ring-pink-600/15',
 }
 export function Badge({ tone = 'slate', children, className, dot }: { tone?: Tone; children: ReactNode; className?: string; dot?: boolean }) {
@@ -97,9 +97,9 @@ export function Card({ className, children }: { className?: string; children: Re
 }
 export function CardHeader({ title, subtitle, action, icon }: { title: ReactNode; subtitle?: ReactNode; action?: ReactNode; icon?: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+    <div className="flex items-start justify-between gap-3 border-b border-[#efeff8] px-5 py-4">
       <div className="flex items-center gap-3">
-        {icon && <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand-50 text-brand-600">{icon}</div>}
+        {icon && <div className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-brand-100 to-brand-200/70 text-brand-800 ring-1 ring-inset ring-brand-300/40">{icon}</div>}
         <div>
           <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
           {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
@@ -111,7 +111,7 @@ export function CardHeader({ title, subtitle, action, icon }: { title: ReactNode
 }
 
 // ------------------------------------------------------------------ Avatar
-const avatarColors = ['bg-sky-100 text-sky-700', 'bg-emerald-100 text-emerald-700', 'bg-violet-100 text-violet-700', 'bg-amber-100 text-amber-700', 'bg-rose-100 text-rose-700', 'bg-brand-100 text-brand-700', 'bg-indigo-100 text-indigo-700']
+const avatarColors = ['bg-sky-100 text-sky-700', 'bg-emerald-100 text-emerald-700', 'bg-violet-100 text-violet-700', 'bg-amber-100 text-amber-700', 'bg-rose-100 text-rose-700', 'bg-brand-200 text-brand-900', 'bg-indigo-100 text-indigo-700']
 export function Avatar({ name, size = 'md', className }: { name?: string | null; size?: 'sm' | 'md' | 'lg' | 'xl'; className?: string }) {
   const hash = [...(name ?? '')].reduce((a, c) => a + c.charCodeAt(0), 0)
   return (
@@ -132,7 +132,7 @@ export function Spinner({ className }: { className?: string }) {
 export function EmptyState({ icon, title, description, action, className }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode; className?: string }) {
   return (
     <div className={cn('flex flex-col items-center justify-center px-6 py-14 text-center', className)}>
-      <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-brand-50 to-slate-100 text-brand-600 ring-1 ring-slate-200/70">
+      <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-brand-100 to-brand-200/60 text-brand-800 ring-1 ring-brand-300/50">
         {icon ?? <Inbox className="h-6 w-6" />}
       </div>
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
@@ -221,9 +221,9 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { valu
       {tabs.map((t) => (
         <button key={t.value} type="button" onClick={() => onChange(t.value)}
           className={cn('-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition',
-            value === t.value ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800')}>
+            value === t.value ? 'border-brand-900 text-brand-900' : 'border-transparent text-slate-500 hover:text-brand-800')}>
           {t.label}
-          {t.count !== undefined && <span className={cn('rounded-full px-1.5 text-[11px]', value === t.value ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500')}>{t.count}</span>}
+          {t.count !== undefined && <span className={cn('rounded-full px-1.5 text-[11px]', value === t.value ? 'bg-brand-100 text-brand-900' : 'bg-slate-100 text-slate-500')}>{t.count}</span>}
         </button>
       ))}
     </div>
@@ -235,7 +235,7 @@ export function PageHeader({ title, description, actions }: { title: string; des
   return (
     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{title}</h1>
+        <h1 className="font-display text-xl font-bold tracking-tight text-brand-950 sm:text-2xl">{title}</h1>
         {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -245,18 +245,19 @@ export function PageHeader({ title, description, actions }: { title: string; des
 
 export function StatCard({ label, value, icon, hint, tone = 'teal', loading }: { label: string; value: ReactNode; icon: ReactNode; hint?: ReactNode; tone?: Tone; loading?: boolean }) {
   const bg: Record<Tone, string> = {
-    teal: 'from-brand-500 to-brand-600', blue: 'from-sky-500 to-sky-600', violet: 'from-violet-500 to-violet-600', amber: 'from-amber-400 to-amber-500',
+    teal: 'from-brand-600 to-brand-900', blue: 'from-[#7a7ab3] to-[#484885]', violet: 'from-violet-500 to-violet-700', amber: 'from-amber-400 to-amber-500',
     green: 'from-emerald-500 to-emerald-600', red: 'from-rose-500 to-rose-600', slate: 'from-slate-500 to-slate-600', pink: 'from-pink-500 to-pink-600',
   }
   return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between">
+    <Card className="group relative overflow-hidden p-5 transition duration-300 hover:-translate-y-0.5 hover:shadow-lift">
+      <div aria-hidden="true" className="pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full bg-brand-200/40 blur-2xl transition group-hover:bg-brand-300/50" />
+      <div className="relative flex items-start justify-between">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
           {loading ? <Skeleton className="mt-2 h-7 w-24" /> : <p className="mt-1.5 truncate text-xl font-semibold sm:text-2xl tracking-tight text-slate-900">{value}</p>}
           {hint && !loading && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
         </div>
-        <div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white shadow-sm', bg[tone])}>{icon}</div>
+        <div className={cn('grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br text-white shadow-[0_8px_20px_-8px_rgba(41,41,102,.5)]', bg[tone])}>{icon}</div>
       </div>
     </Card>
   )

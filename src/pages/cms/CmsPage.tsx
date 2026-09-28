@@ -3,8 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, ChevronDown, CloudUpload, Database, ExternalLink, History, ImageIcon, Inbox, Loader2, Monitor, PanelRightClose,
-  PanelRightOpen, RefreshCw, RotateCcw, Smartphone, Undo2, X,
+  AlertTriangle, ChevronDown, CloudUpload, Database, ExternalLink, History, ImageIcon, Inbox, LayoutGrid, Loader2, Monitor, PanelRightClose,
+  PanelRightOpen, Redo2, RefreshCw, RotateCcw, Smartphone, Undo, Undo2, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
@@ -16,10 +16,14 @@ import { cms, type ContentRows, type Revision } from '../../site/cms/store'
 import type { ContentKey } from '../../site/cms/types'
 import { FieldsForm } from './fields'
 import { MediaLibrary } from './MediaLibrary'
+import { CmsOverview } from './Overview'
 import { SECTIONS, SECTION_BY_KEY, validate, type Section } from './schema'
 
 type Drafts = Partial<Record<ContentKey, any>>
-type View = ContentKey | 'media'
+type View = ContentKey | 'media' | 'overview'
+type Hist = { past: any[]; future: any[]; t: number }
+const HIST_LIMIT = 50
+const HIST_GAP = 600 // ms — keystrokes closer together than this become one undo step
 const DRAFTS_KEY = 'dch:cms-drafts:v1'
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const readDrafts = (): Drafts => { try { return JSON.parse(sessionStorage.getItem(DRAFTS_KEY) ?? '{}') } catch { return {} } }
@@ -30,8 +34,8 @@ export default function CmsPage() {
   const rows = useContentRows()
   const saved = useMemo(() => mergeRows(rows.data), [rows.data])
   const [params, setParams] = useSearchParams()
-  const view = (params.get('s') as View) || 'home'
-  const section: Section | undefined = view === 'media' ? undefined : SECTION_BY_KEY[view]
+  const view = (params.get('s') as View) || 'overview'
+  const section: Section | undefined = view === 'media' || view === 'overview' ? undefined : SECTION_BY_KEY[view]
   const [drafts, setDraftsState] = useState<Drafts>(readDrafts)
   // Side-by-side preview on wide screens; on smaller screens it opens as an overlay on demand.
   const [preview, setPreview] = useState(() => window.innerWidth >= 1280 && localStorage.getItem('dch:cms-preview') !== '0')
@@ -67,14 +71,40 @@ export default function CmsPage() {
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [dirtyKeys.length])
-  useEffect(() => { setErrors([]) }, [view])
+  const [focusPath, setFocusPath] = useState<string | null>(null)
+  useEffect(() => { setErrors([]); setFocusPath(null); window.scrollTo({ top: 0 }) }, [view])
 
-  const go = (v: View) => setParams(v === 'home' ? {} : { s: v })
+  const go = (v: View) => setParams(v === 'overview' ? {} : { s: v })
   const togglePreview = () => setPreview((p) => { localStorage.setItem('dch:cms-preview', p ? '0' : '1'); return !p })
 
   const key = section?.key
   const value = key ? drafts[key] ?? saved[key] : undefined
-  const change = (v: any) => { if (!key) return; setDrafts((d) => ({ ...d, [key]: v })); post(key, v); if (errors.length) setErrors(validate(key, v)) }
+  const setDraft = (k: ContentKey, v: any) => { setDrafts((d) => ({ ...d, [k]: v })); post(k, v) }
+
+  // ---- undo / redo (per section, in memory)
+  const hist = useRef<Partial<Record<ContentKey, Hist>>>({})
+  const [, bump] = useState(0)
+  const h = key ? hist.current[key] : undefined
+  const change = (v: any) => {
+    if (!key) return
+    const hh = (hist.current[key] ??= { past: [], future: [], t: 0 })
+    const now = Date.now()
+    if (now - hh.t > HIST_GAP) { hh.past.push(value); if (hh.past.length > HIST_LIMIT) hh.past.shift() }
+    hh.t = now; hh.future = []
+    setDraft(key, v); bump((n) => n + 1)
+    if (errors.length) setErrors(validate(key, v))
+  }
+  const undo = () => {
+    if (!key || !h?.past.length) return
+    h.future.push(value); h.t = 0
+    setDraft(key, h.past.pop()); bump((n) => n + 1)
+  }
+  const redo = () => {
+    if (!key || !h?.future.length) return
+    h.past.push(value); h.t = 0
+    setDraft(key, h.future.pop()); bump((n) => n + 1)
+  }
+  const clearHist = (k: ContentKey) => { delete hist.current[k]; bump((n) => n + 1) }
 
   const publish = useMutation({
     mutationFn: async (k: ContentKey) => cms.save(k, draftsRef.current[k] ?? savedRef.current[k], user?.full_name),
@@ -96,7 +126,7 @@ export default function CmsPage() {
   const discard = () => {
     if (!key) return
     setDrafts((d) => { const n = { ...d }; delete n[key]; return n })
-    post(key, saved[key]); setErrors([])
+    post(key, saved[key]); setErrors([]); clearHist(key)
     toast('Changes discarded')
   }
   const reset = useMutation({
@@ -105,7 +135,7 @@ export default function CmsPage() {
       qc.setQueryData<ContentRows>(CONTENT_QK, (old) => { const n = { ...(old ?? {}) }; delete n[k]; return n })
       qc.invalidateQueries({ queryKey: ['cms-history', k] })
       setDrafts((d) => { const n = { ...d }; delete n[k]; return n })
-      post(k, DEFAULT_CONTENT[k]); setResetOpen(false)
+      post(k, DEFAULT_CONTENT[k]); setResetOpen(false); clearHist(k)
       toast.success('Restored the original content', { description: 'The previous version is kept in History.' })
     },
     onError: (e) => toast.error((e as Error).message),
@@ -116,26 +146,69 @@ export default function CmsPage() {
     toast.success('Version loaded into the editor', { description: 'Review it, then press Publish to make it live.' })
   }
 
+  // ---- publish every section with a draft
+  const publishAll = useMutation({
+    mutationFn: async () => {
+      const keys = dirtyKeys
+      const bad = keys.filter((k) => validate(k, draftsRef.current[k]).length)
+      if (bad.length) throw new Error(`Fix the problems in: ${bad.map((k) => SECTION_BY_KEY[k].label).join(', ')}`)
+      for (const k of keys) {
+        const row = await cms.save(k, draftsRef.current[k], user?.full_name)
+        qc.setQueryData<ContentRows>(CONTENT_QK, (old) => ({ ...(old ?? {}), [k]: row }))
+        qc.invalidateQueries({ queryKey: ['cms-history', k] })
+        setDrafts((d) => { const n = { ...d }; delete n[k]; return n })
+      }
+      return keys.length
+    },
+    onSuccess: (n) => toast.success(`${n} section${n === 1 ? '' : 's'} published`, { description: 'All your changes are live on the website.' }),
+    onError: (e) => toast.error('Could not publish everything', { description: (e as Error).message }),
+  })
+
   const row = key ? rows.data?.[key] : undefined
   const dirty = key ? isDirty(key) : false
+
+  // ---- keyboard shortcuts: Ctrl/⌘+S publish · Ctrl/⌘+Z undo · Ctrl/⌘+Shift+Z or Ctrl+Y redo
+  const keys = useRef({ doPublish, undo, redo, dirty }); keys.current = { doPublish, undo, redo, dirty }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      const k = e.key.toLowerCase()
+      if (k === 's') { e.preventDefault(); if (keys.current.dirty) keys.current.doPublish(); return }
+      const t = e.target as HTMLElement | null
+      const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      if (typing) return // keep the browser's own undo inside a text box
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); keys.current.undo() }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); keys.current.redo() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <div className="-mx-4 -my-6 sm:-mx-6 lg:-mx-8 lg:-my-8">
       {/* ---------- header */}
-      <div className="sticky top-16 z-20 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
+      <div className="sticky top-16 z-20 border-b border-[#e6e6f5] bg-white/85 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center gap-3">
           <SectionSwitcher view={view} onChange={go} isDirty={isDirty} />
           <div className="hidden min-w-0 flex-1 text-xs text-slate-500 md:block">
+            {view === 'overview' && (dirtyKeys.length ? <span className="inline-flex items-center gap-1.5 font-medium text-amber-600"><span className="h-2 w-2 rounded-full bg-amber-500" />{dirtyKeys.length} section{dirtyKeys.length === 1 ? '' : 's'} with unpublished changes</span> : 'Everything is published')}
             {key && (dirty
               ? <span className="inline-flex items-center gap-1.5 font-medium text-amber-600"><span className="h-2 w-2 rounded-full bg-amber-500" />Unsaved changes</span>
               : row ? <>Published {ago(row.updated_at)}{row.updated_by_name ? ` by ${row.updated_by_name}` : ''}</> : 'Showing the original content')}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            {view === 'overview' && dirtyKeys.length > 0 && (
+              <Button size="sm" icon={<CloudUpload className="h-4 w-4" />} onClick={() => publishAll.mutate()} loading={publishAll.isPending}>Publish all ({dirtyKeys.length})</Button>
+            )}
             {key && <>
+              <div className="flex items-center rounded-lg border border-[#e6e6f5] bg-white p-0.5">
+                <button type="button" onClick={undo} disabled={!h?.past.length} aria-label="Undo" title="Undo (Ctrl+Z)" className="grid h-7 w-7 place-items-center rounded-md text-brand-700 transition hover:bg-brand-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"><Undo className="h-4 w-4" /></button>
+                <button type="button" onClick={redo} disabled={!h?.future.length} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" className="grid h-7 w-7 place-items-center rounded-md text-brand-700 transition hover:bg-brand-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"><Redo2 className="h-4 w-4" /></button>
+              </div>
               <Button variant="ghost" size="sm" icon={<History className="h-4 w-4" />} onClick={() => setHistoryOpen(true)}>History</Button>
               {row && <Button variant="ghost" size="sm" icon={<RotateCcw className="h-4 w-4" />} onClick={() => setResetOpen(true)} className="hidden sm:inline-flex">Reset</Button>}
               {dirty && <Button variant="outline" size="sm" icon={<Undo2 className="h-4 w-4" />} onClick={discard}>Discard</Button>}
-              <Button size="sm" icon={<CloudUpload className="h-4 w-4" />} onClick={doPublish} loading={publish.isPending} disabled={!dirty}>Publish</Button>
+              <Button size="sm" icon={<CloudUpload className="h-4 w-4" />} onClick={doPublish} loading={publish.isPending} disabled={!dirty} title="Publish (Ctrl+S)">Publish</Button>
             </>}
             <Button variant="outline" size="sm" onClick={togglePreview} icon={preview ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />} aria-pressed={preview}>
               <span className="hidden sm:inline">Preview</span>
@@ -147,9 +220,14 @@ export default function CmsPage() {
       <div className={cn('grid grid-cols-1', preview && 'xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]')}>
         {/* ---------- editor */}
         <div className="min-w-0 px-4 py-6 sm:px-6 lg:px-8">
+          {view === 'overview' ? (
+            <CmsOverview rows={rows.data} loading={rows.isPending && !rows.data} site={{ ...saved, ...drafts }} dirtyKeys={dirtyKeys}
+              compact={preview && window.innerWidth >= 1280} onOpen={go} onPublishAll={() => publishAll.mutate()} publishingAll={publishAll.isPending} />
+          ) : <>
           <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h1 className="text-xl font-semibold text-slate-900">{section?.label ?? 'Media library'}</h1>
+              <button type="button" onClick={() => go('overview')} className="mb-1 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-800"><LayoutGrid className="h-3.5 w-3.5" />CMS overview</button>
+              <h1 className="font-display text-xl font-semibold text-brand-950">{section?.label ?? 'Media library'}</h1>
               <p className="mt-0.5 max-w-2xl text-sm text-slate-500">{section?.description ?? 'Images uploaded here can be used anywhere on the website.'}</p>
             </div>
             <div className="flex items-center gap-2">
@@ -172,28 +250,29 @@ export default function CmsPage() {
           )}
 
           {view === 'media' ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><MediaLibrary /></div>
+            <div className="card p-5"><MediaLibrary /></div>
           ) : !section ? (
             <EmptyState title="Unknown section" description="Pick a section from the menu." action={<Button onClick={() => go('home')}>Open Home page</Button>} />
           ) : rows.isPending && !rows.data ? (
             <div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
           ) : (
-            <FieldsForm key={section.key} fields={section.fields} value={value} onChange={change} ctx={{ site: { ...saved, ...drafts }, root: value }} />
+            <FieldsForm key={section.key} fields={section.fields} value={value} saved={saved[section.key]} onChange={change} ctx={{ site: { ...saved, ...drafts }, root: value, focus: setFocusPath }} />
           )}
 
           {key && dirty && (
-            <div className="sticky bottom-4 z-10 mt-6 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white/95 p-3 pl-4 shadow-lg backdrop-blur">
-              <p className="text-sm text-slate-600"><span className="mr-2 inline-block h-2 w-2 rounded-full bg-amber-500" />You have unpublished changes.</p>
+            <div className="sticky bottom-4 z-10 mt-6 flex items-center justify-between gap-3 rounded-2xl border border-brand-800 bg-brand-900/95 p-3 pl-4 text-white shadow-lift backdrop-blur">
+              <p className="text-sm text-brand-100"><span className="mr-2 inline-block h-2 w-2 rounded-full bg-amber-400" />You have unpublished changes. <span className="hidden text-brand-300 sm:inline">Ctrl + S to publish.</span></p>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={discard}>Discard</Button>
-                <Button size="sm" onClick={doPublish} loading={publish.isPending} icon={<CloudUpload className="h-4 w-4" />}>Publish</Button>
+                <Button variant="ghost" size="sm" onClick={discard} className="text-brand-100 hover:bg-white/10 hover:text-white">Discard</Button>
+                <Button size="sm" onClick={doPublish} loading={publish.isPending} icon={<CloudUpload className="h-4 w-4" />} className="bg-white text-brand-900 hover:bg-brand-50">Publish</Button>
               </div>
             </div>
           )}
+          </>}
         </div>
 
         {/* ---------- live preview */}
-        {preview && <PreviewPane path={section?.preview ?? '/welcome'} onClose={togglePreview} />}
+        {preview && <PreviewPane path={focusPath ?? section?.preview ?? '/welcome'} onClose={togglePreview} />}
       </div>
 
       {key && <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} sectionKey={key} current={row} onRestore={restore} />}
@@ -214,26 +293,27 @@ function SectionSwitcher({ view, onChange, isDirty }: { view: View; onChange: (v
     document.addEventListener('mousedown', close); document.addEventListener('keydown', esc)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc) }
   }, [open])
-  const cur = view === 'media' ? { label: 'Media library', icon: ImageIcon } : SECTION_BY_KEY[view] ?? { label: 'Choose section', icon: ImageIcon }
+  const cur = view === 'media' ? { label: 'Media library', icon: ImageIcon } : view === 'overview' ? { label: 'Overview', icon: LayoutGrid } : SECTION_BY_KEY[view] ?? { label: 'Choose section', icon: ImageIcon }
   const Icon = cur.icon
   const groups = ['General', 'Pages', 'Collections'] as const
   const anyDirty = SECTIONS.some((s) => isDirty(s.key))
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu"
-        className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white py-1.5 pl-2 pr-3 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50">
-        <span className="grid h-7 w-7 place-items-center rounded-md bg-brand-50 text-brand-700"><Icon className="h-4 w-4" /></span>
+        className="flex items-center gap-2.5 rounded-xl border border-[#e6e6f5] bg-white py-1.5 pl-2 pr-3 text-sm font-medium text-brand-950 shadow-sm transition hover:border-brand-300 hover:bg-brand-50/50">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-[#5c5c99] to-[#292966] text-white"><Icon className="h-4 w-4" /></span>
         <span className="max-w-[10rem] truncate sm:max-w-none">{cur.label}</span>
         {anyDirty && <span className="h-2 w-2 rounded-full bg-amber-500" title="Unsaved changes" />}
         <ChevronDown className={cn('h-4 w-4 text-slate-400 transition', open && 'rotate-180')} />
       </button>
       {open && (
-        <div role="menu" className="absolute left-0 top-full z-30 mt-2 w-[min(92vw,640px)] animate-pop-in rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+        <div role="menu" className="absolute left-0 top-full z-30 mt-2 w-[min(92vw,640px)] animate-pop-in rounded-2xl border border-[#e6e6f5] bg-white p-2 shadow-lift">
           <div className="grid gap-x-2 sm:grid-cols-2">
             {groups.map((g) => (
               <div key={g} className={cn(g === 'Pages' && 'sm:row-span-2')}>
-                <p className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g}</p>
+                <p className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-brand-500">{g}</p>
                 {SECTIONS.filter((s) => s.group === g).map((s) => <MenuItem key={s.key} icon={s.icon} label={s.label} active={view === s.key} dirty={isDirty(s.key)} onClick={() => { onChange(s.key); setOpen(false) }} />)}
+                {g === 'General' && <MenuItem icon={LayoutGrid} label="Overview" active={view === 'overview'} onClick={() => { onChange('overview'); setOpen(false) }} />}
                 {g === 'General' && <MenuItem icon={ImageIcon} label="Media library" active={view === 'media'} onClick={() => { onChange('media'); setOpen(false) }} />}
               </div>
             ))}
@@ -246,7 +326,7 @@ function SectionSwitcher({ view, onChange, isDirty }: { view: View; onChange: (v
 function MenuItem({ icon: Icon, label, active, dirty, onClick }: { icon: typeof ImageIcon; label: string; active: boolean; dirty?: boolean; onClick: () => void }) {
   return (
     <button type="button" role="menuitem" onClick={onClick}
-      className={cn('flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition', active ? 'bg-brand-50 font-medium text-brand-700' : 'text-slate-700 hover:bg-slate-50')}>
+      className={cn('flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition', active ? 'bg-brand-100/70 font-medium text-brand-900' : 'text-slate-700 hover:bg-brand-50')}>
       <Icon className={cn('h-4 w-4 shrink-0', active ? 'text-brand-600' : 'text-slate-400')} /><span className="flex-1 truncate">{label}</span>
       {dirty && <span className="h-2 w-2 rounded-full bg-amber-500" title="Unsaved changes" />}
     </button>
@@ -270,7 +350,7 @@ function PreviewPane({ path, onClose }: { path: string; onClose: () => void }) {
   const scale = w ? Math.min(1, (w - (device === 'mobile' ? 32 : 0)) / base) : 0.5
 
   return (
-    <aside aria-label="Live preview" className="fixed inset-0 z-40 flex flex-col bg-slate-100 xl:sticky xl:top-[121px] xl:z-0 xl:h-[calc(100vh-121px)] xl:border-l xl:border-slate-200">
+    <aside aria-label="Live preview" className="fixed inset-0 z-40 flex flex-col bg-slate-100 xl:sticky xl:top-[121px] xl:z-0 xl:h-[calc(100vh-121px)] xl:border-l xl:border-[#e6e6f5] xl:bg-brand-50/60">
       <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
         <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative h-2 w-2 rounded-full bg-emerald-500" /></span>
         <p className="text-xs font-semibold text-slate-700">Live preview</p>

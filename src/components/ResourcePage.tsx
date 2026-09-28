@@ -148,7 +148,7 @@ export function ResourcePage({ def }: { def: ResourceDef }) {
         {/* table */}
         <div className="scrollbar-thin overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            <thead className="bg-brand-50/70 text-[11px] font-semibold uppercase tracking-wide text-brand-700/80">
               <tr>
                 {columns.map((c) => (
                   <th key={c.key} className={cn('whitespace-nowrap px-4 py-2.5', c.hideBelow && hideCls[c.hideBelow], c.align === 'right' && 'text-right')}>
@@ -161,7 +161,7 @@ export function ResourcePage({ def }: { def: ResourceDef }) {
                 <th className="w-12 px-4 py-2.5" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-[#efeff8]">
               {loading && Array.from({ length: 7 }).map((_, i) => (
                 <tr key={i}>
                   {columns.map((c, j) => (
@@ -178,7 +178,7 @@ export function ResourcePage({ def }: { def: ResourceDef }) {
                 const deletable = canDel && (!def.canDelete || def.canDelete(row, ctx!))
                 const custom = (def.rowActions?.(row, ctx!) ?? []).filter(Boolean) as RowAction<any>[]
                 return (
-                  <tr key={row.id} className={cn('group transition hover:bg-slate-50/70', optimistic && 'pointer-events-none animate-pulse opacity-60')}>
+                  <tr key={row.id} className={cn('group transition hover:bg-brand-50/50', optimistic && 'pointer-events-none animate-pulse opacity-60')}>
                     {columns.map((c, j) => (
                       <td key={c.key} className={cn('px-4 py-3 align-middle', c.hideBelow && hideCls[c.hideBelow], c.align === 'right' && 'text-right tabular-nums', c.className)}>
                         {j === 0 && def.rowLink && !optimistic ? <Link to={def.rowLink(row)} className="block hover:[&_.name]:text-brand-700">{c.render(row, ctx!)}</Link> : c.render(row, ctx!)}
