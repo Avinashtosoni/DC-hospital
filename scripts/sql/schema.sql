@@ -7,6 +7,7 @@ create extension if not exists pgcrypto with schema extensions;
 drop trigger if exists on_auth_user_created on auth.users;
 
 drop table if exists
+  public.visit_feedback, public.staff_invites, public.wa_sessions,
   public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
   public.site_enquiries, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
@@ -119,7 +120,7 @@ create table public.appointments (
   status            text not null default 'scheduled' check (status in ('scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show')),
   reason            text,
   notes             text,
-  source            text not null default 'desk' check (source in ('desk', 'website', 'portal')),
+  source            text not null default 'desk' check (source in ('desk', 'website', 'portal', 'whatsapp')),
   booking_ref       text unique,
   contacted_at      timestamptz,
   created_at        timestamptz not null default now(),
@@ -316,6 +317,45 @@ create table public.audit_log (
   created_at   timestamptz not null default now()
 );
 
+-- Patient rating after a completed visit (one per appointment)
+create table public.visit_feedback (
+  id               uuid primary key default gen_random_uuid(),
+  appointment_id   uuid not null unique references public.appointments (id) on delete cascade,
+  patient_id       uuid not null references public.patients (id) on delete cascade,
+  doctor_id        uuid references public.doctors (id) on delete set null,
+  rating           int not null check (rating between 1 and 5),
+  comment          text check (char_length(comment) <= 1000),
+  tags             text[] not null default '{}',
+  would_recommend  boolean,
+  source           text not null default 'portal' check (source in ('portal', 'link', 'whatsapp')),
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+-- Staff invitations: the invited person signs up with the link and gets the role automatically
+create table public.staff_invites (
+  id               uuid primary key default gen_random_uuid(),
+  full_name        text not null check (char_length(full_name) between 2 and 80),
+  email            text not null check (email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+  phone            text,
+  role             public.app_role not null check (role <> 'patient'),
+  token            text not null unique default encode(extensions.gen_random_bytes(18), 'hex'),
+  status           text not null default 'pending' check (status in ('pending', 'accepted', 'revoked')),
+  expires_at       timestamptz not null default now() + interval '14 days',
+  invited_by_name  text,
+  accepted_at      timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create unique index staff_invites_one_pending on public.staff_invites (lower(email)) where status = 'pending';
+
+-- WhatsApp chatbot conversation state (service role only)
+create table public.wa_sessions (
+  phone       text primary key,
+  state       jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now()
+);
+
 -- One-time codes for online booking (never readable through the API; see section 9)
 create table public.booking_otps (
   id             uuid primary key default gen_random_uuid(),
@@ -349,6 +389,8 @@ create index on public.payments (patient_id);
 create index on public.expenses (expense_date);
 create index on public.site_enquiries (status, created_at desc);
 create index on public.doctor_leaves (doctor_id, start_date, end_date);
+create index on public.visit_feedback (doctor_id, created_at desc);
+create index on public.visit_feedback (patient_id);
 create index on public.audit_log (created_at desc);
 create index on public.audit_log (table_name, record_id);
 create index on public.audit_log (actor_id, created_at desc);
@@ -401,7 +443,7 @@ declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
                            'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries',
-                           'doctor_leaves','holidays']
+                           'doctor_leaves','holidays','visit_feedback','staff_invites']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);
   end loop;

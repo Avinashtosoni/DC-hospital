@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { addDays, format, parseISO, subDays } from 'date-fns'
 import {
   AlertTriangle, BedDouble, CalendarCheck, CalendarPlus, CheckCircle2, ClipboardList, Clock, CreditCard, FlaskConical, HeartPulse,
-  IndianRupee, Megaphone, Package, Pill, Receipt, Stethoscope, TrendingDown, TrendingUp, UserCheck, UserPlus, Users, Wallet,
+  IndianRupee, Megaphone, CalendarClock, FileDown, Star, Package, Pill, Receipt, Stethoscope, TrendingDown, TrendingUp, UserCheck, UserPlus, Users, Wallet,
 } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
@@ -15,6 +15,8 @@ import { Avatar, Badge, Button, Card, CardHeader, StatCard, StatusBadge } from '
 import { Donut, Greeting, ListCard, ListRow, QuickAction, RevenueChart, SimpleBar, monthBuckets } from './widgets'
 import { fmtDate, fmtTime, money, moneyCompact, num, today, titleCase, ago, cn } from '../../lib/utils'
 import { invoiceBalance } from '../../lib/billing'
+import { downloadLabReport } from '../../lib/pdf'
+import { useT } from '../../i18n'
 import type { Appointment, Doctor, Patient } from '../../types'
 
 export default function Dashboard() {
@@ -373,65 +375,89 @@ function StaffDashboard() {
 // ---------------------------------------------------------------- PATIENT
 function PatientDashboard() {
   const { user } = useAuth()
+  const { t } = useT()
+  const site = useSiteSettings()
   const me = useMe()
   const appts = useTable('appointments')
   const rx = useTable('prescriptions')
   const labs = useTable('lab_tests')
   const invoices = useTable('invoices')
   const notices = useTable('notices')
+  const feedback = useTable('visit_feedback')
   const dLk = useLookup('doctors')
   const deptLk = useLookup('departments')
   const pid = me.patient?.id
-  const t = today()
+  const td = today()
   const mine = (appts.data ?? []).filter((a) => a.patient_id === pid)
-  const upcoming = mine.filter((a) => a.appointment_date >= t && ['scheduled', 'confirmed', 'checked_in'].includes(a.status)).sort((a, b) => (a.appointment_date + a.appointment_time).localeCompare(b.appointment_date + b.appointment_time))
+  const upcoming = mine.filter((a) => a.appointment_date >= td && ['scheduled', 'confirmed', 'checked_in'].includes(a.status)).sort((a, b) => (a.appointment_date + a.appointment_time).localeCompare(b.appointment_date + b.appointment_time))
   const next = upcoming[0]
+  const rated = new Set((feedback.data ?? []).map((f) => f.appointment_id))
+  const since = format(addDays(new Date(), -60), 'yyyy-MM-dd')
+  const toRate = feedback.isLoading ? undefined : mine.filter((a) => a.status === 'completed' && a.appointment_date >= since && !rated.has(a.id)).sort((a, b) => b.appointment_date.localeCompare(a.appointment_date))[0]
   const myRx = (rx.data ?? []).filter((r) => r.patient_id === pid).sort((a, b) => b.prescribed_on.localeCompare(a.prescribed_on))
   const myLabs = (labs.data ?? []).filter((l) => l.patient_id === pid).sort((a, b) => b.requested_on.localeCompare(a.requested_on))
   const due = (invoices.data ?? []).filter((i) => i.patient_id === pid && !['cancelled', 'draft'].includes(i.status)).reduce((s, i) => s + invoiceBalance(i), 0)
   const loading = me.loading || appts.isLoading
   const nextDoc = next ? dLk.get(next.doctor_id) : undefined
+  const STATUS: Record<string, string> = { scheduled: t('Scheduled'), confirmed: t('Confirmed'), checked_in: t('Checked in') }
 
   return (
     <div>
-      <Greeting name={user!.full_name} subtitle={me.patient ? `MRN ${me.patient.mrn} · ${me.patient.blood_group ?? ''} ${me.patient.insurance_provider ? '· ' + me.patient.insurance_provider : ''}` : 'Welcome to your patient portal'}>
-        <Link to="/doctors"><Button variant="outline" icon={<Stethoscope className="h-4 w-4" />}>Find a doctor</Button></Link>
-        <Link to="/appointments?new=1"><Button icon={<CalendarPlus className="h-4 w-4" />}>Book appointment</Button></Link>
+      <Greeting t={t} name={user!.full_name} subtitle={me.patient ? `MRN ${me.patient.mrn} · ${me.patient.blood_group ?? ''} ${me.patient.insurance_provider ? '· ' + me.patient.insurance_provider : ''}` : t('Welcome to your patient portal')}>
+        <Link to="/doctors"><Button variant="outline" icon={<Stethoscope className="h-4 w-4" />}>{t('Find a doctor')}</Button></Link>
+        <Link to="/appointments?new=1"><Button icon={<CalendarPlus className="h-4 w-4" />}>{t('Book appointment')}</Button></Link>
       </Greeting>
 
       <div className="relative mb-6 overflow-hidden rounded-2xl bg-gradient-to-br from-brand-600 via-brand-800 to-brand-950 p-6 text-white shadow-lg">
         <div className="absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
         <HeartPulse className="absolute bottom-4 right-6 h-24 w-24 text-white/10" />
-        <p className="text-xs font-semibold uppercase tracking-wider text-brand-100">Next appointment</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-100">{t('Next appointment')}</p>
         {loading ? <div className="mt-3 h-8 w-64 animate-pulse rounded bg-white/20" /> : next ? (
           <div className="relative mt-2">
             <h2 className="text-2xl font-semibold">{format(parseISO(next.appointment_date), 'EEEE, d MMMM')} · {fmtTime(next.appointment_time)}</h2>
-            <p className="mt-1 text-brand-100">{nextDoc?.full_name} · {deptLk.get(nextDoc?.department_id ?? '')?.name} · <span className="capitalize">{next.status.replace('_', ' ')}</span></p>
+            <p className="mt-1 text-brand-100">{nextDoc?.full_name} · {deptLk.get(nextDoc?.department_id ?? '')?.name} · <span>{STATUS[next.status] ?? next.status}</span></p>
             {next.reason && <p className="mt-3 inline-block rounded-lg bg-white/10 px-3 py-1.5 text-sm">{next.reason}</p>}
+            {['scheduled', 'confirmed'].includes(next.status) && (
+              <div className="mt-4"><Link to={`/appointments?reschedule=${next.id}`}><Button variant="secondary" size="sm" className="bg-white/15 text-white hover:bg-white/25" icon={<CalendarClock className="h-4 w-4" />}>{t('Reschedule')}</Button></Link></div>
+            )}
           </div>
         ) : (
-          <div className="relative mt-2"><h2 className="text-xl font-semibold">No upcoming appointments</h2><p className="mt-1 text-brand-100">Book a consultation with one of our specialists.</p>
-            <Link to="/appointments?new=1"><Button variant="secondary" className="mt-4 bg-white text-brand-950 hover:bg-brand-50">Book now</Button></Link></div>
+          <div className="relative mt-2"><h2 className="text-xl font-semibold">{t('No upcoming appointments')}</h2><p className="mt-1 text-brand-100">{t('Book a consultation with one of our specialists.')}</p>
+            <Link to="/appointments?new=1"><Button variant="secondary" className="mt-4 bg-white text-brand-950 hover:bg-brand-50">{t('Book now')}</Button></Link></div>
         )}
       </div>
 
+      {toRate && (
+        <div className="mb-6 flex flex-wrap items-center gap-4 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-4">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-amber-100 text-amber-600"><Star className="h-5 w-5 fill-amber-400" /></span>
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-slate-900">{t('How was your visit with {doctor}?', { doctor: dLk.get(toRate.doctor_id)?.full_name ?? t('the doctor') })}</p>
+            <p className="text-sm text-slate-600">{t('Rate it in 10 seconds — it helps us improve.')}</p>
+          </div>
+          <Link to={`/appointments?rate=${toRate.id}`}><Button size="sm">{t('Rate visit')}</Button></Link>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
-        <StatCard label="Upcoming visits" value={upcoming.length} icon={<CalendarCheck className="h-5 w-5" />} loading={loading} />
-        <StatCard label="Prescriptions" value={myRx.length} icon={<Pill className="h-5 w-5" />} tone="violet" loading={rx.isLoading} />
-        <StatCard label="Lab reports" value={myLabs.filter((l) => l.status === 'completed').length} icon={<FlaskConical className="h-5 w-5" />} tone="blue" loading={labs.isLoading} hint={`${myLabs.filter((l) => l.status !== 'completed' && l.status !== 'cancelled').length} in progress`} />
-        <StatCard label="Amount due" value={money(due)} icon={<Receipt className="h-5 w-5" />} tone={due > 0 ? 'amber' : 'green'} loading={invoices.isLoading} />
+        <StatCard widgetId="Upcoming visits" label={t('Upcoming visits')} value={upcoming.length} icon={<CalendarCheck className="h-5 w-5" />} loading={loading} />
+        <StatCard widgetId="Prescriptions" label={t('Prescriptions')} value={myRx.length} icon={<Pill className="h-5 w-5" />} tone="violet" loading={rx.isLoading} />
+        <StatCard widgetId="Lab reports" label={t('Lab reports')} value={myLabs.filter((l) => l.status === 'completed').length} icon={<FlaskConical className="h-5 w-5" />} tone="blue" loading={labs.isLoading} hint={t('{n} in progress', { n: myLabs.filter((l) => l.status !== 'completed' && l.status !== 'cancelled').length })} />
+        <StatCard widgetId="Amount due" label={t('Amount due')} value={money(due)} icon={<Receipt className="h-5 w-5" />} tone={due > 0 ? 'amber' : 'green'} loading={invoices.isLoading} />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <ListCard title="Recent prescriptions" icon={<Pill className="h-4 w-4" />} link="/prescriptions" loading={rx.isLoading} empty={!myRx.length} emptyText="No prescriptions yet">
-          {myRx.slice(0, 4).map((r) => <ListRow key={r.id} to={`/prescriptions/${r.id}`} left={<div><div className="text-sm font-medium text-slate-800">{r.diagnosis}</div><div className="text-xs text-slate-500">{dLk.get(r.doctor_id)?.full_name} · {r.medications.length} medicines</div></div>} right={<span className="text-xs text-slate-500">{fmtDate(r.prescribed_on, 'dd MMM')}</span>} />)}
+        <ListCard widgetId="Recent prescriptions" title={t('Recent prescriptions')} icon={<Pill className="h-4 w-4" />} link="/prescriptions" linkLabel={t('View all')} loading={rx.isLoading} empty={!myRx.length} emptyText={t('No prescriptions yet')}>
+          {myRx.slice(0, 4).map((r) => <ListRow key={r.id} to={`/prescriptions/${r.id}`} left={<div><div className="text-sm font-medium text-slate-800">{r.diagnosis}</div><div className="text-xs text-slate-500">{dLk.get(r.doctor_id)?.full_name} · {t('{n} medicines', { n: r.medications.length })}</div></div>} right={<span className="text-xs text-slate-500">{fmtDate(r.prescribed_on, 'dd MMM')}</span>} />)}
         </ListCard>
-        <ListCard widgetId="Lab reports list" title="Lab reports" icon={<FlaskConical className="h-4 w-4" />} link="/lab-tests" loading={labs.isLoading} empty={!myLabs.length} emptyText="No lab tests yet">
-          {myLabs.slice(0, 4).map((l) => <ListRow key={l.id} left={<div className="min-w-0"><div className="text-sm font-medium text-slate-800">{l.test_name}</div><div className="max-w-xs truncate text-xs text-slate-500">{l.result ?? 'Awaiting result'}</div></div>} right={<StatusBadge value={l.status} />} />)}
+        <ListCard widgetId="Lab reports list" title={t('Lab reports')} icon={<FlaskConical className="h-4 w-4" />} link="/lab-tests" linkLabel={t('View all')} loading={labs.isLoading} empty={!myLabs.length} emptyText={t('No lab tests yet')}>
+          {myLabs.slice(0, 4).map((l) => <ListRow key={l.id} left={<div className="min-w-0"><div className="text-sm font-medium text-slate-800">{l.test_name}</div><div className="max-w-xs truncate text-xs text-slate-500">{l.result ?? t('Awaiting result')}</div></div>}
+            right={l.status === 'completed'
+              ? <button type="button" onClick={() => downloadLabReport(l, { site, patient: me.patient, doctor: l.doctor_id ? dLk.get(l.doctor_id)?.full_name : null })} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-50" aria-label={`${t('Download')} ${l.test_name}`}><FileDown className="h-3.5 w-3.5" />PDF</button>
+              : <StatusBadge value={l.status} />} />)}
         </ListCard>
       </div>
       <div className="mt-6">
-        <ListCard title="Hospital notices" icon={<Megaphone className="h-4 w-4" />} link="/notices" loading={notices.isLoading} empty={!notices.data?.some((n) => n.audience === 'all' || n.audience === 'patients')}>
+        <ListCard widgetId="Hospital notices" title={t('Hospital notices')} icon={<Megaphone className="h-4 w-4" />} link="/notices" linkLabel={t('View all')} loading={notices.isLoading} empty={!notices.data?.some((n) => n.audience === 'all' || n.audience === 'patients')} emptyText={t('Nothing here yet')}>
           {(notices.data ?? []).filter((n) => n.audience === 'all' || n.audience === 'patients').slice(0, 3).map((n) => <ListRow key={n.id} left={<div><div className="text-sm font-medium text-slate-800">{n.title}</div><div className="line-clamp-1 text-xs text-slate-500">{n.body}</div></div>} right={<span className="text-xs text-slate-400">{ago(n.published_on)}</span>} />)}
         </ListCard>
       </div>

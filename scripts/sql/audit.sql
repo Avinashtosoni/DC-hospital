@@ -79,7 +79,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
+  foreach t in array array['staff_invites', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
                            'doctors', 'doctor_leaves', 'holidays', 'profiles', 'staff', 'expenses'] loop
     execute format('drop trigger if exists trg_%1$s_audit on public.%1$I', t);
     execute format('create trigger trg_%1$s_audit after insert or update or delete on public.%1$I

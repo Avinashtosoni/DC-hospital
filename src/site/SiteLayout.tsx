@@ -10,6 +10,7 @@ import { useRevealAll, useScroll } from './hooks'
 import { LandingLogo, SocialIcon } from './parts'
 import NotFound from './pages/NotFound'
 import { useBookHref, useHomeHref } from './ui'
+import { LanguageSwitch, useT } from '../i18n'
 
 type PageKey = keyof SiteSettings['pages']
 const NAV_LINKS: { to: string; label: string; page: PageKey; mega?: boolean }[] = [
@@ -80,6 +81,7 @@ function useScrollManager() {
 /* ───────────────────────────────── Navbar ───────────────────────────────── */
 
 function Navbar() {
+  const { t } = useT()
   const { scrolled, progress } = useScroll()
   const [open, setOpen] = useState(false)
   const [mega, setMega] = useState(false)
@@ -136,8 +138,9 @@ function Navbar() {
             ))}
           </ul>
           <div className="flex items-center gap-2">
-            <Link to={user ? '/' : '/login'} className="hidden rounded-full px-4 py-2 text-sm font-semibold text-peri-800 transition hover:bg-peri-100 sm:inline-flex">{user ? 'Dashboard' : 'Sign in'}</Link>
-            <Link to={book} className="btn-peri hidden !px-5 !py-2.5 sm:inline-flex">Book appointment<ArrowRight className="h-4 w-4" /></Link>
+            <LanguageSwitch className="hidden sm:inline-flex" />
+            <Link to={user ? '/' : '/login'} className="hidden rounded-full px-4 py-2 text-sm font-semibold text-peri-800 transition hover:bg-peri-100 sm:inline-flex">{user ? t('Dashboard') : t('Sign in')}</Link>
+            <Link to={book} className="btn-peri hidden !px-5 !py-2.5 sm:inline-flex">{t('Book appointment')}<ArrowRight className="h-4 w-4" /></Link>
             <button type="button" onClick={() => setOpen(true)} className="grid h-10 w-10 place-items-center rounded-full border border-peri-200 bg-white/80 text-peri-800 backdrop-blur transition hover:bg-white lg:hidden" aria-label="Open menu" aria-expanded={open} aria-controls="mobile-menu">
               <Menu className="h-5 w-5" />
             </button>
@@ -196,8 +199,9 @@ function Navbar() {
             ))}
           </ul>
           <div className="mt-5 grid grid-cols-2 gap-3">
-            <Link to={user ? '/' : '/login'} tabIndex={open ? 0 : -1} className="btn-ghost">{user ? 'Dashboard' : 'Sign in'}</Link>
-            <Link to={book} tabIndex={open ? 0 : -1} className="btn-peri">Book now</Link>
+            <Link to={user ? '/' : '/login'} tabIndex={open ? 0 : -1} className="btn-ghost">{user ? t('Dashboard') : t('Sign in')}</Link>
+            <Link to={book} tabIndex={open ? 0 : -1} className="btn-peri">{t('Book now')}</Link>
+            <div className="col-span-2 flex justify-center pt-1"><LanguageSwitch /></div>
           </div>
           <a href={c.tel} tabIndex={open ? 0 : -1} className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-rose-50 py-3 text-sm font-semibold text-rose-600"><Siren className="h-4 w-4" />Emergency: {c.phone}</a>
         </div>
@@ -276,6 +280,7 @@ function Footer() {
 /* ───────────────────────────────── Mobile sticky CTA ───────────────────────────────── */
 
 function MobileCtaBar() {
+  const { t } = useT()
   const { y } = useScroll()
   const book = useBookHref()
   const { tel } = useContact()
@@ -284,7 +289,7 @@ function MobileCtaBar() {
     <div className={cn('fixed inset-x-3 bottom-3 z-40 transition-all duration-500 sm:hidden', show ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-24 opacity-0')} aria-hidden={!show}>
       <div className="glass flex items-center gap-2 rounded-full p-1.5">
         <a href={tel} tabIndex={show ? 0 : -1} className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-rose-50 text-rose-600" aria-label="Call emergency"><Phone className="h-5 w-5" /></a>
-        <Link to={book} tabIndex={show ? 0 : -1} className="btn-peri flex-1 !py-3.5">Book appointment<ArrowRight className="h-4 w-4" /></Link>
+        <Link to={book} tabIndex={show ? 0 : -1} className="btn-peri flex-1 !py-3.5">{t('Book appointment')}<ArrowRight className="h-4 w-4" /></Link>
       </div>
     </div>
   )

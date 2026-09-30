@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useAuth } from '../auth/AuthProvider'
@@ -9,8 +9,16 @@ import { setSettingsActor, settingsStore, type SettingsRow } from './store'
 
 export const APP_SETTINGS_QK = ['app-settings'] as const
 
+/** Parts of an unsaved Settings draft that are previewed live across the whole dashboard. */
+export type AppPreview = Pick<AppSettings, 'appearance' | 'modules' | 'announcement'>
+
 interface Ctx {
+  /** effective settings — includes the owner's unsaved appearance preview while Settings is open */
   settings: AppSettings
+  /** exactly what is saved */
+  savedSettings: AppSettings
+  /** Settings page pushes its draft here (null = stop previewing) */
+  setPreview: (p: AppPreview | null) => void
   row: SettingsRow | undefined
   loading: boolean
   save: (next: AppSettings) => Promise<void>
@@ -22,7 +30,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient()
   const enabled = settingsStore.mode === 'local' || !!user
   const q = useQuery({ queryKey: APP_SETTINGS_QK, queryFn: settingsStore.load, enabled, staleTime: 5 * 60_000 })
-  const settings = useMemo(() => deepMerge(DEFAULT_APP_SETTINGS, q.data?.data ?? null), [q.data])
+  const savedSettings = useMemo(() => deepMerge(DEFAULT_APP_SETTINGS, q.data?.data ?? null), [q.data])
+  const [preview, setPreview] = useState<AppPreview | null>(null)
+  const settings = useMemo(() => (preview ? { ...savedSettings, ...preview } : savedSettings), [savedSettings, preview])
   useEffect(() => { if (user) setSettingsActor(user.full_name) }, [user])
 
   // date/time formats are read synchronously by fmtDate/fmtTime
@@ -41,7 +51,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     qc.setQueryData(APP_SETTINGS_QK, row)
   }, [qc])
 
-  const value = useMemo(() => ({ settings, row: q.data, loading: enabled && q.isPending, save }), [settings, q.data, q.isPending, enabled, save])
+  const value = useMemo(() => ({ settings, savedSettings, setPreview, row: q.data, loading: enabled && q.isPending, save }), [settings, savedSettings, q.data, q.isPending, enabled, save])
   return <AppSettingsCtx.Provider value={value}>{children}</AppSettingsCtx.Provider>
 }
 

@@ -11,14 +11,15 @@ A full-stack **Hospital Management System** for hospital owners, doctors, recept
 | **Auth** | Email/password sign-in and patient self-registration. There are 6 roles, with role-based navigation, page guards and permissions for each action. |
 | **Dashboards** | A dashboard for each role: owner KPIs and revenue charts, the doctor's patient queue, front-desk quick actions, accountant cash-flow, the staff task list and a patient portal. |
 | **Patients** | Full CRUD, auto-generated MRNs and a health record page with tabs for appointments, prescriptions, labs, admissions and billing. |
-| **Appointments** | Book / confirm / check-in / complete / cancel / no-show. Patients book and cancel their own appointments. |
+| **Appointments** | Book / confirm / check-in / complete / cancel / no-show. Patients book, **reschedule** and cancel their own appointments (the database enforces the slot rules). |
 | **Prescriptions** | E-prescriptions with a medicines editor and a printable prescription. |
 | **Laboratory** | Test orders tracked from requested → sample collected → in progress → completed, with results. |
 | **IPD** | Admissions, bed allocation and discharge. A visual board shows occupancy for every ward and bed. |
 | **Billing** | Invoices with line items, discount and GST. Recording a payment updates the balance and status automatically. Invoices are printable. |
 | **Finance** | Expenses, a P&L report, revenue by source, expenses by category, top doctors, and CSV export. |
 | **Operations** | Pharmacy and inventory (low-stock and expiry alerts, one-click restock), a notice board with audience targeting, users and roles, and settings. |
-| **UX** | Skeleton loaders, empty states, **optimistic create/update/delete with rollback**, toasts, responsive layout with a mobile drawer, search, filters, sorting and pagination. |
+| **Patient experience** | **Hindi / English** switch, **installable app (PWA)**, **PDF downloads** of lab reports and bills, **self-reschedule**, **post-visit rating**, and a **WhatsApp booking chatbot**. See [Patient experience](#patient-experience). |
+| **UX** | Skeleton loaders, empty states, **optimistic create/update/delete with rollback**, toasts, responsive layout with a mobile drawer, search, filters, sorting and server-side pagination (no row limit), and an *unsaved changes* prompt on forms. |
 
 ## Quick start (demo mode, no backend needed)
 
@@ -45,7 +46,7 @@ The login screen also has one-click buttons for each account.
 ## Using Supabase (persistent, multi-user)
 
 1. Create a Supabase project, then open **SQL Editor → New query**.
-2. Paste and run **[`supabase/master.sql`](supabase/master.sql)**. This single file creates:
+2. Paste and run **[`supabase/master.sql`](supabase/master.sql)** (demo / staging) — or **[`supabase/production.sql`](supabase/production.sql)** for a real hospital (see [Going live](#going-live)). `master.sql` creates:
    - all 15 tables, constraints and indexes
    - helper functions (`has_role`, `my_patient_id`, …)
    - triggers: `updated_at`, auto profile + patient record on sign-up, a role-change guard, and admission ↔ bed/patient status sync
@@ -56,7 +57,7 @@ The login screen also has one-click buttons for each account.
 
 > ⚠️ Re-running `master.sql` drops and recreates all DC Hospital tables, replacing their data with the demo data.
 
-New users who sign up become **patients**. The owner promotes them to doctor, receptionist, accountant or staff under **Users & Roles**; only the owner can change roles, and the database enforces this.
+New users who sign up become **patients**. To add staff, the owner uses **Users & Roles → Invite staff**: pick the role, and the invitee gets an SMS / WhatsApp / e-mail link (`/register?invite=…`, valid 14 days, single use). Signing up with the invited e-mail gives them that role automatically; any other e-mail just becomes a patient. Only the owner can change roles, and the database enforces this.
 
 ### Regenerating the master SQL
 
@@ -125,6 +126,35 @@ browser storage.
 - **Audit log (`/audit`)** — database triggers record every create, update and delete on patients, appointments, prescriptions, lab orders, admissions, invoices, payments and leave: who did it, their role, when, and a field-by-field before/after. The log can't be edited or deleted. The owner sees everything, and other staff see their own changes. A *History* tab also appears on patient and invoice pages.
 - **My profile (`/profile`)** — photo upload, personal details, password change, preferences and your own recent activity.
 
+## Going live
+
+Demo logins use a public password (`Demo@123`), so **never run a real hospital on `master.sql`'s demo accounts**.
+
+* **New project (recommended):** open `supabase/production.sql`, change the ✏️ owner e-mail, run it, then *Create account* in the app with that e-mail — you are the Owner. It has the full schema and security but **no demo accounts or data**.
+* **Already on the demo data:** **Settings → Security & access → Go-live checklist** shows what's still demo. *Lock demo accounts* bans every demo login except yours, and *Clear demo data* deletes the demo patients, visits, bills and so on (your own records stay). Both are owner-only database functions (`lock_demo_accounts()`, `clear_demo_data()`).
+* Set **Settings → General → Website address** (filled in automatically on first save) so invitation and feedback links point to your domain.
+
+## Patient experience
+
+| Feature | How it works |
+| --- | --- |
+| **हिन्दी / English** | A language switch on the website header, sign-in / register, the booking wizard, feedback page and patient portal (saved per device, defaults to the phone's language). Staff screens stay in English. Strings live in `src/i18n/hi.ts` (English text is the key, missing strings fall back to English). Content typed into the CMS (services, doctor bios) is shown as entered. |
+| **Installable app (PWA)** | `manifest.webmanifest`, icons and a service worker (`public/sw.js`): cached app shell and assets for flaky mobile data, *Install the app* prompt for patients (with an iPhone hint), home-screen shortcuts (Book / Visits / Reports), and an *Update* toast after each deploy (the build stamps `sw.js` and writes `/version.json`). |
+| **Downloads** | Patients download **lab reports** (completed tests) and **bills** as real PDF files — from the dashboard, *My Lab Reports*, *My Bills* and the bill page. Letterhead, GSTIN, Tax Invoice vs Bill of Supply and amount-in-words come from Settings → Billing. jsPDF loads only when a download is clicked. PDFs are in English (built-in PDF fonts have no Devanagari). |
+| **Self-reschedule** | *My Appointments → Reschedule* (or the button on the dashboard) shows the same doctor's free slots. Allowed up to **Settings → Billing & booking → reschedule cut-off** hours before the visit; after that the patient is asked to call. The database trigger re-checks the slot and locks every other field. |
+| **Post-visit rating** | After a visit is marked *completed*, the patient gets a feedback link (SMS / WhatsApp / e-mail, event *feedback_request*) and a prompt on their dashboard: 1–5 stars, tags, comment, *would recommend?*. One rating per visit, within 60 days. Staff see results under **Patient Feedback** (`/ratings`); doctors see only their own. |
+| **WhatsApp chatbot** | Patients message the hospital's WhatsApp number: *1* book (speciality → doctor → free slot → name → confirm), *2* see / cancel appointments, *3* timings & address, *4* reception. Works in Hindi (`hindi`). Same slot rules as the website; bookings are tagged *source: WhatsApp* and get an unpaid invoice. Try it in **Settings → Notifications → WhatsApp booking chatbot** (a live chat preview). |
+
+### Turning on the WhatsApp chatbot
+
+1. `supabase functions deploy whatsapp-bot --no-verify-jwt` (the webhook is public; requests are verified by signature instead).
+2. Settings → Notifications → **WhatsApp**: choose **Meta Cloud API** or **Twilio**, enter the credentials, turn it on.
+3. **WhatsApp booking chatbot** card → turn it on and copy the webhook URL (`https://<project>.supabase.co/functions/v1/whatsapp-bot`).
+   * **Meta:** WhatsApp → Configuration → Webhook → paste the URL, set a *verify token* (save the same text in the card), subscribe to `messages`. Save the **app secret** too so every incoming request's `X-Hub-Signature-256` is checked.
+   * **Twilio:** WhatsApp sender → *When a message comes in* → the URL (POST). Requests are checked against your Twilio auth token.
+
+The conversation logic is `supabase/functions/_shared/bot.ts` — plain TypeScript used by the Edge Function, the in-app preview and the tests. Chat state is kept per number in `wa_sessions` (service role only) and resets after 30 minutes.
+
 ## Settings (Dashboard → Settings, owner only)
 
 | Tab | What you can change |
@@ -143,7 +173,7 @@ Other roles only see **My account** there.
 
 * API keys go into `app_secrets`, which has RLS on and no policies. The browser can write keys through `set_app_secret()`, but can never read them back; `app_secret_status()` only returns a masked `••••1234`. Every change is written to the audit log without the value.
 * Database triggers on appointments, invoices, payments and lab tests, plus the booking OTP, queue messages in `notification_outbox` via `notify_enqueue()`. If queuing fails, it never blocks the booking or invoice itself.
-* The **`notify` Edge Function** delivers queued messages. The app calls it right after an action. Deploy it once:
+* The **`notify` Edge Function** delivers queued messages. Right after an action the app asks it to send *just those* messages (by id; anyone may do this, it can't reach other messages). Flushing the **whole queue** needs the service-role key (pg_cron) or a signed-in staff member, and *Send test* is owner-only. Deploy it once:
 
   ```bash
   supabase functions deploy notify     # uses SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY automatically
@@ -156,11 +186,14 @@ Other roles only see **My account** there.
     select net.http_post('https://<project>.supabase.co/functions/v1/notify',
       '{"flush":true}'::jsonb, headers => '{"Authorization":"Bearer <service-role-key>","Content-Type":"application/json"}'::jsonb) $$);
   ```
+  The `<service-role-key>` lives only inside your database's cron job; never put it in the app or Docker variables.
+* Failed sends are retried with back-off (2, 4 and 8 minutes after each failure, tracked in `next_attempt_at`) up to 3 attempts; configuration errors (missing key, no template) are not retried.
+* Provider request formats (MSG91, Fast2SMS, Twilio, Meta, Interakt, Resend, SendGrid, webhook) are covered by contract tests with mocked HTTP (`tests/notify/providers.test.ts`). Before launch, use *Send test* on each channel with your real account.
 * Once SMS or WhatsApp is connected, the booking OTP is sent to the phone and is no longer shown on screen.
 * **India (DLT):** SMS through MSG91 or Fast2SMS needs DLT-approved templates. Paste each template or flow ID into the matching message template.
 * **WhatsApp:** outside a 24-hour chat window, only approved templates can be sent.
 
-In demo mode everything can be configured, and test sends are *simulated* and logged.
+In demo mode everything can be configured, and test sends are *simulated* and logged. API keys typed in demo mode are **not stored** — only a `••••1234` hint, so the form shows what was entered.
 
 ## Deploy with Docker / Coolify
 
@@ -204,6 +237,7 @@ Or `docker compose up -d --build`; uncomment the `ports` block in `docker-compos
 | `docker/nginx.conf` | SPA fallback, caching, gzip, security headers, `/healthz` |
 | `docker/40-runtime-env.sh` | writes `/env.js` from env vars when the container starts |
 | `docker-compose.yml` | Compose / Coolify compose deployment |
+| `public/sw.js`, `public/manifest.webmanifest` | PWA service worker and manifest (served with `no-cache`) |
 | `.dockerignore` | keeps the build context small (no `node_modules`, `.env`, `.git`) |
 
 > The anon key is public by design; Row Level Security in `master.sql` protects the data. **Never** put the `service_role` key in these variables.
@@ -213,7 +247,8 @@ Or `docker compose up -d --build`; uncomment the `ports` block in `docker-compos
 | Module | Owner | Doctor | Receptionist | Accountant | Staff | Patient |
 | --- | --- | --- | --- | --- | --- | --- |
 | Patients | CRUD | RU | CRU | R | RU | own |
-| Appointments | CRUD | CRU (own list) | CRUD | – | R | own (book / cancel) |
+| Appointments | CRUD | CRU (own list) | CRUD | – | R | own (book / reschedule / cancel) |
+| Visit feedback | CRUD | R (own) | R | – | – | own (rate once) |
 | Prescriptions | CRUD | CRUD | – | – | R | own |
 | Lab tests | CRUD | CRU | CR | R | CRU | own |
 | Admissions / Beds | CRUD | CRU / RU | CRU / RU | R / – | RU / RU | – |
@@ -233,13 +268,24 @@ src/
   resources/       declarative resource configs (columns, forms, filters, row actions, side effects)
   components/      UI kit, generic ResourcePage (table + drawer form), layout
   pages/           dashboards, patient record, invoice & prescription print views, beds, reports, settings
-scripts/           master SQL generator + schema
-supabase/master.sql  ← the single file to run in Supabase
+  i18n/            Hindi / English strings for patient screens
+  booking/         online booking API, chatbot glue
+  feedback/        visit rating form + API
+  lib/pdf.ts       lab report / bill PDFs (lazy jsPDF)
+  pwa/             service-worker registration + install prompt
+scripts/           master SQL generator + schema (scripts/sql/*.sql)
+supabase/master.sql      ← schema + security + demo data (demo / staging)
+supabase/production.sql  ← schema + security only (real hospitals)
+supabase/functions/      notify (messages), whatsapp-bot (chatbot), _shared (providers, bot engine)
+tests/             database (PGlite), provider contract and chatbot tests
+.github/workflows/ci.yml  typecheck, SQL freshness, tests, build + bundle budget, Docker build
 ```
 
 ## Scripts
 
 - `npm run dev`: start the dev server
 - `npm run build`: type-check and build for production
-- `npm run sql:build`: regenerate `supabase/master.sql`
+- `npm run sql:build`: regenerate `supabase/master.sql` and `supabase/production.sql`
+- `npm test`: run the database, notification-provider and chatbot tests (Postgres runs in-process via PGlite — no Docker needed)
+- `npm run check`: typecheck + SQL build + tests (what CI runs, minus the build)
 - `docker build -t dc-hospital .`: build the production image

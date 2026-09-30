@@ -14,7 +14,7 @@
 --  Optional automatic delivery + reminders with pg_cron + pg_net (Database → Extensions), e.g.:
 --    select cron.schedule('notify-flush', '* * * * *', $c$ select net.http_post(
 --      url := 'https://<project-ref>.supabase.co/functions/v1/notify',
---      headers := jsonb_build_object('Authorization', 'Bearer <anon-key>', 'Content-Type', 'application/json'),
+--      headers := jsonb_build_object('Authorization', 'Bearer <service-role-key>', 'Content-Type', 'application/json'),
 --      body := '{"flush":true}'::jsonb) $c$);
 --    select cron.schedule('appointment-reminders', '30 12 * * *', $c$ select public.queue_appointment_reminders() $c$);  -- 18:00 IST
 -- =====================================================================================================
@@ -137,6 +137,9 @@ create table if not exists public.notification_outbox (
   created_at     timestamptz not null default now(),
   sent_at        timestamptz
 );
+-- retry bookkeeping (added later; `if not exists` keeps re-runs safe)
+alter table public.notification_outbox add column if not exists last_attempt_at timestamptz;
+alter table public.notification_outbox add column if not exists next_attempt_at timestamptz not null default now();
 create index if not exists notification_outbox_queue_idx on public.notification_outbox (status, created_at);
 create index if not exists notification_outbox_related_idx on public.notification_outbox (related_id, event);
 
@@ -171,7 +174,8 @@ begin
   v_vars := jsonb_build_object(
       'hospital', coalesce(nullif(site ->> 'name', ''), 'DC Hospital'),
       'hospital_phone', coalesce(nullif(site ->> 'appointmentsPhone', ''), site ->> 'phone', ''),
-      'address', coalesce(site ->> 'address', ''))
+      'address', coalesce(site ->> 'address', ''),
+      'site_url', rtrim(coalesce(site ->> 'siteUrl', ''), '/'))
     || coalesce(p_vars, '{}'::jsonb);
 
   foreach ch in array array['sms', 'whatsapp', 'email'] loop
@@ -329,15 +333,41 @@ drop function if exists public.claim_notifications(int) cascade;
 create function public.claim_notifications(p_limit int default 25)
 returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
 begin
+  -- give up on messages that got stuck mid-delivery three times
+  update public.notification_outbox set status = 'failed', error = coalesce(error, 'Delivery timed out')
+  where status = 'sending' and attempts >= 3 and coalesce(last_attempt_at, created_at) < now() - interval '10 minutes';
+
   return query
-    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1
+    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
     where o.id in (
       select x.id from public.notification_outbox x
-      where x.status = 'pending' or (x.status = 'sending' and x.attempts < 3 and x.created_at < now() - interval '10 minutes')
+      where (x.status = 'pending' and x.next_attempt_at <= now())
+         or (x.status = 'sending' and x.attempts < 3 and coalesce(x.last_attempt_at, x.created_at) < now() - interval '10 minutes')
       order by x.created_at
       limit greatest(1, least(p_limit, 100))
       for update skip locked)
     returning o.*;
 end $$;
+
+-- Deliver specific fresh messages right away (e.g. the OTP a visitor just requested). Used by the notify
+-- function for callers that may not flush the whole queue (anonymous visitors, patients).
+drop function if exists public.claim_notifications_for(uuid[]) cascade;
+create function public.claim_notifications_for(p_ids uuid[])
+returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
+begin
+  return query
+    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
+    where o.id in (
+      select x.id from public.notification_outbox x
+      where x.status = 'pending' and x.attempts = 0 and x.created_at > now() - interval '15 minutes'
+        and (x.id = any (p_ids) or x.related_id = any (p_ids))
+      order by x.created_at
+      limit 10
+      for update skip locked)
+    returning o.*;
+end $$;
+revoke all on function public.claim_notifications_for(uuid[]) from public, anon, authenticated;
+grant execute on function public.claim_notifications_for(uuid[]) to service_role;
+
 revoke all on function public.claim_notifications(int) from public, anon, authenticated;
 grant execute on function public.claim_notifications(int) to service_role;

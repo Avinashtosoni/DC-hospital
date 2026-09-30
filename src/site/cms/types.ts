@@ -27,6 +27,8 @@ export interface SiteSettings {
   appointmentsPhone: string
   whatsapp: string
   email: string
+  /** public address of this website, e.g. https://hospital.example.in — used in links inside SMS / WhatsApp / email */
+  siteUrl: string
   topBar: { enabled: boolean; text: string }
   emergency: { title: string; text: string }
   hours: { label: string; value: string; highlight: boolean }[]
@@ -69,6 +71,8 @@ export interface SiteSettings {
     payNote: string
     /** show the OTP on screen when no SMS gateway is connected (demo / testing only) */
     showDemoOtp: boolean
+    /** patients can move / cancel their own visit online until this many hours before it */
+    rescheduleCutoffHours: number
   }
   /** Letterhead + tax details printed on invoices / bills of supply. */
   billing: {

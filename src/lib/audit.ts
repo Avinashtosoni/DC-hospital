@@ -6,12 +6,13 @@ import type { AuditEntry, TableName } from '../types'
  */
 export const AUDITED_TABLES = [
   'patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
-  'doctors', 'doctor_leaves', 'holidays', 'profiles', 'staff', 'expenses',
+  'doctors', 'doctor_leaves', 'holidays', 'profiles', 'staff', 'expenses', 'staff_invites',
 ] as const satisfies readonly TableName[]
 export type AuditedTable = (typeof AUDITED_TABLES)[number]
 export const isAudited = (t: string): t is AuditedTable => (AUDITED_TABLES as readonly string[]).includes(t)
 
 export const AUDIT_TABLE_LABEL: Record<string, string> = {
+  staff_invites: 'Staff invite',
   patients: 'Patient', appointments: 'Appointment', prescriptions: 'Prescription', lab_tests: 'Lab test', admissions: 'Admission',
   invoices: 'Invoice', payments: 'Payment', doctors: 'Doctor', doctor_leaves: 'Leave / block', holidays: 'Holiday',
   profiles: 'User', staff: 'Staff member', expenses: 'Expense', app_settings: 'Settings', app_secrets: 'Credential',

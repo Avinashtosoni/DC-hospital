@@ -1,3 +1,4 @@
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -10,7 +11,7 @@ import { CONTENT_QK, mergeRows, useContentRows } from '../../site/cms/content'
 import { cms, type ContentRows } from '../../site/cms/store'
 import type { SiteSettings } from '../../site/cms/types'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
-import { paletteFor, type AppSettings } from '../../settings/types'
+import type { AppSettings } from '../../settings/types'
 import { AccountTab } from './AccountTab'
 import { AppearanceTab, LOCKED_MODULES } from './AppearanceTab'
 import { BillingTab } from './BillingTab'
@@ -37,17 +38,13 @@ const clone = <T,>(v: T): T => structuredClone(v)
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /** Paint the draft appearance on the whole dashboard while editing; restore the saved one on leave. */
-function useLiveAppearance(draft: AppSettings['appearance'] | undefined, saved: AppSettings['appearance']) {
-  const savedRef = useRef(saved)
-  savedRef.current = saved
-  const paint = (a: AppSettings['appearance']) => {
-    const root = document.documentElement
-    for (const [k, v] of Object.entries(paletteFor(a))) root.style.setProperty(`--brand-${k}`, v)
-    root.dataset.radius = a.radius
-    root.dataset.appSize = a.size
-  }
-  useEffect(() => { if (draft) paint(draft) }, [draft])
-  useEffect(() => () => paint(savedRef.current), [])
+/** Show the unsaved appearance / modules / announcement across the whole dashboard (sidebar included) while editing. */
+function useLivePreview(draft: AppSettings | null | undefined, dirty: boolean) {
+  const { setPreview } = useAppSettings()
+  useEffect(() => {
+    setPreview(draft && dirty ? { appearance: draft.appearance, modules: draft.modules, announcement: draft.announcement } : null)
+  }, [draft, dirty, setPreview])
+  useEffect(() => () => setPreview(null), [setPreview])
 }
 
 export default function SettingsPage() {
@@ -62,7 +59,7 @@ export default function SettingsPage() {
 
   // ---------------------------------------------------------------- saved values
   const rows = useContentRows({ enabled: isOwner })
-  const { settings: savedApp, loading: appLoading, save: saveApp } = useAppSettings()
+  const { savedSettings: savedApp, loading: appLoading, save: saveApp } = useAppSettings()
   const savedSite = useMemo(() => mergeRows(rows.data).settings, [rows.data])
 
   // ---------------------------------------------------------------- drafts (re-synced when saved data changes and there are no local edits)
@@ -84,7 +81,7 @@ export default function SettingsPage() {
   const siteDirty = !!site && !same(site, savedSite)
   const appDirty = !!app && !same(app, savedApp)
   const dirty = siteDirty || appDirty
-  useLiveAppearance(isOwner ? app?.appearance : undefined, savedApp.appearance)
+  useLivePreview(isOwner ? app : null, appDirty)
 
   const editSite = useCallback((fn: (d: SiteSettings) => void) => setSite((p) => { if (!p) return p; const n = clone(p); fn(n); return n }), [])
   const editApp = useCallback((fn: (d: AppSettings) => void) => setApp((p) => { if (!p) return p; const n = clone(p); fn(n); return n }), [])
@@ -94,7 +91,9 @@ export default function SettingsPage() {
     mutationFn: async () => {
       if (site && siteDirty) {
         if (!site.name.trim()) throw new Error('Hospital name cannot be empty')
-        const row = await cms.save('settings', site, user?.full_name)
+        // links in messages (feedback, invites) need an absolute address — default to the site the owner is using
+        const toSave = site.siteUrl ? site : { ...site, siteUrl: window.location.origin }
+        const row = await cms.save('settings', toSave, user?.full_name)
         qc.setQueryData<ContentRows>(CONTENT_QK, (old) => ({ ...(old ?? {}), settings: row }))
       }
       if (app && appDirty) {
@@ -110,12 +109,11 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!dirty) return
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
     const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!save.isPending) save.mutate() } }
-    window.addEventListener('beforeunload', warn)
     window.addEventListener('keydown', key)
-    return () => { window.removeEventListener('beforeunload', warn); window.removeEventListener('keydown', key) }
+    return () => window.removeEventListener('keydown', key)
   }, [dirty, save])
+  const leavePrompt = useUnsavedChanges(dirty, { onSave: () => save.mutateAsync(), saving: save.isPending, what: 'settings' })
 
   // ---------------------------------------------------------------- render
   if (!isOwner) {
@@ -132,6 +130,7 @@ export default function SettingsPage() {
   const current = TABS.find((t) => t.id === tab)!
   return (
     <div className="mx-auto max-w-6xl">
+      {leavePrompt}
       <PageHeader title="Settings" description="Brand, appearance, dashboards, messaging credentials and hospital-wide preferences." />
       <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">
         <nav aria-label="Settings sections" className="scrollbar-thin -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 lg:sticky lg:top-4 lg:mx-0 lg:flex-col lg:self-start lg:overflow-visible lg:px-0">

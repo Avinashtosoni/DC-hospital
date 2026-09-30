@@ -19,6 +19,7 @@ import {
   type DaySummary, type Level, type ScheduleExt,
 } from '../../lib/schedule'
 import { appointmentsRes } from '../../resources/definitions'
+import { RateVisitDialog, RescheduleDialog } from './PatientDialogs'
 import type { ResourceCtx, RowAction } from '../../resources/types'
 import { useResourceCtx } from '../../resources/useResourceCtx'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
@@ -43,7 +44,15 @@ export default function AppointmentsPage() {
     const next = new URLSearchParams(params); next.set('view', v); setParams(next, { replace: true })
   }
   const switcher = isPatient ? null : <ViewSwitcher view={view} onChange={setView} />
-  if (view === 'list' || isPatient) return <ResourcePage def={appointmentsRes} headerExtra={switcher} />
+  if (isPatient) {
+    const close = (k: string) => () => { const next = new URLSearchParams(params); next.delete(k); setParams(next, { replace: true }) }
+    return <>
+      <ResourcePage def={appointmentsRes} />
+      <RescheduleDialog id={params.get('reschedule')} onClose={close('reschedule')} />
+      <RateVisitDialog id={params.get('rate')} onClose={close('rate')} />
+    </>
+  }
+  if (view === 'list') return <ResourcePage def={appointmentsRes} headerExtra={switcher} />
   return <CalendarViews view={view} setView={setView} switcher={switcher} />
 }
 

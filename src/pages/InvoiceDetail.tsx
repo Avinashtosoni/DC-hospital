@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Ban, Printer, Receipt, Wallet } from 'lucide-react'
+import { ArrowLeft, Ban, FileDown, Printer, Receipt, Wallet } from 'lucide-react'
+import { downloadInvoice } from '../lib/pdf'
+import { useSiteSettings } from '../site/cms/content'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
 import { useCreate, useLookup, useTable, useUpdate } from '../hooks/useData'
@@ -27,6 +29,7 @@ export default function InvoiceDetail() {
   const [payOpen, setPayOpen] = useState(false)
   const [form, setForm] = useState({ amount: '', method: 'upi' as Payment['method'], paid_on: today(), reference: '' })
   const [err, setErr] = useState('')
+  const site = useSiteSettings()
 
   const inv = invoices.data?.find((i) => i.id === id)
   const role = user!.role
@@ -70,7 +73,8 @@ export default function InvoiceDetail() {
           {can(role, 'invoices', 'update') && role !== 'receptionist' && !['cancelled', 'paid'].includes(inv.status) && inv.amount_paid === 0 && (
             <Button variant="outline" icon={<Ban className="h-4 w-4" />} onClick={() => updInv.mutate({ id: inv.id, patch: { status: 'cancelled' } })}>Cancel invoice</Button>
           )}
-          <Button variant="outline" icon={<Printer className="h-4 w-4" />} onClick={printInvoice}>Print / PDF</Button>
+          <Button variant="outline" icon={<Printer className="h-4 w-4" />} onClick={printInvoice}>Print</Button>
+          <Button variant="outline" icon={<FileDown className="h-4 w-4" />} onClick={() => downloadInvoice(inv, { site, patient, payments: [...history].reverse() })}>Download PDF</Button>
           {canPay && balance > 0 && !['cancelled', 'draft'].includes(inv.status) && <Button icon={<Wallet className="h-4 w-4" />} onClick={() => { setForm((f) => ({ ...f, amount: String(balance) })); setPayOpen(true) }}>Record payment</Button>}
         </div>
       </div>

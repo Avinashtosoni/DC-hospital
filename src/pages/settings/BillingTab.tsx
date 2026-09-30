@@ -38,6 +38,7 @@ export function BillingTab({ ctx }: { ctx: TabCtx }) {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Book up to (days ahead)"><Input type="number" min={1} max={120} value={bk.advanceDays} onChange={(e) => editSite((d) => { d.booking.advanceDays = Math.min(120, Math.max(1, Number(e.target.value) || 1)) })} /></Field>
             <Field label="Minimum notice (minutes)" hint="Earliest slot today = now + this"><Input type="number" min={0} max={1440} step={15} value={bk.minNoticeMinutes} onChange={(e) => editSite((d) => { d.booking.minNoticeMinutes = Math.max(0, Number(e.target.value) || 0) })} /></Field>
+            <Field label="Patient reschedule / cancel cut-off (hours)" hint="Patients can move or cancel online until this long before the visit"><Input type="number" min={0} max={72} step={1} value={bk.rescheduleCutoffHours ?? 4} onChange={(e) => editSite((d) => { d.booking.rescheduleCutoffHours = Math.min(72, Math.max(0, Number(e.target.value) || 0)) })} /></Field>
             <Field label="Payment note" className="sm:col-span-2" hint="Shown on the confirmation and the invoice"><Input value={bk.payNote} onChange={(e) => editSite((d) => { d.booking.payNote = e.target.value })} /></Field>
           </div>
           <Toggle label="Show the OTP on screen when no SMS gateway is connected" hint="For demos and testing only. Hidden automatically once SMS or WhatsApp delivers the code. Turn OFF in production." checked={bk.showDemoOtp} onChange={(v) => editSite((d) => { d.booking.showDemoOtp = v })} />

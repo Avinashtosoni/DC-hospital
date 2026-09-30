@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import { Building2, Globe2, HeartPulse, Languages, Phone } from 'lucide-react'
-import { Field, Input, Select, Textarea } from '../../components/ui'
+import { Button, Field, Input, Select, Textarea } from '../../components/ui'
 import { cn } from '../../lib/utils'
 import type { AppSettings } from '../../settings/types'
 import { ImagePicker, Section, Segmented, Toggle, type TabCtx } from './shared'
@@ -69,6 +69,12 @@ export function GeneralTab({ ctx }: { ctx: TabCtx }) {
           <Field label="Appointments phone" hint="Used in patient messages; falls back to the main phone"><Input value={site.appointmentsPhone} onChange={(e) => editSite((d) => { d.appointmentsPhone = e.target.value })} inputMode="tel" /></Field>
           <Field label="WhatsApp number" hint="Click-to-chat button on the website"><Input value={site.whatsapp} onChange={(e) => editSite((d) => { d.whatsapp = e.target.value })} inputMode="tel" /></Field>
           <Field label="Email"><Input type="email" value={site.email} onChange={(e) => editSite((d) => { d.email = e.target.value })} /></Field>
+          <Field label="Website address" hint="Used for links in messages (feedback, staff invites). Leave empty to use this site’s address." className="sm:col-span-2">
+            <div className="flex gap-2">
+              <Input type="url" value={site.siteUrl} onChange={(e) => editSite((d) => { d.siteUrl = e.target.value.trim() })} placeholder={window.location.origin} />
+              {site.siteUrl !== window.location.origin && <Button type="button" variant="outline" size="sm" onClick={() => editSite((d) => { d.siteUrl = window.location.origin })}>Use this site</Button>}
+            </div>
+          </Field>
           <Field label="Address" className="sm:col-span-2"><Textarea rows={2} value={site.address} onChange={(e) => editSite((d) => { d.address = e.target.value })} /></Field>
         </div>
       </Section>

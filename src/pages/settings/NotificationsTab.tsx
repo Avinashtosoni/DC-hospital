@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlarmClock, BellRing, CheckCircle2, CircleAlert, ExternalLink, FileText, History, Mail, MessageCircle, MessageSquareText,
-  PlugZap, RefreshCw, RotateCcw, Send, ServerCog, Smartphone,
+  PlugZap, RefreshCw, RotateCcw, Send, ServerCog, Smartphone, Bot, Copy,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
@@ -12,6 +12,8 @@ import { channelIssues, recipientProblem, settingsStore, type OutboxRow, type Se
 import { DEFAULT_TEMPLATES, EVENTS, type AppSettings, type Channel, type NotifyEvent } from '../../settings/types'
 import { useAuth } from '../../auth/AuthProvider'
 import { Issues, SECRETS_QK, SecretInput, Section, Segmented, type TabCtx } from './shared'
+import { BotSimulator } from './BotSimulator'
+import { supabaseUrl } from '../../lib/supabase'
 
 const LOG_QK = ['notify-log'] as const
 const CH: Record<Channel, { label: string; icon: ReactNode; to: string; toLabel: string }> = {
@@ -355,16 +357,56 @@ export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
         {live ? <ServerCog className="h-5 w-5 shrink-0" /> : <PlugZap className="h-5 w-5 shrink-0" />}
         <p className="min-w-0 flex-1">
           {live ? <>Messages are queued in the database and delivered by the <b>notify</b> Edge Function. Deploy it once with <code className="rounded bg-white/70 px-1 text-xs">supabase functions deploy notify</code>.</>
-            : <><b>Demo mode.</b> You can configure everything and test your setup, but nothing is really sent until Supabase is connected and the notify function is deployed.</>}
+            : <><b>Demo mode.</b> You can configure everything and test your setup, but nothing is really sent until Supabase is connected and the notify function is deployed. API keys you type here are <b>not stored</b> in this browser — only their last 4 characters, so you can see what was entered.</>}
         </p>
         {live && <Button size="sm" variant="outline" loading={ping.isPending} icon={<PlugZap className="h-3.5 w-3.5" />} onClick={() => ping.mutate()}>Check function</Button>}
         {ping.data && <span className={cn('basis-full text-xs', ping.data.ok ? 'text-emerald-700' : 'text-rose-700')}>{ping.data.ok ? '✓ ' : '✕ '}{ping.data.message}</span>}
       </div>
       {secrets.isError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">Could not load saved credentials: {(secrets.error as Error).message}</p>}
       {(['sms', 'whatsapp', 'email'] as Channel[]).map((c) => <ChannelCard key={c} channel={c} ctx={ctx} secrets={secrets.data} />)}
+      <ChatbotCard ctx={ctx} secrets={secrets.data} />
       <EventsMatrix ctx={ctx} />
       <DeliveryLog />
     </div>
   )
 }
 
+
+// ------------------------------------------------------------------ WhatsApp booking chatbot
+function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | undefined }) {
+  const w = ctx.app.notifications.whatsapp
+  const on = w.botEnabled
+  const hook = supabaseUrl ? `${supabaseUrl.replace(/\/$/, '')}/functions/v1/whatsapp-bot` : '(connect Supabase to get the webhook URL)'
+  const copy = () => navigator.clipboard?.writeText(hook).then(() => toast.success('Webhook URL copied'))
+  return (
+    <Section title={<span className="flex items-center gap-2">WhatsApp booking chatbot<Badge tone={on ? (w.enabled ? 'green' : 'amber') : 'slate'} dot>{on ? (w.enabled ? 'On' : 'Needs WhatsApp') : 'Off'}</Badge></span>} icon={<Bot className="h-4 w-4" />}
+      description="Patients message your WhatsApp number to book, see or cancel appointments and get timings — in English or Hindi, 24×7."
+      action={<label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600"><span className="hidden sm:inline">Enabled</span>
+        <button type="button" role="switch" aria-checked={on} aria-label="Enable WhatsApp chatbot" onClick={() => edit(ctx, (n) => { n.whatsapp.botEnabled = !on })}
+          className={cn('relative h-6 w-11 rounded-full transition', on ? 'bg-brand-600' : 'bg-slate-300')}>
+          <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all', on ? 'left-[22px]' : 'left-0.5')} />
+        </button></label>}>
+      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+        <div className="space-y-4 text-sm text-slate-600">
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>Deploy once: <code className="rounded bg-slate-100 px-1 text-xs">supabase functions deploy whatsapp-bot --no-verify-jwt</code></li>
+            <li>Set the provider in the <b>WhatsApp</b> card above (Meta Cloud API or Twilio) and turn it on.</li>
+            <li>Point your provider’s incoming-message webhook to:
+              <div className="mt-1.5 flex items-center gap-2"><code className="min-w-0 flex-1 truncate rounded-lg bg-slate-100 px-2 py-1.5 text-xs">{hook}</code>
+                {supabaseUrl && <Button size="sm" variant="outline" icon={<Copy className="h-3.5 w-3.5" />} onClick={copy}>Copy</Button>}</div>
+            </li>
+          </ol>
+          {w.provider === 'meta' && <>
+            <p>In Meta → WhatsApp → Configuration → Webhook, paste the URL, enter the verify token below and subscribe to <b>messages</b>.</p>
+            <SecretInput name="whatsapp_verify_token" secrets={secrets} />
+            <SecretInput name="meta_app_secret" secrets={secrets} />
+          </>}
+          {w.provider === 'twilio' && <p>In Twilio → Messaging → WhatsApp sender → “When a message comes in”, paste the URL (HTTP POST). Requests are checked with your Twilio auth token.</p>}
+          {(w.provider === 'interakt' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
+          <p className="text-xs text-slate-500">Bookings from the bot use the same slot rules as the website (holidays, leave, notice period) and are marked <b>source: WhatsApp</b>. The patient’s WhatsApp number is their verification, so no OTP is needed. Chats reset after 30 minutes of silence.</p>
+        </div>
+        <BotSimulator />
+      </div>
+    </Section>
+  )
+}

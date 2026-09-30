@@ -17,8 +17,11 @@ COPY . .
 # Optional: bake values in at build time (runtime env vars still override them).
 ARG VITE_SUPABASE_URL=""
 ARG VITE_SUPABASE_ANON_KEY=""
+# Coolify passes the git sha here; it versions the PWA service worker (falls back to a timestamp).
+ARG SOURCE_COMMIT=""
 ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
+    SOURCE_COMMIT=$SOURCE_COMMIT
 
 RUN npm run build
 

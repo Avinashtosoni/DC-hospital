@@ -91,7 +91,7 @@ export interface Appointment extends BaseRow {
   reason?: string | null
   notes?: string | null
   /** where the booking came from */
-  source?: 'desk' | 'website' | 'portal' | null
+  source?: 'desk' | 'website' | 'portal' | 'whatsapp' | null
   /** public reference shown to patients who book online, e.g. DCB-4K7Q2M */
   booking_ref?: string | null
   /** when the front desk last contacted the patient about rescheduling */
@@ -264,6 +264,32 @@ export interface SiteEnquiry extends BaseRow {
   notes?: string | null
 }
 
+/** Patient rating after a completed visit (one per appointment). */
+export interface VisitFeedback extends BaseRow {
+  appointment_id: string
+  patient_id: string
+  doctor_id?: string | null
+  rating: number
+  comment?: string | null
+  /** what went well / what to improve, e.g. ['waiting_time', 'doctor'] */
+  tags?: string[] | null
+  would_recommend?: boolean | null
+  source: 'portal' | 'link' | 'whatsapp'
+}
+
+/** Invitation for a staff member to create their own account with a pre-assigned role. */
+export interface StaffInvite extends BaseRow {
+  full_name: string
+  email: string
+  phone?: string | null
+  role: Exclude<Role, 'patient'>
+  token: string
+  status: 'pending' | 'accepted' | 'revoked'
+  expires_at: string
+  invited_by_name?: string | null
+  accepted_at?: string | null
+}
+
 export interface DB {
   profiles: Profile
   departments: Department
@@ -285,11 +311,13 @@ export interface DB {
   doctor_leaves: DoctorLeave
   holidays: Holiday
   audit_log: AuditEntry
+  visit_feedback: VisitFeedback
+  staff_invites: StaffInvite
 }
 
 export type TableName = keyof DB
 export const TABLES: TableName[] = [
   'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions',
   'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries',
-  'doctor_leaves', 'holidays', 'audit_log',
+  'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites',
 ]

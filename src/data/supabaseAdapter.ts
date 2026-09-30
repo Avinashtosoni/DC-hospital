@@ -14,13 +14,26 @@ const ORDER: Partial<Record<TableName, { column: string; ascending: boolean }>> 
   wards: { column: 'name', ascending: true },
 }
 
+const PAGE = 1000
+/** safety net for a runaway table; the dashboard keeps lists in memory */
+const MAX_ROWS = 100_000
+
 export const supabaseAdapter: DataAdapter = {
   mode: 'supabase',
+  // PostgREST returns at most `max-rows` (1000 on Supabase) per request, so read page by page.
+  // `id` is a tie-breaker so rows with the same sort value never repeat or go missing between pages.
   async list(table) {
     const order = ORDER[table] ?? { column: 'created_at', ascending: false }
-    const { data, error } = await client().from(table).select('*').order(order.column, { ascending: order.ascending }).limit(5000)
-    if (error) throw new Error(error.message)
-    return data as never
+    const out: unknown[] = []
+    for (let from = 0; from < MAX_ROWS; from += PAGE) {
+      const { data, error } = await client().from(table).select('*')
+        .order(order.column, { ascending: order.ascending }).order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(error.message)
+      out.push(...(data ?? []))
+      if (!data || data.length < PAGE) break
+    }
+    return out as never
   },
   async insert<T extends TableName>(table: T, row: NewRow<T>) {
     const { data, error } = await client().from(table).insert(row as never).select().single()
@@ -59,8 +72,9 @@ export const supabaseAuth: AuthAdapter = {
     if (!p) throw new Error('No profile found. Did you run supabase/master.sql?')
     return p
   },
-  async signUp({ full_name, email, password, phone }) {
-    const { data, error } = await client().auth.signUp({ email, password, options: { data: { full_name, phone, role: 'patient' } } })
+  async signUp({ full_name, email, password, phone, invite_token }) {
+    // the role comes from handle_new_user(): an accepted staff invite, otherwise patient
+    const { data, error } = await client().auth.signUp({ email, password, options: { data: { full_name, phone, ...(invite_token ? { invite_token } : {}) } } })
     if (error) throw new Error(error.message)
     if (!data.session) throw new Error('Account created! Please confirm your email, then sign in.')
     const p = await fetchProfile(data.user!.id)

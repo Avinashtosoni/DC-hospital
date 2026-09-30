@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -65,12 +66,7 @@ export default function CmsPage() {
     return () => { ch.close(); channel.current = null }
   }, [])
 
-  useEffect(() => {
-    if (!dirtyKeys.length) return
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [dirtyKeys.length])
+  const leavePrompt = useUnsavedChanges(dirtyKeys.length > 0, { what: 'the website content' })
   const [focusPath, setFocusPath] = useState<string | null>(null)
   useEffect(() => { setErrors([]); setFocusPath(null); window.scrollTo({ top: 0 }) }, [view])
 
@@ -186,6 +182,7 @@ export default function CmsPage() {
 
   return (
     <div className="-mx-4 -my-6 sm:-mx-6 lg:-mx-8 lg:-my-8">
+      {leavePrompt}
       {/* ---------- header */}
       <div className="sticky top-16 z-20 border-b border-brand-100 bg-white/85 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center gap-3">

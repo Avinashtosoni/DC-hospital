@@ -17,6 +17,7 @@ export const DEFAULT_CONTENT: SiteContent = {
     appointmentsPhone: '+91 11 4000 2200',
     whatsapp: '+91 98100 40002',
     email: 'care@dchospital.com',
+    siteUrl: '',
     topBar: { enabled: true, text: 'Emergency & ambulance open 24×7' },
     emergency: { title: '24×7 Emergency & Ambulance', text: 'Trauma, cardiac & stroke-ready team. Walk in any time or call — we’re always open.' },
     hours: [
@@ -59,6 +60,7 @@ export const DEFAULT_CONTENT: SiteContent = {
       minNoticeMinutes: 60,
       payNote: 'Pay at the reception when you arrive — cash, card or UPI. Please come 15 minutes early with a photo ID.',
       showDemoOtp: true,
+      rescheduleCutoffHours: 4,
     },
     billing: {
       legalName: 'DC Hospital Private Limited',

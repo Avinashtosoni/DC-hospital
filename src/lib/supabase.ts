@@ -13,6 +13,8 @@ const url = (runtime.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URL) as 
 const key = (runtime.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
 
 export const isSupabaseConfigured = Boolean(url && key)
+/** Project URL (for showing Edge Function webhook addresses in Settings). */
+export const supabaseUrl = isSupabaseConfigured ? url! : ''
 
 export const supabase: SupabaseClient | null = isSupabaseConfigured
   ? createClient(url!, key!, { auth: { persistSession: true, autoRefreshToken: true } })

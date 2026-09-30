@@ -196,8 +196,8 @@ const remote = {
   doctors: () => rpc<PublicDoctor[]>('public_doctors'),
   availability: (doctorId: string | null, from: string, to: string) => rpc<Availability>('public_availability', { p_doctor: doctorId, p_from: from, p_to: to }),
   requestOtp: async (phone: string) => {
-    const r = await rpc<{ sent: boolean; expires_in: number; queued?: number; demo_code: string | null }>('request_booking_otp', { p_phone: phone })
-    if (r.queued) flushNotificationsSoon(0)   // deliver the SMS / WhatsApp right away
+    const r = await rpc<{ sent: boolean; expires_in: number; queued?: number; ref?: string; demo_code: string | null }>('request_booking_otp', { p_phone: phone })
+    if (r.queued) flushNotificationsSoon(0, [r.ref])   // deliver the SMS / WhatsApp right away
     return r
   },
   verifyOtp: (phone: string, code: string) => rpc<{ ok: boolean; token?: string; error?: string }>('verify_booking_otp', { p_phone: phone, p_code: code }),
@@ -215,9 +215,18 @@ export const bookingApi = {
   verifyOtp: (phone: string, code: string) => (isSupabaseConfigured ? remote.verifyOtp(phone, code) : local.verifyOtp(phone, code)),
   book: async (input: BookingInput, cfg: Cfg) => {
     const r = await (isSupabaseConfigured ? remote.book(input) : local.book(input, cfg))
-    flushNotificationsSoon(300)   // booking confirmation / invoice messages
+    flushNotificationsSoon(300, [r.appointment?.id, r.invoice?.id])   // booking confirmation / invoice messages
     return r
   },
+}
+
+/** Demo-mode WhatsApp booking (chatbot simulator): the chat number is already verified by WhatsApp. */
+export async function localWhatsappBook(phone: string, input: Omit<BookingInput, 'token' | 'gender' | 'dob' | 'email'>, cfg: Cfg) {
+  const token = crypto.randomUUID()
+  sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token, phone: phone10(phone), expires: Date.now() + 60e3 } satisfies LocalToken))
+  const r = await local.book({ ...input, token, gender: 'other', dob: null, email: null }, cfg)
+  await asActor('WhatsApp booking', 'public', () => localAdapter.update('appointments', r.appointment.id, { source: 'whatsapp' } as never))
+  return r
 }
 
 // ------------------------------------------------------------------ receipt persistence + calendar file

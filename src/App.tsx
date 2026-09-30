@@ -8,6 +8,7 @@ import { Button, EmptyState, Spinner } from './components/ui'
 import * as R from './resources/definitions'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import { InviteStaff } from './pages/users/InviteStaff'
 
 // Public website
 const SiteLayout = lazy(() => import('./site/SiteLayout'))
@@ -26,6 +27,7 @@ const PUBLIC_PAGES: [string, React.LazyExoticComponent<() => JSX.Element>][] = [
   ['/privacy', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Privacy })))],
   ['/terms', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Terms })))],
   ['/book', lazy(() => import('./site/pages/Book'))],
+  ['/feedback/:id', lazy(() => import('./site/pages/Feedback'))],
 ]
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'))
 const PatientDetail = lazy(() => import('./pages/PatientDetail'))
@@ -40,6 +42,7 @@ const AppointmentsPage = lazy(() => import('./pages/appointments/AppointmentsPag
 const SchedulePage = lazy(() => import('./pages/SchedulePage'))
 const AuditPage = lazy(() => import('./pages/AuditPage'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
+const RatingsPage = lazy(() => import('./pages/RatingsPage'))
 
 const RESOURCES = [
   R.patientsRes, R.appointmentsRes, R.prescriptionsRes, R.labTestsRes, R.admissionsRes, R.doctorsRes, R.staffRes,
@@ -48,7 +51,7 @@ const RESOURCES = [
 ]
 
 /** Paths that belong to the signed-in app; anything else a guest opens gets the public 404. */
-const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile']
+const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile', '/ratings']
 const isAppPath = (p: string) => APP_PREFIXES.some((x) => p === x || p.startsWith(`${x}/`))
 
 const PageLoader = () => <div className="grid h-64 place-items-center"><Spinner className="h-6 w-6" /></div>
@@ -73,7 +76,7 @@ export default function App() {
           <Route index element={<Suspense fallback={<PageLoader />}><Dashboard /></Suspense>} />
           <Route path="/appointments" element={<RequireNav path="/appointments"><Suspense fallback={<PageLoader />}><AppointmentsPage /></Suspense></RequireNav>} />
           {RESOURCES.filter((def) => def !== R.appointmentsRes).map((def) => (
-            <Route key={def.path} path={def.path} element={<RequireNav path={def.path}><ResourcePage key={def.path} def={def} /></RequireNav>} />
+            <Route key={def.path} path={def.path} element={<RequireNav path={def.path}><ResourcePage key={def.path} def={def} headerExtra={def === R.usersRes ? <InviteStaff /> : undefined} /></RequireNav>} />
           ))}
           <Route path="/me" element={<RequireNav path="/me"><Suspense fallback={<PageLoader />}><MyRecord /></Suspense></RequireNav>} />
           <Route path="/patients/:id" element={<Suspense fallback={<PageLoader />}><PatientDetail /></Suspense>} />
@@ -84,6 +87,7 @@ export default function App() {
           <Route path="/cms" element={<RequireNav path="/cms"><Suspense fallback={<PageLoader />}><CmsPage /></Suspense></RequireNav>} />
           <Route path="/schedule" element={<RequireNav path="/schedule"><Suspense fallback={<PageLoader />}><SchedulePage /></Suspense></RequireNav>} />
           <Route path="/audit" element={<RequireNav path="/audit"><Suspense fallback={<PageLoader />}><AuditPage /></Suspense></RequireNav>} />
+          <Route path="/ratings" element={<RequireNav path="/ratings"><Suspense fallback={<PageLoader />}><RatingsPage /></Suspense></RequireNav>} />
           <Route path="/profile" element={<Suspense fallback={<PageLoader />}><ProfilePage /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />
           <Route path="*" element={<EmptyState className="py-24" icon={<Compass className="h-6 w-6" />} title="Page not found" description="The page you're looking for doesn't exist." action={<Link to="/"><Button>Go to dashboard</Button></Link>} />} />

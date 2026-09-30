@@ -5,7 +5,7 @@ import { THEME_PALETTES, type ThemeId } from './palettes'
 export type Channel = 'sms' | 'whatsapp' | 'email'
 export type NotifyEvent =
   | 'otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
-  | 'invoice_created' | 'payment_received' | 'lab_report_ready'
+  | 'invoice_created' | 'payment_received' | 'lab_report_ready' | 'feedback_request' | 'staff_invite'
 
 export interface EventTemplate {
   /** SMS / WhatsApp text (and email body). Tokens like {name} are replaced. */
@@ -28,6 +28,8 @@ export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: C
   { id: 'invoice_created', label: 'Invoice created', hint: 'New unpaid bill', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'invoice', 'amount', 'due_date', 'hospital', 'hospital_phone'] },
   { id: 'payment_received', label: 'Payment received', hint: 'Receipt after a payment is recorded', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'invoice', 'amount', 'method', 'hospital'] },
   { id: 'lab_report_ready', label: 'Lab report ready', hint: 'Lab test marked completed', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'test', 'hospital', 'hospital_phone'] },
+  { id: 'feedback_request', label: 'Feedback request', hint: 'After a visit is marked completed (needs the website address)', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'link', 'hospital'] },
+  { id: 'staff_invite', label: 'Staff invitation', hint: 'Owner invites a team member from Users & Roles', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'role', 'link', 'hospital'] },
 ]
 
 const T = (text: string, subject: string, waTemplate = '', waParams = ''): EventTemplate => ({ text, subject, waTemplate, waParams, smsTemplateId: '' })
@@ -40,6 +42,8 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
   invoice_created: T('Hi {name}, invoice {invoice} for {amount} has been generated at {hospital}. Due {due_date}.', 'Invoice {invoice} from {hospital}', '', 'name,invoice,amount'),
   payment_received: T('Thank you {name}. We received {amount} by {method} against invoice {invoice}. {hospital}', 'Payment received — {amount}', '', 'name,amount,invoice'),
   lab_report_ready: T('Hi {name}, your {test} report is ready. View it in the patient portal or collect it from the lab. {hospital} {hospital_phone}', 'Your {test} report is ready', '', 'name,test'),
+  feedback_request: T('Hi {name}, thank you for visiting {doctor} at {hospital}. How was your experience? Rate us in 10 seconds: {link}', 'How was your visit to {hospital}?', '', 'name,doctor,link'),
+  staff_invite: T('Hi {name}, you are invited to join {hospital} as {role}. Create your account here: {link} (valid 14 days)', 'You are invited to join {hospital}', '', 'name,role,link'),
 }
 
 export type EmailProvider = 'resend' | 'sendgrid' | 'smtp'
@@ -49,7 +53,9 @@ export type WhatsappProvider = 'meta' | 'twilio' | 'interakt' | 'webhook'
 export interface NotificationSettings {
   email: { enabled: boolean; provider: EmailProvider; fromName: string; fromEmail: string; replyTo: string; smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string }
   sms: { enabled: boolean; provider: SmsProvider; senderId: string; dltEntityId: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string }
-  whatsapp: { enabled: boolean; provider: WhatsappProvider; phoneNumberId: string; businessAccountId: string; language: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string }
+  whatsapp: { enabled: boolean; provider: WhatsappProvider; phoneNumberId: string; businessAccountId: string; language: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string
+    /** answer incoming chats with the booking bot (supabase/functions/whatsapp-bot) */
+    botEnabled: boolean }
   events: Record<NotifyEvent, Partial<Record<Channel, boolean>>>
   templates: Record<NotifyEvent, EventTemplate>
 }
@@ -66,6 +72,8 @@ export const SECRET_FIELDS: Record<string, { label: string; placeholder: string 
   meta_access_token: { label: 'Meta permanent access token', placeholder: 'EAAG…' },
   interakt_api_key: { label: 'Interakt API key', placeholder: 'Base64 key from Interakt → Settings → Developer' },
   whatsapp_webhook_secret: { label: 'Webhook bearer token (optional)', placeholder: 'Sent as Authorization: Bearer …' },
+  whatsapp_verify_token: { label: 'Chatbot webhook verify token', placeholder: 'Any long random text — paste the same in Meta → Webhooks' },
+  meta_app_secret: { label: 'Meta app secret (signs incoming webhooks)', placeholder: 'App settings → Basic → App secret' },
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -110,7 +118,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   notifications: {
     email: { enabled: false, provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
     sms: { enabled: false, provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
-    whatsapp: { enabled: false, provider: 'meta', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
+    whatsapp: { enabled: false, provider: 'meta', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', botEnabled: false },
     events: {
       otp: { sms: true, whatsapp: false },
       appointment_booked: { sms: true, whatsapp: true, email: true },
@@ -120,6 +128,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
       invoice_created: { sms: false, whatsapp: false, email: true },
       payment_received: { sms: false, whatsapp: false, email: true },
       lab_report_ready: { sms: true, whatsapp: true, email: false },
+      feedback_request: { sms: true, whatsapp: true, email: true },
+      staff_invite: { sms: false, whatsapp: true, email: true },
     },
     templates: DEFAULT_TEMPLATES,
   },

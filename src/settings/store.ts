@@ -55,8 +55,9 @@ const remote = {
     if (error) return { ok: false, message: await fnError(error) }
     return data as SendResult
   },
-  async flush(): Promise<{ processed: number; sent: number; failed: number }> {
-    const { data, error } = await sb().functions.invoke('notify', { body: { flush: true } })
+  /** No ids = the whole queue (staff only); ids = just the messages about these records (anyone). */
+  async flush(ids?: string[]): Promise<{ processed: number; sent: number; failed: number }> {
+    const { data, error } = await sb().functions.invoke('notify', { body: ids?.length ? { flush: true, ids } : { flush: true } })
     if (error) throw new Error(await fnError(error))
     return data
   },
@@ -80,6 +81,19 @@ const pause = (ms = 250) => new Promise((r) => setTimeout(r, ms))
 let actorName = 'You'
 export const setSettingsActor = (name: string) => { actorName = name }
 
+type DemoSecret = { hint: string; updated_at: string; by: string }
+function demoSecrets(): Record<string, DemoSecret> {
+  const raw = read<Record<string, Partial<DemoSecret> & { value?: string }>>(K.secrets, {})
+  let scrubbed = false
+  const out: Record<string, DemoSecret> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (v.value !== undefined) scrubbed = true
+    out[k] = { hint: v.hint ?? `••••${String(v.value ?? '').slice(-4)}`, updated_at: v.updated_at ?? new Date().toISOString(), by: v.by ?? 'You' }
+  }
+  if (scrubbed) write(K.secrets, out)
+  return out
+}
+
 const local = {
   async load(): Promise<SettingsRow> { return read<SettingsRow>(K.settings, { data: null }) },
   async save(data: AppSettings): Promise<SettingsRow> {
@@ -88,15 +102,16 @@ const local = {
     write(K.settings, row)
     return row
   },
+  // Demo mode never sends anything, so the key itself is never needed: only a "••••1234" hint is kept.
+  // (Older builds stored the full value — it is scrubbed the first time this runs.)
   async secrets(): Promise<SecretStatus[]> {
-    const all = read<Record<string, { value: string; updated_at: string; by: string }>>(K.secrets, {})
-    return Object.entries(all).map(([key, v]) => ({ key, hint: `••••${v.value.slice(-4)}`, updated_at: v.updated_at, updated_by_name: v.by }))
+    return Object.entries(demoSecrets()).map(([key, v]) => ({ key, hint: v.hint, updated_at: v.updated_at, updated_by_name: v.by }))
   },
   async setSecret(key: string, value: string | null) {
     await pause(200)
     if (!SECRET_FIELDS[key]) throw new Error('Unknown credential')
-    const all = read<Record<string, { value: string; updated_at: string; by: string }>>(K.secrets, {})
-    if (value) all[key] = { value, updated_at: new Date().toISOString(), by: actorName }
+    const all = demoSecrets()
+    if (value) all[key] = { hint: `••••${value.slice(-4)}`, updated_at: new Date().toISOString(), by: actorName }
     else delete all[key]
     write(K.secrets, all)
   },
@@ -163,7 +178,7 @@ export const settingsStore = {
   setSecret: impl.setSecret,
   log: impl.log,
   test: (channel: Channel, to: string, settings: AppSettings) => (isSupabaseConfigured ? remote.test(channel, to) : local.test(channel, to, settings)),
-  flush: impl.flush,
+  flush: () => impl.flush(),
   ping: impl.ping,
   queueReminders: impl.queueReminders,
 }
@@ -173,8 +188,15 @@ export const settingsStore = {
  * Debounced and fire-and-forget; harmless when nothing is queued or the function isn't deployed.
  */
 let flushTimer: ReturnType<typeof setTimeout> | undefined
-export function flushNotificationsSoon(delay = 1200) {
+let pendingIds = new Set<string>()
+export function flushNotificationsSoon(delay = 1200, ids: (string | null | undefined)[] = []) {
   if (!isSupabaseConfigured) return
+  ids.forEach((id) => { if (id && !id.startsWith('temp-')) pendingIds.add(id) })
+  if (!pendingIds.size) return
   clearTimeout(flushTimer)
-  flushTimer = setTimeout(() => { remote.flush().catch(() => { /* not deployed / nothing to do */ }) }, delay)
+  flushTimer = setTimeout(() => {
+    const batch = [...pendingIds].slice(0, 10)
+    pendingIds = new Set()
+    remote.flush(batch).catch(() => { /* not deployed / nothing to do */ })
+  }, delay)
 }

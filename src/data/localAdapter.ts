@@ -1,7 +1,7 @@
 import { addDays, format } from 'date-fns'
 import type { DB, Profile, TableName } from '../types'
 import { TABLES } from '../types'
-import type { AuthAdapter, DataAdapter, NewRow, Row, SignUpInput } from './adapter'
+import type { AuthAdapter, DataAdapter, InviteInfo, NewRow, Row, SignUpInput } from './adapter'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from './seed'
 import { auditSummary, diffRows, isAudited } from '../lib/audit'
 
@@ -72,6 +72,27 @@ function audit(table: TableName, action: 'insert' | 'update' | 'delete', before:
 const latency = () => new Promise((r) => setTimeout(r, 180 + Math.random() * 260))
 const uuid = () => crypto.randomUUID()
 
+/** Demo-mode mirror of trg_appointments_patient_guard (scripts/sql/patient.sql): patients may only cancel or move
+ *  their own upcoming visit to a free slot — every other field is locked. */
+function patientApptGuard(a: DB['appointments'], patch: Partial<DB['appointments']>) {
+  const store = load()
+  const me = store.profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+  if (me?.role !== 'patient') return
+  const mine = store.patients.find((p) => p.profile_id === me.id)
+  if (!mine || a.patient_id !== mine.id) throw new Error('You can only change your own appointments.')
+  const locked = Object.keys(patch).filter((k) => !['appointment_date', 'appointment_time', 'status', 'reason'].includes(k) && (patch as Record<string, unknown>)[k] !== (a as unknown as Record<string, unknown>)[k])
+  if (locked.length) throw new Error('Only the date and time of an appointment can be changed.')
+  if (!['scheduled', 'confirmed'].includes(a.status)) throw new Error('This appointment can no longer be changed online.')
+  const date = patch.appointment_date ?? a.appointment_date, time = (patch.appointment_time ?? a.appointment_time).slice(0, 5)
+  const moved = date !== a.appointment_date || time !== a.appointment_time.slice(0, 5)
+  if (patch.status && patch.status !== a.status && patch.status !== 'cancelled' && !(moved && patch.status === 'scheduled')) throw new Error('You can only cancel an appointment.')
+  if (!moved) return
+  if (new Date(`${date}T${time}:00`).getTime() <= Date.now()) throw new Error('SLOT_PAST: Please pick a future time.')
+  const clash = store.appointments.some((x) => x.id !== a.id && x.doctor_id === a.doctor_id && x.appointment_date === date && x.appointment_time.slice(0, 5) === time && !['cancelled', 'no_show'].includes(x.status))
+  if (clash) throw new Error('SLOT_TAKEN: Sorry — someone just booked this slot. Please pick another time.')
+  patch.status = 'scheduled'
+}
+
 export const localAdapter: DataAdapter = {
   mode: 'local',
   async list(table) {
@@ -93,6 +114,7 @@ export const localAdapter: DataAdapter = {
     const idx = rows.findIndex((r) => r.id === id)
     if (idx < 0) throw new Error('Record not found')
     const before = rows[idx]
+    if (table === 'appointments') patientApptGuard(before as unknown as DB['appointments'], patch as Partial<DB['appointments']>)
     rows[idx] = { ...rows[idx], ...patch, id, updated_at: new Date().toISOString() }
     audit(table, 'update', before as unknown as Record<string, unknown>, rows[idx] as unknown as Record<string, unknown>)
     persist()
@@ -141,19 +163,29 @@ export const localAuth: AuthAdapter = {
     emit()
     return profile
   },
-  async signUp({ full_name, email, password, phone }: SignUpInput) {
+  async signUp({ full_name, email, password, phone, invite_token }: SignUpInput) {
     await latency()
     const list = users()
     if (list.some((x) => x.email.toLowerCase() === email.toLowerCase())) throw new Error('An account with this email already exists')
     const store = load()
     const now = new Date().toISOString()
-    const profile: Profile = { id: uuid(), full_name, email, role: 'patient', phone: phone ?? null, created_at: now, updated_at: now }
+    // same rules as handle_new_user(): a valid invite for this e-mail gives its role, otherwise patient
+    const invite = invite_token ? store.staff_invites.find((i) => i.token === invite_token && i.status === 'pending'
+      && i.email.toLowerCase() === email.toLowerCase() && new Date(i.expires_at).getTime() > Date.now()) : undefined
+    const profile: Profile = { id: uuid(), full_name, email, role: invite?.role ?? 'patient', phone: phone || invite?.phone || null, created_at: now, updated_at: now }
     store.profiles.unshift(profile)
-    const nextMrn = Math.max(100000, ...store.patients.map((p) => Number(p.mrn.replace(/\D/g, '')) || 0)) + 1
-    store.patients.unshift({
-      id: uuid(), profile_id: profile.id, mrn: `DCH-${nextMrn}`, full_name, email, phone: phone ?? null,
-      gender: 'other', status: 'outpatient', created_at: now, updated_at: now,
-    })
+    if (invite) {
+      Object.assign(invite, { status: 'accepted', accepted_at: now, updated_at: now })
+      const linked = invite.role === 'doctor' ? store.doctors : store.staff
+      const match = (linked as { email?: string | null; profile_id?: string | null }[]).find((r) => r.email?.toLowerCase() === email.toLowerCase() && !r.profile_id)
+      if (match) match.profile_id = profile.id
+    } else {
+      const nextMrn = Math.max(100000, ...store.patients.map((p) => Number(p.mrn.replace(/\D/g, '')) || 0)) + 1
+      store.patients.unshift({
+        id: uuid(), profile_id: profile.id, mrn: `DCH-${nextMrn}`, full_name, email, phone: phone ?? null,
+        gender: 'other', status: 'outpatient', created_at: now, updated_at: now,
+      })
+    }
     persist()
     list.push({ email, password, profile_id: profile.id })
     localStorage.setItem(USERS_KEY, JSON.stringify(list))
@@ -187,4 +219,32 @@ export const localAuth: AuthAdapter = {
     listeners.add(cb)
     return () => listeners.delete(cb)
   },
+}
+
+/** Demo-mode twin of the invite_lookup() RPC. */
+export function localInviteLookup(token: string): InviteInfo {
+  const i = load().staff_invites.find((x) => x.token === token && x.status === 'pending' && new Date(x.expires_at).getTime() > Date.now())
+  return i ? { ok: true, email: i.email, full_name: i.full_name, role: i.role, phone: i.phone } : { ok: false, error: 'This invitation link is invalid or has expired. Ask the hospital to send a new one.' }
+}
+
+/** Demo-mode twins of feedback_context() / submit_feedback(). */
+export function localFeedbackContext(apptId: string) {
+  const store = load()
+  const a = store.appointments.find((x) => x.id === apptId)
+  const limit = format(addDays(new Date(), -60), 'yyyy-MM-dd')
+  if (!a || a.status !== 'completed' || a.appointment_date < limit) return { ok: false as const, error: 'This feedback link has expired.' }
+  const p = store.patients.find((x) => x.id === a.patient_id)
+  const d = store.doctors.find((x) => x.id === a.doctor_id)
+  return { ok: true as const, first_name: (p?.full_name ?? '').split(' ')[0], doctor: d?.full_name ?? '', specialization: d?.specialization ?? '',
+    date: a.appointment_date, submitted: store.visit_feedback.some((f) => f.appointment_id === a.id) }
+}
+export async function localSubmitFeedback(apptId: string, input: { rating: number; comment?: string | null; tags?: string[]; would_recommend?: boolean | null }, source: 'portal' | 'link') {
+  const ctx = localFeedbackContext(apptId)
+  if (!ctx.ok) throw new Error(ctx.error)
+  if (ctx.submitted) throw new Error('Thank you — feedback for this visit has already been received.')
+  const a = load().appointments.find((x) => x.id === apptId)!
+  await localAdapter.insert('visit_feedback', {
+    appointment_id: a.id, patient_id: a.patient_id, doctor_id: a.doctor_id, rating: input.rating,
+    comment: input.comment?.trim() || null, tags: input.tags ?? [], would_recommend: input.would_recommend ?? null, source,
+  } as never)
 }

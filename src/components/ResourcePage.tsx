@@ -6,6 +6,7 @@ import type { ResourceCtx, ResourceDef, RowAction } from '../resources/types'
 import { useResourceCtx } from '../resources/useResourceCtx'
 import { useCreate, useRemove, useTable, useUpdate } from '../hooks/useData'
 import { can } from '../auth/permissions'
+import { translate, useT } from '../i18n'
 import { Button, Card, ConfirmDialog, EmptyState, Input, PageHeader, Select, Skeleton } from './ui'
 import { ResourceFormDrawer } from './ResourceForm'
 import { cn, downloadCsv } from '../lib/utils'
@@ -32,8 +33,13 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
   const [deleting, setDeleting] = useState<any | null>(null)
 
   const role = ctx?.role
-  const title = typeof def.title === 'function' ? (role ? def.title(role) : '') : def.title
-  const description = typeof def.description === 'function' ? (role ? def.description(role) : '') : def.description
+  const { t: tt } = useT()
+  // patient portal follows the chosen language; staff lists stay English
+  const t = (s: string, v?: Record<string, string | number>) => (role === 'patient' ? tt(s, v) : translate('en', s, v))
+  const rawTitle = typeof def.title === 'function' ? (role ? def.title(role) : '') : def.title
+  const title = t(rawTitle)
+  const rawDesc = typeof def.description === 'function' ? (role ? def.description(role) : '') : def.description
+  const description = rawDesc && t(rawDesc)
   const canCreate = def.allowCreate !== false && can(role, def.table, 'create')
   const canUpdate = can(role, def.table, 'update')
   const canDel = can(role, def.table, 'delete')
@@ -129,7 +135,7 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
         <div className="flex flex-col gap-2 border-b border-slate-100 p-3 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${title.toLowerCase()}…`} className="pl-9" />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('Search {what}…', { what: title.toLowerCase() })} className="pl-9" />
           </div>
           {!!def.filters?.length && (
             <div className="grid grid-cols-2 gap-2 sm:flex">
@@ -154,7 +160,7 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
                 {columns.map((c) => (
                   <th key={c.key} className={cn('whitespace-nowrap px-4 py-2.5', c.hideBelow && hideCls[c.hideBelow], c.align === 'right' && 'text-right')}>
                     <button onClick={() => toggleSort(c.key)} className={cn('inline-flex items-center gap-1 hover:text-slate-800', sort.key === c.key && 'text-slate-800')}>
-                      {c.header}
+                      {t(c.header)}
                       {sort.key === c.key && (sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                     </button>
                   </th>
@@ -203,12 +209,12 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
 
         {!loading && filtered.length === 0 && (
           scoped.length === 0 ? (
-            <EmptyState icon={<def.icon className="h-6 w-6" />} title={`No ${title.toLowerCase()} yet`}
-              description={def.emptyText ?? (canCreate ? `Get started by creating your first ${label.toLowerCase()}.` : 'Nothing to show here right now.')}
+            <EmptyState icon={<def.icon className="h-6 w-6" />} title={t('No {what} yet', { what: title.toLowerCase() })}
+              description={def.emptyText ? t(def.emptyText) : canCreate ? `Get started by creating your first ${label.toLowerCase()}.` : t('Nothing to show here right now.')}
               action={canCreate && <Button icon={<Plus className="h-4 w-4" />} onClick={openCreate}>New {label.toLowerCase()}</Button>} />
           ) : (
-            <EmptyState icon={<SearchX className="h-6 w-6" />} title="No matching results" description="Try adjusting your search or filters."
-              action={<Button variant="outline" onClick={() => { setSearch(''); setFilters((s) => Object.fromEntries(Object.keys(s).map((k) => [k, '']))) }}>Clear filters</Button>} />
+            <EmptyState icon={<SearchX className="h-6 w-6" />} title={t('No matching results')} description={t('Try adjusting your search or filters.')}
+              action={<Button variant="outline" onClick={() => { setSearch(''); setFilters((s) => Object.fromEntries(Object.keys(s).map((k) => [k, '']))) }}>{t('Clear filters')}</Button>} />
           )
         )}
 
@@ -236,6 +242,7 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
 
 export function RowMenu({ row, actions, ctx }: { row: any; actions: RowAction<any>[]; ctx: ResourceCtx }) {
   const [open, setOpen] = useState(false)
+  const { t } = useT()
   const btn = useRef<HTMLButtonElement>(null)
   const [pos, setPos] = useState({ top: 0, left: 0, up: false })
 
@@ -270,7 +277,7 @@ export function RowMenu({ row, actions, ctx }: { row: any; actions: RowAction<an
                   a.tone === 'danger' ? 'text-rose-600 hover:bg-rose-50' : 'text-slate-700 hover:bg-slate-100',
                   a.tone === 'danger' && i > 0 && 'mt-1 border-t border-slate-100')}>
                 {a.icon && <a.icon className="h-4 w-4 opacity-70" />}
-                {a.label}
+                {ctx.role === 'patient' ? t(a.label) : a.label}
               </button>
             ))}
           </div>

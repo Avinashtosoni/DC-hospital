@@ -1,10 +1,11 @@
 import {
   BedDouble, Building2, CalendarCheck, CalendarDays, CheckCircle2, ClipboardList, CreditCard, Eye, FileText, FlaskConical,
-  CalendarOff, CalendarX2, PartyPopper, ThumbsDown, ThumbsUp, UserX,
+  CalendarOff, CalendarX2, PartyPopper, ThumbsDown, ThumbsUp, UserX, CalendarClock, Star, FileDown,
   Inbox, Mail, Phone, LogOut, Megaphone, Package, PackagePlus, Pill, Printer, Receipt, Stethoscope, UserCheck, UserCog, Users, Wallet, XCircle, Ban, PlayCircle, TestTube,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { differenceInCalendarDays, parseISO } from 'date-fns'
+import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns'
+import { downloadInvoice, downloadLabReport } from '../lib/pdf'
 import { toast } from 'sonner'
 import type { Admission, Appointment, Department, Doctor, DoctorLeave, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, SiteEnquiry, Staff } from '../types'
 import { ROLE_LABEL } from '../types'
@@ -119,11 +120,20 @@ export const appointmentsRes = defineResource({
     { key: 'reason', header: 'Reason', render: (r) => <span className="line-clamp-1 max-w-[220px] text-slate-600">{r.reason ?? '—'}</span>, hideBelow: 'xl' },
     { key: 'status', header: 'Status', render: (r) => <StatusBadge value={r.status} /> },
   ],
-  canEdit: (r, c) => !isPatient(c) || (r.status === 'scheduled' && r.appointment_date >= today()),
+  // patients move / cancel through the Reschedule dialog (the database only lets them change date, time and reason)
+  canEdit: (_r, c) => !isPatient(c),
   rowActions: (r, c) => {
     const upcoming = r.appointment_date >= today()
     const open = !['completed', 'cancelled', 'no_show'].includes(r.status)
-    if (isPatient(c)) return [open && upcoming && { label: 'Cancel appointment', icon: XCircle, tone: 'danger', onClick: setApptStatus('cancelled') }]
+    if (isPatient(c)) {
+      const movable = ['scheduled', 'confirmed'].includes(r.status) && upcoming
+      const recent = r.status === 'completed' && r.appointment_date >= format(addDays(new Date(), -60), 'yyyy-MM-dd')
+      return [
+        movable && { label: 'Reschedule', icon: CalendarClock, onClick: () => c.navigate(`/appointments?reschedule=${r.id}`) },
+        recent && { label: 'Rate this visit', icon: Star, onClick: () => c.navigate(`/appointments?rate=${r.id}`) },
+        movable && { label: 'Cancel appointment', icon: XCircle, tone: 'danger', onClick: setApptStatus('cancelled') },
+      ]
+    }
     const staffish = c.role === 'owner' || c.role === 'receptionist' || c.role === 'doctor'
     return [
       staffish && r.status === 'scheduled' && { label: 'Confirm', icon: CheckCircle2, onClick: setApptStatus('confirmed') },
@@ -217,8 +227,10 @@ export const labTestsRes = defineResource({
     { key: 'result', header: 'Result', render: (r) => <span className="line-clamp-1 max-w-[240px] text-xs text-slate-600" title={r.result ?? ''}>{r.result ?? '—'}</span>, hideBelow: 'xl' },
   ],
   rowActions: (r, c) => {
-    if (isPatient(c) || c.role === 'accountant') return []
+    const download = r.status === 'completed' && { label: 'Download report (PDF)', icon: FileDown, onClick: () => downloadLabReport(r, { site: c.site, patient: c.lk.patients.get(r.patient_id) ?? (isPatient(c) ? c.me.patient : null), doctor: r.doctor_id ? dName(c, r.doctor_id) : null }) }
+    if (isPatient(c) || c.role === 'accountant') return [download]
     return [
+      download,
       r.status === 'requested' && { label: 'Sample collected', icon: TestTube, onClick: () => c.patch('lab_tests', r.id, { status: 'sample_collected' }) },
       ['requested', 'sample_collected'].includes(r.status) && { label: 'Start processing', icon: PlayCircle, onClick: () => c.patch('lab_tests', r.id, { status: 'in_progress' }) },
     ]
@@ -412,6 +424,7 @@ export const invoicesRes = defineResource({
   ],
   rowActions: (r, c) => [
     { label: 'View & print', icon: Printer, onClick: () => c.navigate(`/invoices/${r.id}`) },
+    { label: 'Download PDF', icon: FileDown, onClick: () => downloadInvoice(r, { site: c.site, patient: c.lk.patients.get(r.patient_id) ?? (isPatient(c) ? c.me.patient : null) }) },
     !isPatient(c) && invoiceBalance(r) > 0 && r.status !== 'cancelled' && r.status !== 'draft' && { label: 'Record payment', icon: Wallet, onClick: () => c.navigate(`/invoices/${r.id}?pay=1`) },
   ],
   canEdit: (r, c) => c.role !== 'receptionist' || r.amount_paid === 0,
@@ -576,7 +589,7 @@ export const noticesRes = defineResource({
 const ROLE_TONE = { owner: 'violet', doctor: 'teal', receptionist: 'blue', accountant: 'amber', staff: 'slate', patient: 'green' } as const
 export const usersRes = defineResource({
   table: 'profiles', path: '/users', title: 'Users & Roles', singular: 'User', icon: UserCog,
-  description: 'Login accounts and their access level. New users sign up themselves (as patients) — promote them here.',
+  description: 'Login accounts and their access level. Patients sign up themselves; invite staff so they get the right role automatically.',
   allowCreate: false,
   canDelete: () => false,
   defaultSort: { key: 'full_name', dir: 'asc' },

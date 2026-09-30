@@ -3,7 +3,9 @@
 //   supabase functions deploy notify
 //
 // Requests (JSON body):
-//   { "flush": true }                              deliver queued messages from public.notification_outbox
+//   { "flush": true }                              deliver the queue — service-role key (pg_cron) or a signed-in staff member
+//   { "flush": true, "ids": ["…"] }                deliver just these fresh messages (by outbox id or related record id);
+//                                                  allowed for anyone, e.g. the OTP a website visitor just requested
 //   { "test": { "channel": "sms", "to": "98…" } }  send a test message (hospital owner only)
 //   { "ping": true }                               health check
 //
@@ -11,6 +13,7 @@
 // read with the service-role key that Supabase injects automatically. Nothing secret is ever returned.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { deliver, isPermanent, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -19,12 +22,8 @@ const cors = {
 }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 
-type Channel = 'sms' | 'whatsapp' | 'email'
-interface Msg { id?: string; event: string; channel: Channel; recipient: string; subject?: string | null; body: string; vars: Record<string, string> }
-interface Ctx { n: any; secrets: Record<string, string>; hospital: string }
-interface Result { ok: boolean; ref?: string; error?: string }
-
-const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } })
+const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const admin = createClient(Deno.env.get('SUPABASE_URL')!, SERVICE_KEY, { auth: { persistSession: false } })
 
 async function loadCtx(): Promise<Ctx> {
   const [{ data: s }, { data: sec }, { data: site }] = await Promise.all([
@@ -39,184 +38,15 @@ async function loadCtx(): Promise<Ctx> {
   }
 }
 
-const err = async (r: Response) => { const t = await r.text(); try { const j = JSON.parse(t); return j.message || j.error?.message || j.error || j.errors?.[0]?.message || t } catch { return t } }
-const need = (v: unknown, what: string) => { if (!v) throw new Error(`${what} is not configured`) }
-const basic = (u: string, p: string) => 'Basic ' + btoa(`${u}:${p}`)
-const params = (list: string | undefined, vars: Record<string, string>) => (list ?? '').split(',').map((s) => s.trim()).filter(Boolean).map((k) => vars[k] ?? '')
-
-// ------------------------------------------------------------------ SMS
-async function sms(m: Msg, c: Ctx): Promise<Result> {
-  const cfg = c.n.sms ?? {}
-  const tpl = c.n.templates?.[m.event] ?? {}
-  const to = m.recipient.replace(/\D/g, '').slice(-10)
-  switch (cfg.provider) {
-    case 'msg91': {
-      need(c.secrets.msg91_auth_key, 'MSG91 auth key')
-      if (tpl.smsTemplateId || m.event !== 'test') {
-        need(tpl.smsTemplateId, `MSG91 flow/template ID for "${m.event}"`)
-        const r = await fetch('https://control.msg91.com/api/v5/flow', {
-          method: 'POST', headers: { authkey: c.secrets.msg91_auth_key, 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify({ template_id: tpl.smsTemplateId, short_url: '0', recipients: [{ mobiles: `91${to}`, ...m.vars }] }),
-        })
-        if (!r.ok) throw new Error(await err(r))
-        const j = await r.json(); if (j.type === 'error') throw new Error(j.message)
-        return { ok: true, ref: j.message }
-      }
-      // test without a template: MSG91 needs DLT templates for every SMS, so just validate the key
-      const r = await fetch('https://control.msg91.com/api/balance.php?type=4&authkey=' + encodeURIComponent(c.secrets.msg91_auth_key))
-      const t = await r.text()
-      if (!r.ok || /invalid|error/i.test(t)) throw new Error('MSG91 rejected the auth key: ' + t.slice(0, 120))
-      return { ok: true, ref: `key valid · balance ${t.trim()}` }
-    }
-    case 'twilio': {
-      need(cfg.twilioAccountSid, 'Twilio Account SID'); need(c.secrets.twilio_auth_token, 'Twilio auth token'); need(cfg.twilioFrom, 'Twilio from number')
-      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${cfg.twilioAccountSid}/Messages.json`, {
-        method: 'POST', headers: { Authorization: basic(cfg.twilioAccountSid, c.secrets.twilio_auth_token), 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ To: `+91${to}`, From: cfg.twilioFrom, Body: m.body }),
-      })
-      if (!r.ok) throw new Error(await err(r))
-      return { ok: true, ref: (await r.json()).sid }
-    }
-    case 'fast2sms': {
-      need(c.secrets.fast2sms_api_key, 'Fast2SMS API key')
-      const dlt = !!tpl.smsTemplateId && m.event !== 'test'
-      const r = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-        method: 'POST', headers: { authorization: c.secrets.fast2sms_api_key, 'Content-Type': 'application/json' },
-        body: JSON.stringify(dlt
-          ? { route: 'dlt', sender_id: cfg.senderId, message: tpl.smsTemplateId, variables_values: params(tpl.waParams, m.vars).join('|'), numbers: to }
-          : { route: 'q', message: m.body, numbers: to }),
-      })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || j.return === false) throw new Error(j.message?.toString() || `HTTP ${r.status}`)
-      return { ok: true, ref: j.request_id }
-    }
-    case 'webhook': return webhook(cfg.webhookUrl, c.secrets.sms_webhook_secret, m)
-    default: throw new Error('Choose an SMS provider')
-  }
-}
-
-// ------------------------------------------------------------------ WhatsApp
-async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
-  const cfg = c.n.whatsapp ?? {}
-  const tpl = c.n.templates?.[m.event] ?? {}
-  const to = m.recipient.replace(/\D/g, '').slice(-10)
-  const lang = cfg.language || 'en'
-  switch (cfg.provider) {
-    case 'meta': {
-      need(cfg.phoneNumberId, 'WhatsApp phone number ID'); need(c.secrets.meta_access_token, 'Meta access token')
-      let payload: any
-      if (m.event === 'test') payload = { type: 'template', template: { name: 'hello_world', language: { code: 'en_US' } } }
-      else if (tpl.waTemplate) {
-        const values = params(tpl.waParams, m.vars)
-        const components: any[] = values.length ? [{ type: 'body', parameters: values.map((text) => ({ type: 'text', text })) }] : []
-        // authentication (OTP) templates also need the code on the copy-code button
-        if (m.event === 'otp') components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: m.vars.code }] })
-        payload = { type: 'template', template: { name: tpl.waTemplate, language: { code: lang }, components } }
-      } else payload = { type: 'text', text: { body: m.body, preview_url: false } }
-      const r = await fetch(`https://graph.facebook.com/v21.0/${cfg.phoneNumberId}/messages`, {
-        method: 'POST', headers: { Authorization: `Bearer ${c.secrets.meta_access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messaging_product: 'whatsapp', to: `91${to}`, ...payload }),
-      })
-      if (!r.ok) throw new Error(await err(r))
-      return { ok: true, ref: (await r.json()).messages?.[0]?.id }
-    }
-    case 'twilio': {
-      need(cfg.twilioAccountSid, 'Twilio Account SID'); need(c.secrets.twilio_auth_token, 'Twilio auth token'); need(cfg.twilioFrom, 'Twilio WhatsApp sender')
-      const from = cfg.twilioFrom.startsWith('whatsapp:') ? cfg.twilioFrom : `whatsapp:${cfg.twilioFrom}`
-      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${cfg.twilioAccountSid}/Messages.json`, {
-        method: 'POST', headers: { Authorization: basic(cfg.twilioAccountSid, c.secrets.twilio_auth_token), 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ To: `whatsapp:+91${to}`, From: from, Body: m.body }),
-      })
-      if (!r.ok) throw new Error(await err(r))
-      return { ok: true, ref: (await r.json()).sid }
-    }
-    case 'interakt': {
-      need(c.secrets.interakt_api_key, 'Interakt API key')
-      const template = m.event === 'test' ? null : tpl.waTemplate
-      if (!template && m.event !== 'test') throw new Error(`Interakt needs an approved template name for "${m.event}"`)
-      const r = await fetch('https://api.interakt.ai/v1/public/message/', {
-        method: 'POST', headers: { Authorization: `Basic ${c.secrets.interakt_api_key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(template
-          ? { countryCode: '+91', phoneNumber: to, type: 'Template', template: { name: template, languageCode: lang, bodyValues: params(tpl.waParams, m.vars) } }
-          : { countryCode: '+91', phoneNumber: to, type: 'Text', data: { message: m.body } }),
-      })
-      if (!r.ok) throw new Error(await err(r))
-      return { ok: true, ref: (await r.json()).id }
-    }
-    case 'webhook': return webhook(cfg.webhookUrl, c.secrets.whatsapp_webhook_secret, m)
-    default: throw new Error('Choose a WhatsApp provider')
-  }
-}
-
-// ------------------------------------------------------------------ Email
-const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!))
-const html = (m: Msg, hospital: string) => `<!doctype html><html><body style="margin:0;background:#f5f5ff;font-family:Inter,Segoe UI,Arial,sans-serif">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px"><tr><td align="center">
-<table role="presentation" width="100%" style="max-width:560px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e6e6f5">
-<tr><td style="background:#292966;color:#fff;padding:18px 24px;font-size:18px;font-weight:700">${esc(hospital)}</td></tr>
-<tr><td style="padding:24px;color:#1e293b;font-size:15px;line-height:1.6">${esc(m.body).replace(/\n/g, '<br>')}</td></tr>
-<tr><td style="padding:14px 24px;background:#f8f8ff;color:#64748b;font-size:12px">This message was sent by ${esc(hospital)}. Please do not reply with medical questions — call the hospital instead.</td></tr>
-</table></td></tr></table></body></html>`
-
-async function email(m: Msg, c: Ctx): Promise<Result> {
-  const cfg = c.n.email ?? {}
-  need(cfg.fromEmail, 'Sender email')
-  const fromName = cfg.fromName || c.hospital
-  const subject = m.subject || `Message from ${c.hospital}`
-  switch (cfg.provider) {
-    case 'resend': {
-      need(c.secrets.resend_api_key, 'Resend API key')
-      const r = await fetch('https://api.resend.com/emails', {
-        method: 'POST', headers: { Authorization: `Bearer ${c.secrets.resend_api_key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: `${fromName} <${cfg.fromEmail}>`, to: [m.recipient], subject, text: m.body, html: html(m, c.hospital), ...(cfg.replyTo ? { reply_to: cfg.replyTo } : {}) }),
-      })
-      if (!r.ok) throw new Error(await err(r))
-      return { ok: true, ref: (await r.json()).id }
-    }
-    case 'sendgrid': {
-      need(c.secrets.sendgrid_api_key, 'SendGrid API key')
-      const r = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST', headers: { Authorization: `Bearer ${c.secrets.sendgrid_api_key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: m.recipient }] }], from: { email: cfg.fromEmail, name: fromName }, subject,
-          ...(cfg.replyTo ? { reply_to: { email: cfg.replyTo } } : {}),
-          content: [{ type: 'text/plain', value: m.body }, { type: 'text/html', value: html(m, c.hospital) }],
-        }),
-      })
-      if (!r.ok) throw new Error(await err(r))
-      return { ok: true, ref: r.headers.get('x-message-id') ?? 'accepted' }
-    }
-    case 'smtp': {
-      need(cfg.smtpHost, 'SMTP host'); need(cfg.smtpUser, 'SMTP username'); need(c.secrets.smtp_password, 'SMTP password')
-      if (Number(cfg.smtpPort) === 25 || Number(cfg.smtpPort) === 587) throw new Error('Supabase Edge Functions block ports 25 and 587 — use port 465 (SSL) or Resend/SendGrid')
-      const { SMTPClient } = await import('https://deno.land/x/denomailer@1.6.0/mod.ts')
-      const client = new SMTPClient({ connection: { hostname: cfg.smtpHost, port: Number(cfg.smtpPort) || 465, tls: cfg.smtpSecure !== false, auth: { username: cfg.smtpUser, password: c.secrets.smtp_password } } })
-      try {
-        await client.send({ from: `${fromName} <${cfg.fromEmail}>`, to: m.recipient, subject, content: m.body, html: html(m, c.hospital), ...(cfg.replyTo ? { replyTo: cfg.replyTo } : {}) })
-      } finally { await client.close() }
-      return { ok: true, ref: 'smtp' }
-    }
-    default: throw new Error('Choose an email provider')
-  }
-}
-
-async function webhook(url: string, secret: string | undefined, m: Msg): Promise<Result> {
-  if (!/^https:\/\//.test(url ?? '')) throw new Error('Webhook URL must start with https://')
-  const r = await fetch(url, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
-    body: JSON.stringify({ channel: m.channel, to: `+91${m.recipient.replace(/\D/g, '').slice(-10)}`, event: m.event, message: m.body, subject: m.subject, vars: m.vars }),
-  })
-  if (!r.ok) throw new Error(`Webhook HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`)
-  return { ok: true, ref: r.headers.get('x-request-id') ?? `HTTP ${r.status}` }
-}
-
-async function deliver(m: Msg, c: Ctx): Promise<Result> {
-  if (!c.n[m.channel]?.enabled && m.event !== 'test') return { ok: false, error: `${m.channel} channel is switched off` }
-  try {
-    return await (m.channel === 'sms' ? sms(m, c) : m.channel === 'whatsapp' ? whatsapp(m, c) : email(m, c))
-  } catch (e) {
-    return { ok: false, error: (e as Error).message?.slice(0, 500) || 'Unknown error' }
-  }
+/** 'service' for the service-role key, otherwise the caller's role (or null for anonymous / invalid). */
+async function callerRole(req: Request): Promise<string | null> {
+  const jwt = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return null
+  if (jwt === SERVICE_KEY) return 'service'
+  const { data: { user } } = await admin.auth.getUser(jwt)
+  if (!user) return null
+  const { data: prof } = await admin.from('profiles').select('role').eq('id', user.id).maybeSingle()
+  return prof?.role ?? null
 }
 
 // ------------------------------------------------------------------ handler
@@ -229,10 +59,7 @@ Deno.serve(async (req) => {
 
   if (body.test) {
     // owner only
-    const jwt = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
-    const { data: { user } } = await admin.auth.getUser(jwt)
-    const { data: prof } = user ? await admin.from('profiles').select('role, full_name').eq('id', user.id).maybeSingle() : { data: null }
-    if (prof?.role !== 'owner') return json({ ok: false, message: 'Only the hospital owner can send test messages' }, 403)
+    if (await callerRole(req) !== 'owner') return json({ ok: false, message: 'Only the hospital owner can send test messages' }, 403)
     const channel = body.test.channel as Channel
     const to = String(body.test.to ?? '').trim()
     if (!['sms', 'whatsapp', 'email'].includes(channel) || !to) return json({ ok: false, message: 'channel and to are required' }, 400)
@@ -245,7 +72,16 @@ Deno.serve(async (req) => {
   }
 
   if (body.flush) {
-    const { data: rows, error } = await admin.rpc('claim_notifications', { p_limit: 25 })
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x: unknown) => typeof x === 'string' && /^[0-9a-f-]{36}$/i.test(x)).slice(0, 10) : []
+    let claim
+    if (ids.length) claim = await admin.rpc('claim_notifications_for', { p_ids: ids })
+    else {
+      // the whole queue: pg_cron (service-role key) or hospital staff only
+      const role = await callerRole(req)
+      if (!role || role === 'patient') return json({ error: 'Not allowed — pass the ids of the messages to deliver' }, 403)
+      claim = await admin.rpc('claim_notifications', { p_limit: 25 })
+    }
+    const { data: rows, error } = claim
     if (error) return json({ error: error.message }, 500)
     if (!rows?.length) return json({ processed: 0, sent: 0, failed: 0 })
     const c = await loadCtx()
@@ -253,11 +89,14 @@ Deno.serve(async (req) => {
     for (const row of rows as any[]) {
       const r = await deliver({ id: row.id, event: row.event, channel: row.channel, recipient: row.recipient, subject: row.subject, body: row.body, vars: row.vars ?? {} }, c)
       r.ok ? sent++ : failed++
+      const giveUp = !r.ok && (row.attempts >= 3 || isPermanent(r.error))
       await admin.from('notification_outbox').update({
-        status: r.ok ? 'sent' : (row.attempts >= 3 || /not configured|switched off|Choose an?/i.test(r.error ?? '') ? 'failed' : 'pending'),
+        status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending',
         error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null,
+        // retry later with backoff (2, 4, 8 min after this attempt — not after the message was created)
+        ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
         // never keep one-time codes around
-        ...(row.event === 'otp' ? { body: '[code redacted]', vars: {} } : {}),
+        ...(row.event === 'otp' && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
       }).eq('id', row.id)
     }
     return json({ processed: rows.length, sent, failed })

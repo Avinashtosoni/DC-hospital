@@ -10,6 +10,7 @@ import { ROLE_LABEL, type Role } from '../types'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { cn } from '../lib/utils'
 import { useSiteSettings } from '../site/cms/content'
+import { LanguageSwitch, useT } from '../i18n'
 
 const ROLE_ICON: Record<Role, typeof Crown> = { owner: Crown, doctor: Stethoscope, receptionist: CalendarCheck, accountant: Wallet, staff: UserCog, patient: HeartPulse }
 
@@ -43,7 +44,10 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
       </div>
       <div className="flex items-center justify-center px-5 py-10 sm:px-10">
         <div className="w-full max-w-md">
-          <Link to="/" aria-label="Back to home" className="mb-8 inline-block lg:hidden"><Logo /></Link>
+          <div className="mb-8 flex items-center justify-between gap-3 lg:justify-end">
+            <Link to="/" aria-label="Back to home" className="lg:hidden"><Logo /></Link>
+            <LanguageSwitch />
+          </div>
           {children}
         </div>
       </div>
@@ -62,13 +66,14 @@ export default function Login() {
   const [error, setError] = useState('')
 
   const portal = useSiteSettings().portal
+  const { t } = useT()
   if (user) return <Navigate to={loc.state?.from ?? '/'} replace />
 
   const doLogin = async (e: string, p: string) => {
     setError('')
     try {
       const u = await signIn(e, p)
-      toast.success(`Welcome back, ${u.full_name.replace(/^Dr\.?\s+/i, '').split(' ')[0]}!`)
+      toast.success(t('Welcome back, {name}!', { name: u.full_name.replace(/^Dr\.?\s+/i, '').split(' ')[0] }))
       nav(loc.state?.from ?? '/', { replace: true })
     } catch (err) {
       setError((err as Error).message)
@@ -79,16 +84,16 @@ export default function Login() {
 
   return (
     <AuthShell>
-      <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Sign in</h2>
-      <p className="mt-1 text-sm text-slate-500">Welcome back. Enter your credentials to continue.</p>
+      <h2 className="text-2xl font-semibold tracking-tight text-slate-900">{t('Sign in')}</h2>
+      <p className="mt-1 text-sm text-slate-500">{t('Welcome back. Enter your credentials to continue.')}</p>
       {portal.loginNotice.trim() && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900 ring-1 ring-brand-200">{portal.loginNotice}</p>}
       <form onSubmit={submit} className="mt-8 space-y-4">
-        <Field label="Email"><Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@dchospital.com" /></Field>
-        <Field label="Password"><Input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></Field>
+        <Field label={t('Email')}><Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@dchospital.com" /></Field>
+        <Field label={t('Password')}><Input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></Field>
         {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-rose-200">{error}</p>}
-        <Button type="submit" className="w-full" loading={loading} icon={!loading && <ArrowRight className="h-4 w-4" />}>Sign in</Button>
+        <Button type="submit" className="w-full" loading={loading} icon={!loading && <ArrowRight className="h-4 w-4" />}>{t('Sign in')}</Button>
       </form>
-      {portal.allowSignup && <p className="mt-4 text-center text-sm text-slate-500">New patient? <Link to="/register" className="font-medium text-brand-700 hover:underline">Create an account</Link></p>}
+      {portal.allowSignup && <p className="mt-4 text-center text-sm text-slate-500">{t('New patient?')} <Link to="/register" className="font-medium text-brand-700 hover:underline">{t('Create an account')}</Link></p>}
 
       {portal.showDemoLogins && <div className="mt-8">
         <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><span className="h-px flex-1 bg-slate-200" />One-click demo accounts<span className="h-px flex-1 bg-slate-200" /></div>

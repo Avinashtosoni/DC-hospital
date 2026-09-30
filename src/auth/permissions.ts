@@ -37,6 +37,9 @@ export const PERMISSIONS: Record<TableName, Matrix> = {
   holidays:      { owner: ALL, receptionist: ALL, doctor: R, staff: R, accountant: R, patient: R },
   // append-only; the owner sees everything, everyone else only their own actions (see ROW_RULES)
   audit_log:     { owner: R, doctor: R, receptionist: R, accountant: R, staff: R },
+  // patients rate their own completed visits once; doctors read their own ratings (see ROW_RULES)
+  visit_feedback: { owner: ALL, receptionist: R, doctor: R, patient: RC },
+  staff_invites: { owner: ALL },
 }
 
 /**
@@ -51,6 +54,7 @@ export const ROW_RULES: Partial<Record<TableName, Partial<Record<Role, Partial<R
       delete: "doctor_id = public.my_doctor_id() and status = 'pending'",
     },
   },
+  visit_feedback: { doctor: { read: 'doctor_id = public.my_doctor_id()' } },
   audit_log: Object.fromEntries((['doctor', 'receptionist', 'accountant', 'staff'] as Role[]).map((r) => [r, { read: 'actor_id = auth.uid()' }])),
 }
 

@@ -185,10 +185,10 @@ export function Modal({ open, onClose, title, children, footer, size = 'max-w-md
   return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-center p-4">
       <div className="absolute inset-0 animate-fade-in bg-slate-900/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className={cn('scrollbar-thin relative max-h-[calc(100vh-2rem)] w-full animate-pop-in overflow-y-auto rounded-2xl bg-white shadow-2xl', size)}>
+      <div role="dialog" aria-modal="true" aria-labelledby={title ? 'modal-title' : undefined} className={cn('scrollbar-thin relative max-h-[calc(100vh-2rem)] w-full animate-pop-in overflow-y-auto rounded-2xl bg-white shadow-2xl', size)}>
         {title && (
           <div className="flex items-center justify-between px-5 pt-5">
-            <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+            <h2 id="modal-title" className="text-base font-semibold text-slate-900">{title}</h2>
             <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X className="h-4 w-4" /></Button>
           </div>
         )}
@@ -246,8 +246,8 @@ export function PageHeader({ title, description, actions }: { title: string; des
   )
 }
 
-export function StatCard({ label, value, icon, hint, tone = 'teal', loading }: { label: string; value: ReactNode; icon: ReactNode; hint?: ReactNode; tone?: Tone; loading?: boolean }) {
-  if (useWidgetHidden(label)) return null
+export function StatCard({ label, value, icon, hint, tone = 'teal', loading, widgetId }: { label: string; value: ReactNode; icon: ReactNode; hint?: ReactNode; tone?: Tone; loading?: boolean; /** Settings → Dashboard key when the label is translated */ widgetId?: string }) {
+  if (useWidgetHidden(widgetId ?? label)) return null
   const bg: Record<Tone, string> = {
     teal: 'from-brand-600 to-brand-900', blue: 'from-[#7a7ab3] to-brand-700', violet: 'from-violet-500 to-violet-700', amber: 'from-amber-400 to-amber-500',
     green: 'from-emerald-500 to-emerald-600', red: 'from-rose-500 to-rose-600', slate: 'from-slate-500 to-slate-600', pink: 'from-pink-500 to-pink-600',

@@ -5,6 +5,7 @@ import { PERMISSIONS, type Action } from '../../auth/permissions'
 import { cn, titleCase } from '../../lib/utils'
 import { ROLES, ROLE_LABEL } from '../../types'
 import { Section, Segmented, Toggle, type TabCtx } from './shared'
+import { GoLiveChecklist } from './GoLive'
 
 const IDLE = [0, 15, 30, 60, 120] as const
 const ACT: Record<Action, string> = { read: 'R', create: 'C', update: 'U', delete: 'D' }
@@ -14,6 +15,7 @@ export function SecurityTab({ ctx }: { ctx: TabCtx }) {
   const p = site.portal
   return (
     <div className="space-y-6">
+      <GoLiveChecklist ctx={ctx} />
       <Section title="Session timeout" description="Automatically sign users out of shared front-desk and ward computers." icon={<Timer className="h-4 w-4" />}>
         <Segmented value={app.security.idleTimeoutMinutes} onChange={(v) => editApp((d) => { d.security.idleTimeoutMinutes = v })}
           options={IDLE.map((m) => ({ value: m, label: m === 0 ? 'Never' : m < 60 ? `${m} min` : `${m / 60} hour${m > 60 ? 's' : ''}` }))} />
@@ -22,9 +24,9 @@ export function SecurityTab({ ctx }: { ctx: TabCtx }) {
 
       <Section title="Sign-in & patient portal" icon={<LogIn className="h-4 w-4" />}>
         <div className="space-y-3">
-          <Toggle label="Allow patients to create their own portal account" hint="Shows “Create account” on the sign-in page. New accounts always get the Patient role." checked={p.allowSignup} onChange={(v) => editSite((d) => { d.portal.allowSignup = v })} />
+          <Toggle label="Allow patients to create their own portal account" hint="Shows “Create account” on the sign-in page. New accounts get the Patient role; staff join with an invite link from Users & Roles." checked={p.allowSignup} onChange={(v) => editSite((d) => { d.portal.allowSignup = v })} />
           <Toggle label="Show one-click demo accounts on the sign-in page" hint="Handy for demos. Turn OFF before going live." checked={p.showDemoLogins} onChange={(v) => editSite((d) => { d.portal.showDemoLogins = v })} />
-          {p.showDemoLogins && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">Demo accounts use the shared password <b>Demo@123</b>. Change those passwords, or remove the users, in production.</p>}
+          {p.showDemoLogins && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">Demo accounts use the shared password <b>Demo@123</b>. Use the Go-live checklist above to lock them before real patients use the system.</p>}
           <Field label="Sign-in page notice (optional)"><Textarea rows={2} maxLength={240} value={p.loginNotice} onChange={(e) => editSite((d) => { d.portal.loginNotice = e.target.value })} placeholder="e.g. Staff: use your hospital email. Patients: call the front desk for access." /></Field>
         </div>
       </Section>

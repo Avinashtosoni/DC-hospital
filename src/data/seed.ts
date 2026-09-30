@@ -3,7 +3,7 @@
  * (scripts/build-master-sql.ts). Dates are expressed relative to "today" through a DateHelper so the
  * data always feels current — locally they become ISO strings, in SQL they become `current_date + n`.
  */
-import type { SiteEnquiry, AuditEntry, DoctorLeave, Holiday,
+import type { SiteEnquiry, AuditEntry, VisitFeedback, DoctorLeave, Holiday,
   Admission, Appointment, Bed, DB, Department, Doctor, Expense, InventoryItem, Invoice, LabTest,
   LineItem, Medication, Notice, Patient, Payment, Prescription, Profile, Role, Staff, Ward,
 } from '../types'
@@ -623,6 +623,35 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
     a.booking_ref = `DCB-${(740213 + i * 7919).toString(36).toUpperCase()}`
   })
 
+  // ---------------------------------------------------------------- post-visit ratings (own RNG so the rest of the seed is unchanged)
+  const fr = mulberry32(4242)
+  const demoPatientId = patients.find((p) => p.profile_id === DEMO_USERS[5].id)?.id
+  const comments: [number, string, string[]][] = [
+    [5, 'Doctor explained everything clearly and patiently.', ['doctor', 'explanation']],
+    [5, 'Very smooth — in and out within 30 minutes.', ['waiting_time', 'staff']],
+    [4, 'Good consultation, the waiting area was a bit crowded.', ['doctor']],
+    [4, '', ['staff', 'cleanliness']],
+    [5, 'Reception staff were very helpful with the reports.', ['staff']],
+    [3, 'Had to wait almost an hour past my slot.', ['waiting_time']],
+    [5, '', ['doctor']],
+    [4, 'Billing was quick, UPI worked fine.', ['billing']],
+    [2, 'Waited long and the pharmacy was out of one medicine.', ['waiting_time', 'pharmacy']],
+    [5, 'Excellent care for my father. Thank you!', ['doctor', 'staff', 'cleanliness']],
+  ]
+  const visit_feedback: VisitFeedback[] = []
+  for (const a of appointments) {
+    if (a.status !== 'completed') continue
+    const off = offsetOf(a.appointment_date)
+    if (off < -45 || fr() > 0.55) continue
+    if (a.patient_id === demoPatientId && off > -21) continue   // leave recent visits for the demo patient to rate
+    const [rating, comment, tags] = comments[Math.floor(fr() * comments.length)]
+    visit_feedback.push({
+      id: sid(20, visit_feedback.length + 1), appointment_id: a.id, patient_id: a.patient_id, doctor_id: a.doctor_id,
+      rating, comment: comment || null, tags, would_recommend: rating >= 4, source: fr() < 0.7 ? 'link' : 'portal',
+      created_at: d.ts(Math.min(0, off + 1), '19:30'), updated_at: d.ts(Math.min(0, off + 1), '19:30'),
+    })
+  }
+
   // ---------------------------------------------------------------- audit trail (recent activity so the log isn't empty)
   const AU = Object.fromEntries(DEMO_USERS.map((u) => [u.role, u])) as Record<Role, (typeof DEMO_USERS)[number]>
   const audit_log: AuditEntry[] = []
@@ -649,6 +678,7 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
   return {
     profiles, departments, doctors, staff, patients, appointments, prescriptions, lab_tests, wards, beds,
     admissions, invoices, payments, expenses, inventory, notices, site_enquiries, doctor_leaves, holidays, audit_log,
+    visit_feedback, staff_invites: [],
   }
 
 }

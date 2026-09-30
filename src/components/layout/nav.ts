@@ -1,6 +1,6 @@
 import {
   BarChart3, BedDouble, Building2, CalendarCheck, ClipboardList, CreditCard, FlaskConical, HeartPulse, LayoutDashboard,
-  CalendarOff, CircleUserRound, History, Globe, Inbox, Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, type LucideIcon,
+  CalendarOff, CircleUserRound, History, Globe, Inbox, Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, Star, type LucideIcon,
 } from 'lucide-react'
 import type { Role } from '../../types'
 
@@ -22,6 +22,7 @@ export const NAV: NavSection[] = [
     { label: 'Admissions', path: '/admissions', icon: ClipboardList, roles: ['owner', 'receptionist', 'doctor', 'staff', 'accountant'] },
     { label: 'Bed Management', path: '/beds', icon: BedDouble, roles: ['owner', 'receptionist', 'doctor', 'staff'] },
     { label: (r) => (r === 'doctor' ? 'My Leave & Blocks' : 'Leave & Holidays'), path: '/schedule', icon: CalendarOff, roles: ['owner', 'receptionist', 'doctor'] },
+    { label: (r) => (r === 'doctor' ? 'My Ratings' : 'Patient Feedback'), path: '/ratings', icon: Star, roles: ['owner', 'receptionist', 'doctor'] },
   ] },
   { title: 'People', items: [
     { label: (r) => (r === 'patient' ? 'Find a Doctor' : 'Doctors'), path: '/doctors', icon: Stethoscope, roles: [...S, 'patient'] },

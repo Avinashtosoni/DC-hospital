@@ -29,6 +29,7 @@ create extension if not exists pgcrypto with schema extensions;
 drop trigger if exists on_auth_user_created on auth.users;
 
 drop table if exists
+  public.visit_feedback, public.staff_invites, public.wa_sessions,
   public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
   public.site_enquiries, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
@@ -141,7 +142,7 @@ create table public.appointments (
   status            text not null default 'scheduled' check (status in ('scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show')),
   reason            text,
   notes             text,
-  source            text not null default 'desk' check (source in ('desk', 'website', 'portal')),
+  source            text not null default 'desk' check (source in ('desk', 'website', 'portal', 'whatsapp')),
   booking_ref       text unique,
   contacted_at      timestamptz,
   created_at        timestamptz not null default now(),
@@ -338,6 +339,45 @@ create table public.audit_log (
   created_at   timestamptz not null default now()
 );
 
+-- Patient rating after a completed visit (one per appointment)
+create table public.visit_feedback (
+  id               uuid primary key default gen_random_uuid(),
+  appointment_id   uuid not null unique references public.appointments (id) on delete cascade,
+  patient_id       uuid not null references public.patients (id) on delete cascade,
+  doctor_id        uuid references public.doctors (id) on delete set null,
+  rating           int not null check (rating between 1 and 5),
+  comment          text check (char_length(comment) <= 1000),
+  tags             text[] not null default '{}',
+  would_recommend  boolean,
+  source           text not null default 'portal' check (source in ('portal', 'link', 'whatsapp')),
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+-- Staff invitations: the invited person signs up with the link and gets the role automatically
+create table public.staff_invites (
+  id               uuid primary key default gen_random_uuid(),
+  full_name        text not null check (char_length(full_name) between 2 and 80),
+  email            text not null check (email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+  phone            text,
+  role             public.app_role not null check (role <> 'patient'),
+  token            text not null unique default encode(extensions.gen_random_bytes(18), 'hex'),
+  status           text not null default 'pending' check (status in ('pending', 'accepted', 'revoked')),
+  expires_at       timestamptz not null default now() + interval '14 days',
+  invited_by_name  text,
+  accepted_at      timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create unique index staff_invites_one_pending on public.staff_invites (lower(email)) where status = 'pending';
+
+-- WhatsApp chatbot conversation state (service role only)
+create table public.wa_sessions (
+  phone       text primary key,
+  state       jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now()
+);
+
 -- One-time codes for online booking (never readable through the API; see section 9)
 create table public.booking_otps (
   id             uuid primary key default gen_random_uuid(),
@@ -371,6 +411,8 @@ create index on public.payments (patient_id);
 create index on public.expenses (expense_date);
 create index on public.site_enquiries (status, created_at desc);
 create index on public.doctor_leaves (doctor_id, start_date, end_date);
+create index on public.visit_feedback (doctor_id, created_at desc);
+create index on public.visit_feedback (patient_id);
 create index on public.audit_log (created_at desc);
 create index on public.audit_log (table_name, record_id);
 create index on public.audit_log (actor_id, created_at desc);
@@ -423,7 +465,7 @@ declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
                            'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries',
-                           'doctor_leaves','holidays']
+                           'doctor_leaves','holidays','visit_feedback','staff_invites']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);
   end loop;
@@ -764,6 +806,33 @@ create policy audit_log_select on public.audit_log for select to authenticated
       or (public.has_role('receptionist') and actor_id = auth.uid())
       or (public.has_role('accountant') and actor_id = auth.uid())
       or (public.has_role('staff') and actor_id = auth.uid()));
+
+-- visit_feedback
+alter table public.visit_feedback enable row level security;
+create policy visit_feedback_select on public.visit_feedback for select to authenticated
+  using (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id())
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy visit_feedback_insert on public.visit_feedback for insert to authenticated
+  with check (public.has_role('owner')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy visit_feedback_update on public.visit_feedback for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy visit_feedback_delete on public.visit_feedback for delete to authenticated
+  using (public.has_role('owner'));
+
+-- staff_invites
+alter table public.staff_invites enable row level security;
+create policy staff_invites_select on public.staff_invites for select to authenticated
+  using (public.has_role('owner'));
+create policy staff_invites_insert on public.staff_invites for insert to authenticated
+  with check (public.has_role('owner'));
+create policy staff_invites_update on public.staff_invites for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy staff_invites_delete on public.staff_invites for delete to authenticated
+  using (public.has_role('owner'));
 
 create policy profiles_select on public.profiles for select to authenticated
   using (id = auth.uid() or public.is_staff());
@@ -3492,6 +3561,143 @@ insert into public.audit_log (id, table_name, record_id, action, actor_id, actor
   ('d0c00019-0000-4000-8000-000000000010', 'invoices', 'd0c00011-0000-4000-8000-000000000002', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'INV-10002', '{"total":{"to":109326},"status":{"to":"unpaid"}}'::jsonb, ((current_date + -1) + time '11:02')),
   ('d0c00019-0000-4000-8000-000000000002', 'patients', 'd0c00004-0000-4000-8000-000000000078', 'insert', 'd0c00000-0000-4000-8000-000000000003', 'Neha Kapoor', 'receptionist', 'Suresh Agarwal (DCH-100078)', '{"full_name":{"to":"Suresh Agarwal"},"phone":{"to":"+91 99209 96031"},"gender":{"to":"male"}}'::jsonb, ((current_date + -1) + time '09:17'));
 
+-- visit_feedback (132)
+insert into public.visit_feedback (id, appointment_id, patient_id, doctor_id, rating, comment, tags, would_recommend, source, created_at, updated_at) values
+  ('d0c00020-0000-4000-8000-000000000001', 'd0c00005-0000-4000-8000-000000000043', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000002', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'portal', ((current_date + -44) + time '19:30'), ((current_date + -44) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000002', 'd0c00005-0000-4000-8000-000000000170', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000010', 5, null, array['doctor']::text[], true, 'link', ((current_date + -44) + time '19:30'), ((current_date + -44) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000003', 'd0c00005-0000-4000-8000-000000000215', 'd0c00004-0000-4000-8000-000000000033', 'd0c00002-0000-4000-8000-000000000011', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -44) + time '19:30'), ((current_date + -44) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000004', 'd0c00005-0000-4000-8000-000000000094', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000010', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -43) + time '19:30'), ((current_date + -43) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000005', 'd0c00005-0000-4000-8000-000000000167', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000007', 5, null, array['doctor']::text[], true, 'link', ((current_date + -43) + time '19:30'), ((current_date + -43) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000006', 'd0c00005-0000-4000-8000-000000000211', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000005', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -42) + time '19:30'), ((current_date + -42) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000007', 'd0c00005-0000-4000-8000-000000000198', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000009', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -42) + time '19:30'), ((current_date + -42) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000008', 'd0c00005-0000-4000-8000-000000000188', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000013', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -42) + time '19:30'), ((current_date + -42) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000009', 'd0c00005-0000-4000-8000-000000000284', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000013', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -42) + time '19:30'), ((current_date + -42) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000010', 'd0c00005-0000-4000-8000-000000000047', 'd0c00004-0000-4000-8000-000000000073', 'd0c00002-0000-4000-8000-000000000003', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -41) + time '19:30'), ((current_date + -41) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000011', 'd0c00005-0000-4000-8000-000000000018', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000001', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -39) + time '19:30'), ((current_date + -39) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000012', 'd0c00005-0000-4000-8000-000000000109', 'd0c00004-0000-4000-8000-000000000027', 'd0c00002-0000-4000-8000-000000000013', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -39) + time '19:30'), ((current_date + -39) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000013', 'd0c00005-0000-4000-8000-000000000338', 'd0c00004-0000-4000-8000-000000000069', 'd0c00002-0000-4000-8000-000000000010', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'link', ((current_date + -38) + time '19:30'), ((current_date + -38) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000014', 'd0c00005-0000-4000-8000-000000000066', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000004', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'portal', ((current_date + -38) + time '19:30'), ((current_date + -38) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000015', 'd0c00005-0000-4000-8000-000000000026', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000001', 4, null, array['staff', 'cleanliness']::text[], true, 'portal', ((current_date + -38) + time '19:30'), ((current_date + -38) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000016', 'd0c00005-0000-4000-8000-000000000155', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000013', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -37) + time '19:30'), ((current_date + -37) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000017', 'd0c00005-0000-4000-8000-000000000103', 'd0c00004-0000-4000-8000-000000000067', 'd0c00002-0000-4000-8000-000000000006', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'portal', ((current_date + -37) + time '19:30'), ((current_date + -37) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000018', 'd0c00005-0000-4000-8000-000000000197', 'd0c00004-0000-4000-8000-000000000036', 'd0c00002-0000-4000-8000-000000000010', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -35) + time '19:30'), ((current_date + -35) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000019', 'd0c00005-0000-4000-8000-000000000156', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000005', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'portal', ((current_date + -35) + time '19:30'), ((current_date + -35) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000020', 'd0c00005-0000-4000-8000-000000000236', 'd0c00004-0000-4000-8000-000000000062', 'd0c00002-0000-4000-8000-000000000005', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -34) + time '19:30'), ((current_date + -34) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000021', 'd0c00005-0000-4000-8000-000000000059', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000011', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -34) + time '19:30'), ((current_date + -34) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000022', 'd0c00005-0000-4000-8000-000000000200', 'd0c00004-0000-4000-8000-000000000020', 'd0c00002-0000-4000-8000-000000000013', 5, null, array['doctor']::text[], true, 'portal', ((current_date + -34) + time '19:30'), ((current_date + -34) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000023', 'd0c00005-0000-4000-8000-000000000348', 'd0c00004-0000-4000-8000-000000000065', 'd0c00002-0000-4000-8000-000000000013', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -34) + time '19:30'), ((current_date + -34) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000024', 'd0c00005-0000-4000-8000-000000000069', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000010', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -33) + time '19:30'), ((current_date + -33) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000025', 'd0c00005-0000-4000-8000-000000000013', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000001', 5, null, array['doctor']::text[], true, 'portal', ((current_date + -33) + time '19:30'), ((current_date + -33) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000026', 'd0c00005-0000-4000-8000-000000000107', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000003', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'portal', ((current_date + -33) + time '19:30'), ((current_date + -33) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000027', 'd0c00005-0000-4000-8000-000000000293', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000002', 5, null, array['doctor']::text[], true, 'link', ((current_date + -33) + time '19:30'), ((current_date + -33) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000028', 'd0c00005-0000-4000-8000-000000000135', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000013', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -32) + time '19:30'), ((current_date + -32) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000029', 'd0c00005-0000-4000-8000-000000000337', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000004', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'portal', ((current_date + -31) + time '19:30'), ((current_date + -31) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000030', 'd0c00005-0000-4000-8000-000000000020', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -31) + time '19:30'), ((current_date + -31) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000031', 'd0c00005-0000-4000-8000-000000000111', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'link', ((current_date + -30) + time '19:30'), ((current_date + -30) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000032', 'd0c00005-0000-4000-8000-000000000253', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000002', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'portal', ((current_date + -30) + time '19:30'), ((current_date + -30) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000033', 'd0c00005-0000-4000-8000-000000000250', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000005', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -30) + time '19:30'), ((current_date + -30) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000034', 'd0c00005-0000-4000-8000-000000000120', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000010', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -28) + time '19:30'), ((current_date + -28) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000035', 'd0c00005-0000-4000-8000-000000000146', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000006', 5, null, array['doctor']::text[], true, 'link', ((current_date + -28) + time '19:30'), ((current_date + -28) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000036', 'd0c00005-0000-4000-8000-000000000139', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000013', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'portal', ((current_date + -27) + time '19:30'), ((current_date + -27) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000037', 'd0c00005-0000-4000-8000-000000000201', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000004', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -27) + time '19:30'), ((current_date + -27) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000038', 'd0c00005-0000-4000-8000-000000000081', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000004', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'link', ((current_date + -26) + time '19:30'), ((current_date + -26) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000039', 'd0c00005-0000-4000-8000-000000000050', 'd0c00004-0000-4000-8000-000000000076', 'd0c00002-0000-4000-8000-000000000009', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -26) + time '19:30'), ((current_date + -26) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000040', 'd0c00005-0000-4000-8000-000000000160', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000010', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -26) + time '19:30'), ((current_date + -26) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000041', 'd0c00005-0000-4000-8000-000000000126', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000013', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -26) + time '19:30'), ((current_date + -26) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000042', 'd0c00005-0000-4000-8000-000000000276', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000006', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -25) + time '19:30'), ((current_date + -25) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000043', 'd0c00005-0000-4000-8000-000000000054', 'd0c00004-0000-4000-8000-000000000034', 'd0c00002-0000-4000-8000-000000000003', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -25) + time '19:30'), ((current_date + -25) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000044', 'd0c00005-0000-4000-8000-000000000251', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000004', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -24) + time '19:30'), ((current_date + -24) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000045', 'd0c00005-0000-4000-8000-000000000150', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000005', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'link', ((current_date + -24) + time '19:30'), ((current_date + -24) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000046', 'd0c00005-0000-4000-8000-000000000017', 'd0c00004-0000-4000-8000-000000000012', 'd0c00002-0000-4000-8000-000000000001', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -23) + time '19:30'), ((current_date + -23) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000047', 'd0c00005-0000-4000-8000-000000000062', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000006', 5, null, array['doctor']::text[], true, 'link', ((current_date + -23) + time '19:30'), ((current_date + -23) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000048', 'd0c00005-0000-4000-8000-000000000213', 'd0c00004-0000-4000-8000-000000000004', 'd0c00002-0000-4000-8000-000000000006', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'link', ((current_date + -23) + time '19:30'), ((current_date + -23) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000049', 'd0c00005-0000-4000-8000-000000000289', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000011', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'link', ((current_date + -22) + time '19:30'), ((current_date + -22) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000050', 'd0c00005-0000-4000-8000-000000000068', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000013', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -22) + time '19:30'), ((current_date + -22) + time '19:30'));
+insert into public.visit_feedback (id, appointment_id, patient_id, doctor_id, rating, comment, tags, would_recommend, source, created_at, updated_at) values
+  ('d0c00020-0000-4000-8000-000000000051', 'd0c00005-0000-4000-8000-000000000110', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000007', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -21) + time '19:30'), ((current_date + -21) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000052', 'd0c00005-0000-4000-8000-000000000161', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000001', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'portal', ((current_date + -21) + time '19:30'), ((current_date + -21) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000053', 'd0c00005-0000-4000-8000-000000000085', 'd0c00004-0000-4000-8000-000000000038', 'd0c00002-0000-4000-8000-000000000012', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -20) + time '19:30'), ((current_date + -20) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000054', 'd0c00005-0000-4000-8000-000000000245', 'd0c00004-0000-4000-8000-000000000071', 'd0c00002-0000-4000-8000-000000000001', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -20) + time '19:30'), ((current_date + -20) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000055', 'd0c00005-0000-4000-8000-000000000315', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000009', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'link', ((current_date + -18) + time '19:30'), ((current_date + -18) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000056', 'd0c00005-0000-4000-8000-000000000280', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000011', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'link', ((current_date + -18) + time '19:30'), ((current_date + -18) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000057', 'd0c00005-0000-4000-8000-000000000132', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000005', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -17) + time '19:30'), ((current_date + -17) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000058', 'd0c00005-0000-4000-8000-000000000303', 'd0c00004-0000-4000-8000-000000000059', 'd0c00002-0000-4000-8000-000000000002', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'portal', ((current_date + -17) + time '19:30'), ((current_date + -17) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000059', 'd0c00005-0000-4000-8000-000000000091', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000005', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'portal', ((current_date + -15) + time '19:30'), ((current_date + -15) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000060', 'd0c00005-0000-4000-8000-000000000220', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000007', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -15) + time '19:30'), ((current_date + -15) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000061', 'd0c00005-0000-4000-8000-000000000102', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000004', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'link', ((current_date + -15) + time '19:30'), ((current_date + -15) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000062', 'd0c00005-0000-4000-8000-000000000145', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000005', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'link', ((current_date + -15) + time '19:30'), ((current_date + -15) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000063', 'd0c00005-0000-4000-8000-000000000248', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000011', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -14) + time '19:30'), ((current_date + -14) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000064', 'd0c00005-0000-4000-8000-000000000244', 'd0c00004-0000-4000-8000-000000000022', 'd0c00002-0000-4000-8000-000000000009', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'portal', ((current_date + -14) + time '19:30'), ((current_date + -14) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000065', 'd0c00005-0000-4000-8000-000000000076', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000002', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -13) + time '19:30'), ((current_date + -13) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000066', 'd0c00005-0000-4000-8000-000000000309', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000009', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -13) + time '19:30'), ((current_date + -13) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000067', 'd0c00005-0000-4000-8000-000000000252', 'd0c00004-0000-4000-8000-000000000050', 'd0c00002-0000-4000-8000-000000000002', 5, null, array['doctor']::text[], true, 'portal', ((current_date + -13) + time '19:30'), ((current_date + -13) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000068', 'd0c00005-0000-4000-8000-000000000137', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000007', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -13) + time '19:30'), ((current_date + -13) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000069', 'd0c00005-0000-4000-8000-000000000015', 'd0c00004-0000-4000-8000-000000000048', 'd0c00002-0000-4000-8000-000000000001', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -13) + time '19:30'), ((current_date + -13) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000070', 'd0c00005-0000-4000-8000-000000000125', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000005', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'portal', ((current_date + -12) + time '19:30'), ((current_date + -12) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000071', 'd0c00005-0000-4000-8000-000000000082', 'd0c00004-0000-4000-8000-000000000072', 'd0c00002-0000-4000-8000-000000000006', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -12) + time '19:30'), ((current_date + -12) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000072', 'd0c00005-0000-4000-8000-000000000320', 'd0c00004-0000-4000-8000-000000000026', 'd0c00002-0000-4000-8000-000000000006', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -12) + time '19:30'), ((current_date + -12) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000073', 'd0c00005-0000-4000-8000-000000000192', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000013', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'portal', ((current_date + -12) + time '19:30'), ((current_date + -12) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000074', 'd0c00005-0000-4000-8000-000000000166', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000009', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -12) + time '19:30'), ((current_date + -12) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000075', 'd0c00005-0000-4000-8000-000000000031', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000002', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'link', ((current_date + -11) + time '19:30'), ((current_date + -11) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000076', 'd0c00005-0000-4000-8000-000000000340', 'd0c00004-0000-4000-8000-000000000046', 'd0c00002-0000-4000-8000-000000000010', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -11) + time '19:30'), ((current_date + -11) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000077', 'd0c00005-0000-4000-8000-000000000317', 'd0c00004-0000-4000-8000-000000000080', 'd0c00002-0000-4000-8000-000000000006', 5, null, array['doctor']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000078', 'd0c00005-0000-4000-8000-000000000269', 'd0c00004-0000-4000-8000-000000000043', 'd0c00002-0000-4000-8000-000000000010', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000079', 'd0c00005-0000-4000-8000-000000000194', 'd0c00004-0000-4000-8000-000000000037', 'd0c00002-0000-4000-8000-000000000007', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000080', 'd0c00005-0000-4000-8000-000000000202', 'd0c00004-0000-4000-8000-000000000008', 'd0c00002-0000-4000-8000-000000000002', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000081', 'd0c00005-0000-4000-8000-000000000262', 'd0c00004-0000-4000-8000-000000000054', 'd0c00002-0000-4000-8000-000000000009', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000082', 'd0c00005-0000-4000-8000-000000000263', 'd0c00004-0000-4000-8000-000000000070', 'd0c00002-0000-4000-8000-000000000010', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000083', 'd0c00005-0000-4000-8000-000000000319', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000005', 4, null, array['staff', 'cleanliness']::text[], true, 'portal', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000084', 'd0c00005-0000-4000-8000-000000000222', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000010', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000085', 'd0c00005-0000-4000-8000-000000000092', 'd0c00004-0000-4000-8000-000000000049', 'd0c00002-0000-4000-8000-000000000011', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000086', 'd0c00005-0000-4000-8000-000000000184', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000002', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -10) + time '19:30'), ((current_date + -10) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000087', 'd0c00005-0000-4000-8000-000000000258', 'd0c00004-0000-4000-8000-000000000013', 'd0c00002-0000-4000-8000-000000000007', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -9) + time '19:30'), ((current_date + -9) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000088', 'd0c00005-0000-4000-8000-000000000275', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000013', 3, 'Had to wait almost an hour past my slot.', array['waiting_time']::text[], false, 'link', ((current_date + -9) + time '19:30'), ((current_date + -9) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000089', 'd0c00005-0000-4000-8000-000000000321', 'd0c00004-0000-4000-8000-000000000066', 'd0c00002-0000-4000-8000-000000000003', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -9) + time '19:30'), ((current_date + -9) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000090', 'd0c00005-0000-4000-8000-000000000028', 'd0c00004-0000-4000-8000-000000000063', 'd0c00002-0000-4000-8000-000000000005', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -9) + time '19:30'), ((current_date + -9) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000091', 'd0c00005-0000-4000-8000-000000000130', 'd0c00004-0000-4000-8000-000000000015', 'd0c00002-0000-4000-8000-000000000002', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -8) + time '19:30'), ((current_date + -8) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000092', 'd0c00005-0000-4000-8000-000000000053', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000007', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -8) + time '19:30'), ((current_date + -8) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000093', 'd0c00005-0000-4000-8000-000000000036', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000011', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'portal', ((current_date + -8) + time '19:30'), ((current_date + -8) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000094', 'd0c00005-0000-4000-8000-000000000281', 'd0c00004-0000-4000-8000-000000000005', 'd0c00002-0000-4000-8000-000000000002', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -7) + time '19:30'), ((current_date + -7) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000095', 'd0c00005-0000-4000-8000-000000000143', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -7) + time '19:30'), ((current_date + -7) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000096', 'd0c00005-0000-4000-8000-000000000212', 'd0c00004-0000-4000-8000-000000000065', 'd0c00002-0000-4000-8000-000000000012', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -7) + time '19:30'), ((current_date + -7) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000097', 'd0c00005-0000-4000-8000-000000000329', 'd0c00004-0000-4000-8000-000000000057', 'd0c00002-0000-4000-8000-000000000010', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'portal', ((current_date + -7) + time '19:30'), ((current_date + -7) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000098', 'd0c00005-0000-4000-8000-000000000249', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -6) + time '19:30'), ((current_date + -6) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000099', 'd0c00005-0000-4000-8000-000000000090', 'd0c00004-0000-4000-8000-000000000035', 'd0c00002-0000-4000-8000-000000000007', 5, null, array['doctor']::text[], true, 'portal', ((current_date + -6) + time '19:30'), ((current_date + -6) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000100', 'd0c00005-0000-4000-8000-000000000204', 'd0c00004-0000-4000-8000-000000000010', 'd0c00002-0000-4000-8000-000000000006', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -6) + time '19:30'), ((current_date + -6) + time '19:30'));
+insert into public.visit_feedback (id, appointment_id, patient_id, doctor_id, rating, comment, tags, would_recommend, source, created_at, updated_at) values
+  ('d0c00020-0000-4000-8000-000000000101', 'd0c00005-0000-4000-8000-000000000075', 'd0c00004-0000-4000-8000-000000000040', 'd0c00002-0000-4000-8000-000000000005', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -6) + time '19:30'), ((current_date + -6) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000102', 'd0c00005-0000-4000-8000-000000000100', 'd0c00004-0000-4000-8000-000000000055', 'd0c00002-0000-4000-8000-000000000011', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -6) + time '19:30'), ((current_date + -6) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000103', 'd0c00005-0000-4000-8000-000000000282', 'd0c00004-0000-4000-8000-000000000052', 'd0c00002-0000-4000-8000-000000000013', 5, null, array['doctor']::text[], true, 'portal', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000104', 'd0c00005-0000-4000-8000-000000000208', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000011', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000105', 'd0c00005-0000-4000-8000-000000000061', 'd0c00004-0000-4000-8000-000000000007', 'd0c00002-0000-4000-8000-000000000012', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'portal', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000106', 'd0c00005-0000-4000-8000-000000000131', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000003', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000107', 'd0c00005-0000-4000-8000-000000000144', 'd0c00004-0000-4000-8000-000000000023', 'd0c00002-0000-4000-8000-000000000005', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000108', 'd0c00005-0000-4000-8000-000000000234', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000010', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000109', 'd0c00005-0000-4000-8000-000000000033', 'd0c00004-0000-4000-8000-000000000056', 'd0c00002-0000-4000-8000-000000000010', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'portal', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000110', 'd0c00005-0000-4000-8000-000000000345', 'd0c00004-0000-4000-8000-000000000009', 'd0c00002-0000-4000-8000-000000000013', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000111', 'd0c00005-0000-4000-8000-000000000169', 'd0c00004-0000-4000-8000-000000000030', 'd0c00002-0000-4000-8000-000000000002', 5, null, array['doctor']::text[], true, 'portal', ((current_date + -5) + time '19:30'), ((current_date + -5) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000112', 'd0c00005-0000-4000-8000-000000000123', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000011', 5, 'Very smooth — in and out within 30 minutes.', array['waiting_time', 'staff']::text[], true, 'link', ((current_date + -4) + time '19:30'), ((current_date + -4) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000113', 'd0c00005-0000-4000-8000-000000000225', 'd0c00004-0000-4000-8000-000000000067', 'd0c00002-0000-4000-8000-000000000005', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -4) + time '19:30'), ((current_date + -4) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000114', 'd0c00005-0000-4000-8000-000000000240', 'd0c00004-0000-4000-8000-000000000018', 'd0c00002-0000-4000-8000-000000000011', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -4) + time '19:30'), ((current_date + -4) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000115', 'd0c00005-0000-4000-8000-000000000268', 'd0c00004-0000-4000-8000-000000000006', 'd0c00002-0000-4000-8000-000000000007', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'portal', ((current_date + -3) + time '19:30'), ((current_date + -3) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000116', 'd0c00005-0000-4000-8000-000000000314', 'd0c00004-0000-4000-8000-000000000003', 'd0c00002-0000-4000-8000-000000000010', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + -3) + time '19:30'), ((current_date + -3) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000117', 'd0c00005-0000-4000-8000-000000000331', 'd0c00004-0000-4000-8000-000000000074', 'd0c00002-0000-4000-8000-000000000002', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -3) + time '19:30'), ((current_date + -3) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000118', 'd0c00005-0000-4000-8000-000000000052', 'd0c00004-0000-4000-8000-000000000051', 'd0c00002-0000-4000-8000-000000000005', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + -3) + time '19:30'), ((current_date + -3) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000119', 'd0c00005-0000-4000-8000-000000000049', 'd0c00004-0000-4000-8000-000000000016', 'd0c00002-0000-4000-8000-000000000007', 4, 'Good consultation, the waiting area was a bit crowded.', array['doctor']::text[], true, 'link', ((current_date + -2) + time '19:30'), ((current_date + -2) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000120', 'd0c00005-0000-4000-8000-000000000254', 'd0c00004-0000-4000-8000-000000000064', 'd0c00002-0000-4000-8000-000000000007', 4, 'Billing was quick, UPI worked fine.', array['billing']::text[], true, 'portal', ((current_date + -2) + time '19:30'), ((current_date + -2) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000121', 'd0c00005-0000-4000-8000-000000000272', 'd0c00004-0000-4000-8000-000000000017', 'd0c00002-0000-4000-8000-000000000001', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + -2) + time '19:30'), ((current_date + -2) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000122', 'd0c00005-0000-4000-8000-000000000087', 'd0c00004-0000-4000-8000-000000000039', 'd0c00002-0000-4000-8000-000000000012', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'link', ((current_date + -2) + time '19:30'), ((current_date + -2) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000123', 'd0c00005-0000-4000-8000-000000000352', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000006', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + -1) + time '19:30'), ((current_date + -1) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000124', 'd0c00005-0000-4000-8000-000000000055', 'd0c00004-0000-4000-8000-000000000068', 'd0c00002-0000-4000-8000-000000000009', 5, null, array['doctor']::text[], true, 'link', ((current_date + -1) + time '19:30'), ((current_date + -1) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000125', 'd0c00005-0000-4000-8000-000000000172', 'd0c00004-0000-4000-8000-000000000053', 'd0c00002-0000-4000-8000-000000000013', 5, 'Doctor explained everything clearly and patiently.', array['doctor', 'explanation']::text[], true, 'link', ((current_date + -1) + time '19:30'), ((current_date + -1) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000126', 'd0c00005-0000-4000-8000-000000000299', 'd0c00004-0000-4000-8000-000000000025', 'd0c00002-0000-4000-8000-000000000011', 5, 'Reception staff were very helpful with the reports.', array['staff']::text[], true, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000127', 'd0c00005-0000-4000-8000-000000000336', 'd0c00004-0000-4000-8000-000000000061', 'd0c00002-0000-4000-8000-000000000010', 5, null, array['doctor']::text[], true, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000128', 'd0c00005-0000-4000-8000-000000000157', 'd0c00004-0000-4000-8000-000000000029', 'd0c00002-0000-4000-8000-000000000013', 4, null, array['staff', 'cleanliness']::text[], true, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000129', 'd0c00005-0000-4000-8000-000000000011', 'd0c00004-0000-4000-8000-000000000014', 'd0c00002-0000-4000-8000-000000000001', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000130', 'd0c00005-0000-4000-8000-000000000206', 'd0c00004-0000-4000-8000-000000000024', 'd0c00002-0000-4000-8000-000000000013', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000131', 'd0c00005-0000-4000-8000-000000000007', 'd0c00004-0000-4000-8000-000000000002', 'd0c00002-0000-4000-8000-000000000001', 2, 'Waited long and the pharmacy was out of one medicine.', array['waiting_time', 'pharmacy']::text[], false, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30')),
+  ('d0c00020-0000-4000-8000-000000000132', 'd0c00005-0000-4000-8000-000000000010', 'd0c00004-0000-4000-8000-000000000011', 'd0c00002-0000-4000-8000-000000000001', 5, 'Excellent care for my father. Thank you!', array['doctor', 'staff', 'cleanliness']::text[], true, 'link', ((current_date + 0) + time '19:30'), ((current_date + 0) + time '19:30'));
+
 alter table public.admissions enable trigger trg_admissions_sync;
 
 -- 7c. Backfill profiles for any pre-existing auth users (e.g. if you re-run this script on a live project)
@@ -3582,7 +3788,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
+  foreach t in array array['staff_invites', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
                            'doctors', 'doctor_leaves', 'holidays', 'profiles', 'staff', 'expenses'] loop
     execute format('drop trigger if exists trg_%1$s_audit on public.%1$I', t);
     execute format('create trigger trg_%1$s_audit after insert or update or delete on public.%1$I
@@ -3754,10 +3960,11 @@ $$;
 -- Queues the code on the channels enabled in Settings → Notifications (SMS / WhatsApp) and returns how many
 -- messages were queued. 0 = no gateway configured → the booking page may show the code on screen (demo mode).
 -- Delivery is done by the Edge Function `notify` (supabase/functions/notify), which reads the credentials.
-create or replace function public.send_booking_otp(p_phone text, p_code text)
+drop function if exists public.send_booking_otp(text, text);
+create or replace function public.send_booking_otp(p_phone text, p_code text, p_ref uuid default null)
 returns int language plpgsql security definer set search_path = public as $$
 begin
-  return coalesce(public.notify_enqueue('otp', p_phone, null, jsonb_build_object('code', p_code, 'otp', p_code), 'booking_otps', null), 0);
+  return coalesce(public.notify_enqueue('otp', p_phone, null, jsonb_build_object('code', p_code, 'otp', p_code), 'booking_otps', p_ref), 0);
 exception when undefined_function then
   return 0;
 end $$;
@@ -3801,6 +4008,7 @@ declare
   v_phone  text := public.norm_phone(p_phone);
   v_code   text;
   v_queued int;
+  v_id     uuid;
 begin
   if public.booking_setting('enabled', 'true') <> 'true' then
     raise exception 'Online booking is switched off right now. Please call the hospital to book.';
@@ -3817,11 +4025,13 @@ begin
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
   insert into public.booking_otps (phone, code_hash, expires_at)
-  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes');
-  v_queued := public.send_booking_otp(v_phone, v_code);
+  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
+  returning id into v_id;
+  v_queued := public.send_booking_otp(v_phone, v_code, v_id);
 
   -- the code is only ever returned to the browser when no SMS/WhatsApp gateway took it AND demo mode is on
-  return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', v_queued,
+  -- `ref` lets the browser ask the notify function to deliver exactly this message right away
+  return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', v_queued, 'ref', v_id,
     'demo_code', case when v_queued = 0 and public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
 end $$;
 
@@ -3856,70 +4066,37 @@ begin
   return jsonb_build_object('ok', true, 'token', v_token);
 end $$;
 
-create or replace function public.public_book_appointment(
-  p_token uuid, p_doctor uuid, p_date date, p_time text,
-  p_name text, p_gender text, p_dob date, p_email text, p_reason text)
-returns jsonb language plpgsql volatile security definer set search_path = public as $$
+-- Why a slot can't be booked (same rules as src/lib/schedule.ts), or null when it is free to book.
+-- Double-booking itself is prevented by the unique index appointments_one_per_slot.
+drop function if exists public.slot_problem(uuid, date, text, boolean) cascade;
+create function public.slot_problem(p_doctor uuid, p_date date, p_time text, p_enforce_window boolean default true)
+returns text language plpgsql stable security definer set search_path = public as $$
 declare
-  o         public.booking_otps;
   d         public.doctors;
-  v_patient public.patients;
-  v_appt    public.appointments;
-  v_inv     public.invoices;
-  v_dep     text;
   v_now     timestamp := now() at time zone 'Asia/Kolkata';
-  v_new     boolean := false;
-  v_name    text := regexp_replace(trim(coalesce(p_name, '')), '\s+', ' ', 'g');
   v_min     int;
   v_shift   text[];
-  v_ref     text;
-  v_seq     int;
-  v_fee     numeric;
-  v_rate    numeric;
-  v_tax     numeric;
   v_advance int := coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30);
   v_notice  int := coalesce(nullif(public.booking_setting('minNoticeMinutes', '60'), '')::int, 60);
 begin
-  perform set_config('app.actor_name', 'Website booking', true);
-  perform set_config('app.actor_role', 'public', true);
-
-  if public.booking_setting('enabled', 'true') <> 'true' then
-    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
-  end if;
-
-  -- 1. verified phone (one booking per verification, valid 30 minutes)
-  select * into o from public.booking_otps where token = p_token for update;
-  if not found or o.verified_at is null or o.token_used_at is not null or o.verified_at < now() - interval '30 minutes' then
-    raise exception 'OTP_REQUIRED: Please verify your mobile number again.';
-  end if;
-
-  -- 2. input
-  if char_length(v_name) < 2 or char_length(v_name) > 80 then raise exception 'Please enter the patient''s full name.'; end if;
-  if p_gender is null or p_gender not in ('male', 'female', 'other') then p_gender := 'other'; end if;
-  if p_dob is not null and (p_dob > v_now::date or p_dob < v_now::date - 43830) then raise exception 'Please check the date of birth.'; end if;
-  if nullif(trim(p_email), '') is not null and trim(p_email) !~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please check the email address.'; end if;
-  if coalesce(p_time, '') !~ '^[0-2][0-9]:[0-5][0-9]$' then raise exception 'SLOT_UNAVAILABLE: Invalid time.'; end if;
+  if coalesce(p_time, '') !~ '^[0-2][0-9]:[0-5][0-9]$' then return 'Invalid time.'; end if;
   v_min := split_part(p_time, ':', 1)::int * 60 + split_part(p_time, ':', 2)::int;
-
-  -- 3. the slot must really be free (same rules as src/lib/schedule.ts)
   select * into d from public.doctors where id = p_doctor;
-  if not found or d.status <> 'active' then raise exception 'SLOT_UNAVAILABLE: This doctor is not taking bookings right now.'; end if;
-  if p_date < v_now::date or p_date > v_now::date + v_advance then
-    raise exception 'SLOT_UNAVAILABLE: Please choose a date within the next % days.', v_advance;
+  if not found or d.status <> 'active' then return 'This doctor is not taking bookings right now.'; end if;
+  if p_date < v_now::date then return 'This date is in the past.'; end if;
+  if p_enforce_window and p_date > v_now::date + v_advance then return format('Please choose a date within the next %s days.', v_advance); end if;
+  if p_enforce_window and p_date + make_interval(mins => v_min) < v_now + make_interval(mins => v_notice) then
+    return 'This time is too soon — please pick a later slot.';
   end if;
-  if p_date + make_interval(mins => v_min) < v_now + make_interval(mins => v_notice) then
-    raise exception 'SLOT_UNAVAILABLE: This time is too soon — please pick a later slot.';
-  end if;
-  if v_min % 30 <> 0 or v_min < 480 or v_min > 1110 then raise exception 'SLOT_UNAVAILABLE: Invalid time.'; end if;
-  if exists (select 1 from public.holidays where holiday_date = p_date) then
-    raise exception 'SLOT_UNAVAILABLE: The OPD is closed on this day.';
-  end if;
+  if not p_enforce_window and p_date + make_interval(mins => v_min) < v_now then return 'This time has already passed.'; end if;
+  if v_min % 30 <> 0 or v_min < 480 or v_min > 1110 then return 'Invalid time.'; end if;
+  if exists (select 1 from public.holidays where holiday_date = p_date) then return 'The OPD is closed on this day.'; end if;
   if not (to_char(p_date, 'Dy') = any (coalesce(nullif(d.available_days, '{}'), array['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']))) then
-    raise exception 'SLOT_UNAVAILABLE: The doctor does not consult on this day.';
+    return 'The doctor does not consult on this day.';
   end if;
   v_shift := regexp_match(coalesce(d.shift, ''), '(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})');
   if v_shift is not null and (v_min < v_shift[1]::int * 60 + v_shift[2]::int or v_min >= v_shift[3]::int * 60 + v_shift[4]::int) then
-    raise exception 'SLOT_UNAVAILABLE: Outside the doctor''s consulting hours.';
+    return 'Outside the doctor''s consulting hours.';
   end if;
   if exists (
     select 1 from public.doctor_leaves l
@@ -3928,12 +4105,54 @@ begin
            or (v_min >= split_part(l.start_time, ':', 1)::int * 60 + split_part(l.start_time, ':', 2)::int
                and v_min < split_part(l.end_time, ':', 1)::int * 60 + split_part(l.end_time, ':', 2)::int))
   ) then
-    raise exception 'SLOT_UNAVAILABLE: The doctor is unavailable at this time.';
+    return 'The doctor is unavailable at this time.';
   end if;
+  return null;
+end $$;
 
-  -- 4. patient: same mobile AND same name → existing record (families often share one phone)
+-- Books a slot for an already-verified mobile number (OTP on the website, or the WhatsApp sender itself).
+-- Internal: only called by public_book_appointment / whatsapp_book_appointment.
+drop function if exists public.book_slot_internal(text, uuid, date, text, text, text, date, text, text, text) cascade;
+create function public.book_slot_internal(
+  p_phone text, p_doctor uuid, p_date date, p_time text,
+  p_name text, p_gender text, p_dob date, p_email text, p_reason text, p_source text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  d         public.doctors;
+  v_patient public.patients;
+  v_appt    public.appointments;
+  v_inv     public.invoices;
+  v_dep     text;
+  v_now     timestamp := now() at time zone 'Asia/Kolkata';
+  v_new     boolean := false;
+  v_name    text := regexp_replace(trim(coalesce(p_name, '')), '\s+', ' ', 'g');
+  v_phone   text := public.norm_phone(p_phone);
+  v_problem text;
+  v_ref     text;
+  v_seq     int;
+  v_fee     numeric;
+  v_rate    numeric;
+  v_tax     numeric;
+begin
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+  if v_phone !~ '^[6-9][0-9]{9}$' then raise exception 'Please enter a valid 10-digit Indian mobile number.'; end if;
+
+  -- input
+  if char_length(v_name) < 2 or char_length(v_name) > 80 then raise exception 'Please enter the patient''s full name.'; end if;
+  if p_gender is null or p_gender not in ('male', 'female', 'other') then p_gender := 'other'; end if;
+  if p_dob is not null and (p_dob > v_now::date or p_dob < v_now::date - 43830) then raise exception 'Please check the date of birth.'; end if;
+  if nullif(trim(p_email), '') is not null and trim(p_email) !~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please check the email address.'; end if;
+
+  -- the slot must really be free
+  v_problem := public.slot_problem(p_doctor, p_date, p_time, true);
+  if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
+  select * into d from public.doctors where id = p_doctor;
+
+  -- patient: same mobile AND same name → existing record (families often share one phone)
   select * into v_patient from public.patients
-  where public.norm_phone(phone) = o.phone and lower(regexp_replace(trim(full_name), '\s+', ' ', 'g')) = lower(v_name)
+  where public.norm_phone(phone) = v_phone and lower(regexp_replace(trim(full_name), '\s+', ' ', 'g')) = lower(v_name)
   order by created_at limit 1;
 
   if v_patient.id is not null then
@@ -3945,23 +4164,23 @@ begin
     perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
     select coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::int), 100000) + 1 into v_seq from public.patients;
     insert into public.patients (mrn, full_name, gender, date_of_birth, phone, email, status)
-    values ('DCH-' || v_seq, v_name, p_gender, p_dob, '+91 ' || substr(o.phone, 1, 5) || ' ' || substr(o.phone, 6),
+    values ('DCH-' || v_seq, v_name, p_gender, p_dob, '+91 ' || substr(v_phone, 1, 5) || ' ' || substr(v_phone, 6),
             nullif(lower(trim(p_email)), ''), 'outpatient')
     returning * into v_patient;
     v_new := true;
   end if;
 
-  -- 5. appointment (the partial unique index settles a race for the same slot)
+  -- appointment (the partial unique index settles a race for the same slot)
   v_ref := 'DCB-' || upper(encode(extensions.gen_random_bytes(3), 'hex'));
   begin
     insert into public.appointments (patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, source, booking_ref)
-    values (v_patient.id, d.id, p_date, p_time, 'consultation', 'scheduled', nullif(left(trim(p_reason), 500), ''), 'website', v_ref)
+    values (v_patient.id, d.id, p_date, p_time, 'consultation', 'scheduled', nullif(left(trim(p_reason), 500), ''), p_source, v_ref)
     returning * into v_appt;
   exception when unique_violation then
     raise exception 'SLOT_TAKEN: Sorry — someone just booked this slot. Please pick another time.';
   end;
 
-  -- 6. unpaid invoice (GST % from CMS → Billing; 0 = exempt → Bill of Supply)
+  -- unpaid invoice (GST % from Settings → Billing; 0 = exempt → Bill of Supply)
   v_fee  := d.consultation_fee;
   v_rate := coalesce(nullif(public.booking_setting('gstRate', '0', 'billing'), '')::numeric, 0);
   v_tax  := round(v_fee * v_rate / 100, 2);
@@ -3972,12 +4191,10 @@ begin
           jsonb_build_array(jsonb_build_object(
             'description', format('Consultation — %s (%s) · %s, %s', d.full_name, d.specialization, to_char(p_date, 'DD Mon YYYY'), p_time),
             'quantity', 1, 'unit_price', v_fee)),
-          v_fee, v_tax, 0, v_fee + v_tax, 0, 'unpaid', 'Online booking ' || v_ref)
+          v_fee, v_tax, 0, v_fee + v_tax, 0, 'unpaid', initcap(p_source) || ' booking ' || v_ref)
   returning * into v_inv;
 
-  update public.booking_otps set token_used_at = now() where id = o.id;
   select name into v_dep from public.departments where id = d.department_id;
-
   return jsonb_build_object(
     'ref', v_ref,
     'is_new_patient', v_new,
@@ -3988,8 +4205,49 @@ begin
     'doctor', jsonb_build_object('id', d.id, 'full_name', d.full_name, 'specialization', d.specialization, 'department', v_dep),
     'invoice', to_jsonb(v_inv));
 end $$;
+revoke all on function public.book_slot_internal(text, uuid, date, text, text, text, date, text, text, text) from public, anon, authenticated;
 
-revoke all on function public.send_booking_otp(text, text) from public, anon, authenticated;
+create or replace function public.public_book_appointment(
+  p_token uuid, p_doctor uuid, p_date date, p_time text,
+  p_name text, p_gender text, p_dob date, p_email text, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  o     public.booking_otps;
+  v_res jsonb;
+begin
+  perform set_config('app.actor_name', 'Website booking', true);
+  perform set_config('app.actor_role', 'public', true);
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+  -- verified phone (one booking per verification, valid 30 minutes)
+  select * into o from public.booking_otps where token = p_token for update;
+  if not found or o.verified_at is null or o.token_used_at is not null or o.verified_at < now() - interval '30 minutes' then
+    raise exception 'OTP_REQUIRED: Please verify your mobile number again.';
+  end if;
+  v_res := public.book_slot_internal(o.phone, p_doctor, p_date, p_time, p_name, p_gender, p_dob, p_email, p_reason, 'website');
+  update public.booking_otps set token_used_at = now() where id = o.id;
+  return v_res;
+end $$;
+
+-- WhatsApp chatbot bookings: the sender's number is already verified by WhatsApp. Service role only
+-- (called by the Edge Function supabase/functions/whatsapp-bot).
+drop function if exists public.whatsapp_book_appointment(text, uuid, date, text, text, text) cascade;
+create function public.whatsapp_book_appointment(p_phone text, p_doctor uuid, p_date date, p_time text, p_name text, p_reason text default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+begin
+  perform set_config('app.actor_name', 'WhatsApp booking', true);
+  perform set_config('app.actor_role', 'public', true);
+  return public.book_slot_internal(p_phone, p_doctor, p_date, p_time, p_name, 'other', null, null, p_reason, 'whatsapp');
+end $$;
+revoke all on function public.whatsapp_book_appointment(text, uuid, date, text, text, text) from public, anon, authenticated;
+grant execute on function public.whatsapp_book_appointment(text, uuid, date, text, text, text) to service_role;
+grant execute on function public.public_doctors() to service_role;
+grant execute on function public.public_availability(uuid, date, date) to service_role;
+
+revoke all on function public.send_booking_otp(text, text, uuid) from public, anon, authenticated;
+revoke all on function public.slot_problem(uuid, date, text, boolean) from public, anon;
+grant execute on function public.slot_problem(uuid, date, text, boolean) to authenticated;
 revoke all on function public.booking_setting(text, text, text) from public, anon;
 grant execute on function public.public_doctors() to anon, authenticated;
 grant execute on function public.public_availability(uuid, date, date) to anon, authenticated;
@@ -4014,7 +4272,7 @@ grant execute on function public.public_book_appointment(uuid, uuid, date, text,
 --  Optional automatic delivery + reminders with pg_cron + pg_net (Database → Extensions), e.g.:
 --    select cron.schedule('notify-flush', '* * * * *', $c$ select net.http_post(
 --      url := 'https://<project-ref>.supabase.co/functions/v1/notify',
---      headers := jsonb_build_object('Authorization', 'Bearer <anon-key>', 'Content-Type', 'application/json'),
+--      headers := jsonb_build_object('Authorization', 'Bearer <service-role-key>', 'Content-Type', 'application/json'),
 --      body := '{"flush":true}'::jsonb) $c$);
 --    select cron.schedule('appointment-reminders', '30 12 * * *', $c$ select public.queue_appointment_reminders() $c$);  -- 18:00 IST
 -- =====================================================================================================
@@ -4137,6 +4395,9 @@ create table if not exists public.notification_outbox (
   created_at     timestamptz not null default now(),
   sent_at        timestamptz
 );
+-- retry bookkeeping (added later; `if not exists` keeps re-runs safe)
+alter table public.notification_outbox add column if not exists last_attempt_at timestamptz;
+alter table public.notification_outbox add column if not exists next_attempt_at timestamptz not null default now();
 create index if not exists notification_outbox_queue_idx on public.notification_outbox (status, created_at);
 create index if not exists notification_outbox_related_idx on public.notification_outbox (related_id, event);
 
@@ -4171,7 +4432,8 @@ begin
   v_vars := jsonb_build_object(
       'hospital', coalesce(nullif(site ->> 'name', ''), 'DC Hospital'),
       'hospital_phone', coalesce(nullif(site ->> 'appointmentsPhone', ''), site ->> 'phone', ''),
-      'address', coalesce(site ->> 'address', ''))
+      'address', coalesce(site ->> 'address', ''),
+      'site_url', rtrim(coalesce(site ->> 'siteUrl', ''), '/'))
     || coalesce(p_vars, '{}'::jsonb);
 
   foreach ch in array array['sms', 'whatsapp', 'email'] loop
@@ -4329,18 +4591,437 @@ drop function if exists public.claim_notifications(int) cascade;
 create function public.claim_notifications(p_limit int default 25)
 returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
 begin
+  -- give up on messages that got stuck mid-delivery three times
+  update public.notification_outbox set status = 'failed', error = coalesce(error, 'Delivery timed out')
+  where status = 'sending' and attempts >= 3 and coalesce(last_attempt_at, created_at) < now() - interval '10 minutes';
+
   return query
-    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1
+    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
     where o.id in (
       select x.id from public.notification_outbox x
-      where x.status = 'pending' or (x.status = 'sending' and x.attempts < 3 and x.created_at < now() - interval '10 minutes')
+      where (x.status = 'pending' and x.next_attempt_at <= now())
+         or (x.status = 'sending' and x.attempts < 3 and coalesce(x.last_attempt_at, x.created_at) < now() - interval '10 minutes')
       order by x.created_at
       limit greatest(1, least(p_limit, 100))
       for update skip locked)
     returning o.*;
 end $$;
+
+-- Deliver specific fresh messages right away (e.g. the OTP a visitor just requested). Used by the notify
+-- function for callers that may not flush the whole queue (anonymous visitors, patients).
+drop function if exists public.claim_notifications_for(uuid[]) cascade;
+create function public.claim_notifications_for(p_ids uuid[])
+returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
+begin
+  return query
+    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
+    where o.id in (
+      select x.id from public.notification_outbox x
+      where x.status = 'pending' and x.attempts = 0 and x.created_at > now() - interval '15 minutes'
+        and (x.id = any (p_ids) or x.related_id = any (p_ids))
+      order by x.created_at
+      limit 10
+      for update skip locked)
+    returning o.*;
+end $$;
+revoke all on function public.claim_notifications_for(uuid[]) from public, anon, authenticated;
+grant execute on function public.claim_notifications_for(uuid[]) to service_role;
+
 revoke all on function public.claim_notifications(int) from public, anon, authenticated;
 grant execute on function public.claim_notifications(int) to service_role;
+
+
+-- =====================================================================================================
+--  13. PATIENT SELF-SERVICE · FEEDBACK · STAFF INVITES · GO-LIVE HELPERS · WHATSAPP BOT STATE
+-- =====================================================================================================
+
+-- ------------------------------------------------------------------ helpers
+create or replace function public.site_url()
+returns text language sql stable security definer set search_path = public as $$
+  select rtrim(coalesce((select data ->> 'siteUrl' from public.site_content where key = 'settings'), ''), '/')
+$$;
+
+-- ------------------------------------------------------------------ patients book / reschedule / cancel their own visits
+-- The patient portal writes to `appointments` directly (RLS: own rows). This trigger makes sure a patient
+-- can only book a genuinely free slot for themselves, move a future visit to another free slot of the
+-- same doctor, or cancel it — never change the doctor, status (other than cancel), notes or reference.
+create or replace function public.guard_patient_appointment()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_problem text;
+  v_now     timestamp := now() at time zone 'Asia/Kolkata';
+  v_cutoff  int := coalesce(nullif(public.booking_setting('rescheduleCutoffHours', '4'), '')::int, 4);
+begin
+  if auth.uid() is null or not public.has_role('patient') then return new; end if;
+
+  if tg_op = 'INSERT' then
+    if new.patient_id is distinct from public.my_patient_id() then raise exception 'You can only book appointments for yourself.'; end if;
+    new.status := 'scheduled';
+    new.source := 'portal';
+    new.notes := null;
+    new.contacted_at := null;
+    v_problem := public.slot_problem(new.doctor_id, new.appointment_date, new.appointment_time, true);
+    if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
+    return new;
+  end if;
+
+  -- UPDATE
+  if old.status not in ('scheduled', 'confirmed') or old.appointment_date + old.appointment_time::time < v_now then
+    raise exception 'This appointment can no longer be changed online. Please call the hospital.';
+  end if;
+  new.patient_id := old.patient_id;
+  new.doctor_id := old.doctor_id;
+  new.type := old.type;
+  new.notes := old.notes;
+  new.source := old.source;
+  new.booking_ref := old.booking_ref;
+  new.contacted_at := old.contacted_at;
+
+  if new.status is distinct from old.status and new.status <> 'cancelled'
+     and not (new.status = 'scheduled' and (new.appointment_date, new.appointment_time) is distinct from (old.appointment_date, old.appointment_time)) then
+    raise exception 'You can only cancel an appointment.';
+  end if;
+  if new.status = 'cancelled' then
+    new.appointment_date := old.appointment_date;
+    new.appointment_time := old.appointment_time;
+    return new;
+  end if;
+
+  if (new.appointment_date, new.appointment_time) is distinct from (old.appointment_date, old.appointment_time) then
+    if old.appointment_date + old.appointment_time::time < v_now + make_interval(hours => v_cutoff) then
+      raise exception 'Appointments can be rescheduled online up to % hours before the visit. Please call the hospital.', v_cutoff;
+    end if;
+    v_problem := public.slot_problem(new.doctor_id, new.appointment_date, new.appointment_time, true);
+    if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
+    new.status := 'scheduled';   -- a moved visit needs to be confirmed again
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_appointments_patient_guard on public.appointments;
+create trigger trg_appointments_patient_guard before insert or update on public.appointments
+  for each row execute function public.guard_patient_appointment();
+
+-- ------------------------------------------------------------------ visit feedback
+create or replace function public.guard_feedback()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare a public.appointments;
+begin
+  select * into a from public.appointments where id = new.appointment_id;
+  if not found then raise exception 'Appointment not found.'; end if;
+  if a.status <> 'completed' then raise exception 'You can rate a visit once it is completed.'; end if;
+  if auth.uid() is not null and public.has_role('patient') then
+    if a.patient_id is distinct from public.my_patient_id() then raise exception 'You can only rate your own visits.'; end if;
+    new.source := 'portal';
+  end if;
+  new.patient_id := a.patient_id;
+  new.doctor_id := a.doctor_id;
+  new.comment := nullif(left(trim(coalesce(new.comment, '')), 1000), '');
+  new.tags := coalesce(new.tags, '{}');
+  return new;
+end $$;
+drop trigger if exists trg_visit_feedback_guard on public.visit_feedback;
+create trigger trg_visit_feedback_guard before insert on public.visit_feedback
+  for each row execute function public.guard_feedback();
+
+-- Public feedback link (/feedback/<appointment id>) sent after the visit. The appointment id is a random
+-- UUID, so it works like a one-time token; nothing personal beyond the first name is returned.
+drop function if exists public.feedback_context(uuid) cascade;
+create function public.feedback_context(p_appt uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  a public.appointments;
+  p public.patients;
+  d public.doctors;
+begin
+  select * into a from public.appointments where id = p_appt;
+  if not found or a.status <> 'completed' or a.appointment_date < current_date - 60 then
+    return jsonb_build_object('ok', false, 'error', 'This feedback link has expired.');
+  end if;
+  select * into p from public.patients where id = a.patient_id;
+  select * into d from public.doctors where id = a.doctor_id;
+  return jsonb_build_object('ok', true,
+    'first_name', split_part(p.full_name, ' ', 1),
+    'doctor', d.full_name, 'specialization', d.specialization,
+    'date', a.appointment_date,
+    'submitted', exists (select 1 from public.visit_feedback f where f.appointment_id = a.id));
+end $$;
+
+drop function if exists public.submit_feedback(uuid, int, text, text[], boolean) cascade;
+create function public.submit_feedback(p_appt uuid, p_rating int, p_comment text, p_tags text[] default '{}', p_recommend boolean default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare a public.appointments;
+begin
+  perform set_config('app.actor_name', 'Patient feedback', true);
+  select * into a from public.appointments where id = p_appt;
+  if not found or a.status <> 'completed' or a.appointment_date < current_date - 60 then
+    raise exception 'This feedback link has expired.';
+  end if;
+  if p_rating is null or p_rating not between 1 and 5 then raise exception 'Please choose a rating from 1 to 5 stars.'; end if;
+  begin
+    insert into public.visit_feedback (appointment_id, patient_id, rating, comment, tags, would_recommend, source)
+    values (p_appt, a.patient_id, p_rating, p_comment,
+            (select coalesce(array_agg(t), '{}') from unnest(coalesce(p_tags, '{}')) t where t ~ '^[a-z_]{2,30}$'),
+            p_recommend, case when auth.uid() is null then 'link' else 'portal' end);
+  exception when unique_violation then
+    raise exception 'Thank you — feedback for this visit has already been received.';
+  end;
+  return jsonb_build_object('ok', true);
+end $$;
+revoke all on function public.feedback_context(uuid) from public;
+revoke all on function public.submit_feedback(uuid, int, text, text[], boolean) from public;
+grant execute on function public.feedback_context(uuid) to anon, authenticated;
+grant execute on function public.submit_feedback(uuid, int, text, text[], boolean) to anon, authenticated;
+
+-- ask for feedback when a visit is marked completed
+create or replace function public.notify_feedback_request()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p public.patients; d public.doctors;
+begin
+  if new.status <> 'completed' or old.status = 'completed' or public.site_url() = '' then return new; end if;
+  select * into p from public.patients where id = new.patient_id;
+  select * into d from public.doctors where id = new.doctor_id;
+  perform public.notify_enqueue('feedback_request', p.phone, p.email, jsonb_build_object(
+    'name', split_part(p.full_name, ' ', 1), 'doctor', d.full_name,
+    'link', public.site_url() || '/feedback/' || new.id), 'appointments', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_feedback_request: %', sqlerrm;
+  return new;
+end $$;
+drop trigger if exists trg_appointments_feedback on public.appointments;
+create trigger trg_appointments_feedback after update on public.appointments
+  for each row execute function public.notify_feedback_request();
+
+-- ------------------------------------------------------------------ staff invitations
+create or replace function public.stamp_staff_invite()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.email := lower(trim(new.email));
+  new.invited_by_name := coalesce(new.invited_by_name, (select full_name from public.profiles where id = auth.uid()));
+  if exists (select 1 from auth.users u where lower(u.email) = new.email) then
+    raise exception 'An account with this email already exists — change its role in Users & Roles instead.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_staff_invites_stamp on public.staff_invites;
+create trigger trg_staff_invites_stamp before insert on public.staff_invites
+  for each row execute function public.stamp_staff_invite();
+
+create or replace function public.notify_staff_invite()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if public.site_url() = '' then return new; end if;   -- no website address yet: the owner shares the link manually
+  perform public.notify_enqueue('staff_invite', new.phone, new.email, jsonb_build_object(
+    'name', split_part(new.full_name, ' ', 1), 'role', initcap(new.role::text),
+    'link', public.site_url() || '/register?invite=' || new.token), 'staff_invites', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_staff_invite: %', sqlerrm;
+  return new;
+end $$;
+drop trigger if exists trg_staff_invites_notify on public.staff_invites;
+create trigger trg_staff_invites_notify after insert on public.staff_invites
+  for each row execute function public.notify_staff_invite();
+
+-- the sign-up page shows who the invite is for
+drop function if exists public.invite_lookup(text) cascade;
+create function public.invite_lookup(p_token text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select jsonb_build_object('ok', true, 'email', email, 'full_name', full_name, 'role', role, 'phone', phone)
+     from public.staff_invites where token = p_token and status = 'pending' and expires_at > now()),
+    jsonb_build_object('ok', false, 'error', 'This invitation link is invalid or has expired. Ask the hospital to send a new one.'))
+$$;
+revoke all on function public.invite_lookup(text) from public;
+grant execute on function public.invite_lookup(text) to anon, authenticated;
+
+-- New auth users: an accepted staff invite gives the invited role; the production bootstrap e-mail
+-- (supabase/production.sql) becomes the first owner; everyone else is a patient.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  next_mrn int;
+  v_name   text := coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(new.email, '@', 1));
+  v_phone  text := nullif(new.raw_user_meta_data ->> 'phone', '');
+  v_inv    public.staff_invites;
+  v_owner  text := lower((select data ->> 'owner_email' from public.app_settings where key = 'bootstrap'));
+begin
+  select * into v_inv from public.staff_invites
+  where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email)
+    and status = 'pending' and expires_at > now()
+  for update;
+
+  if found then
+    insert into public.profiles (id, full_name, email, role, phone)
+    values (new.id, coalesce(nullif(v_name, ''), v_inv.full_name), new.email, v_inv.role, coalesce(v_phone, v_inv.phone))
+    on conflict (id) do update set role = excluded.role;
+    update public.staff_invites set status = 'accepted', accepted_at = now() where id = v_inv.id;
+    -- link an existing doctor / staff record with the same e-mail
+    if v_inv.role = 'doctor' then
+      update public.doctors set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null;
+    else
+      update public.staff set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null;
+    end if;
+    return new;
+  end if;
+
+  if v_owner is not null and lower(new.email) = v_owner and not exists (select 1 from public.profiles where role = 'owner') then
+    insert into public.profiles (id, full_name, email, role, phone) values (new.id, v_name, new.email, 'owner', v_phone)
+    on conflict (id) do update set role = 'owner';
+    return new;
+  end if;
+
+  insert into public.profiles (id, full_name, email, role, phone)
+  values (new.id, v_name, new.email, 'patient', v_phone)
+  on conflict (id) do nothing;
+
+  perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
+  select coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::int), 100000) + 1 into next_mrn from public.patients;
+  insert into public.patients (profile_id, mrn, full_name, email, phone, gender, status)
+  values (new.id, 'DCH-' || next_mrn, v_name, new.email, v_phone, 'other', 'outpatient')
+  on conflict (profile_id) do nothing;
+  return new;
+end $$;
+
+-- ------------------------------------------------------------------ go-live helpers (owner only)
+-- Demo seed rows use ids shaped d0cXXXXX-0000-4000-8000-XXXXXXXXXXXX, which random UUIDs never produce.
+create or replace function public.is_demo_id(p uuid)
+returns boolean language sql immutable as $$ select p::text ~ '^d0c[0-9]{5}-0000-4000-8000-[0-9]{12}$' $$;
+
+drop function if exists public.demo_status() cascade;
+create function public.demo_status()
+returns jsonb language plpgsql stable security definer set search_path = public, extensions as $$
+declare u auth.users;
+begin
+  if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  select * into u from auth.users where id = auth.uid();
+  return jsonb_build_object(
+    'demo_accounts_active', (select count(*) from auth.users a where public.is_demo_id(a.id) and a.id <> auth.uid()
+                             and (a.banned_until is null or a.banned_until < now())),
+    'owner_is_demo_email', lower(u.email) like '%@dchospital.com',
+    'owner_has_demo_password', coalesce(u.encrypted_password = extensions.crypt('Demo@123', u.encrypted_password), false),
+    'demo_rows', (select count(*) from public.patients where public.is_demo_id(id))
+               + (select count(*) from public.appointments where public.is_demo_id(id))
+               + (select count(*) from public.invoices where public.is_demo_id(id)));
+end $$;
+
+-- Locks the demo logins (random password + banned), except the account running this.
+drop function if exists public.lock_demo_accounts() cascade;
+create function public.lock_demo_accounts()
+returns int language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v_count int;
+begin
+  if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  update auth.users set encrypted_password = extensions.crypt(encode(extensions.gen_random_bytes(24), 'hex'), extensions.gen_salt('bf')),
+                        banned_until = 'infinity'
+  where public.is_demo_id(id) and id <> auth.uid();
+  get diagnostics v_count = row_count;
+  insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
+  values ('profiles', null, 'update', auth.uid(), (select full_name from public.profiles where id = auth.uid()), 'owner',
+          'Locked ' || v_count || ' demo accounts', '{}'::jsonb);
+  return v_count;
+end $$;
+
+-- Deletes the demo patients / visits / bills / staff records. Real records (random ids) are untouched.
+drop function if exists public.clear_demo_data() cascade;
+create function public.clear_demo_data()
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare v_total int := 0; v_n int; t text;
+begin
+  if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  perform set_config('app.actor_name', 'Go-live cleanup', true);
+  foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
+                           'doctor_leaves', 'site_enquiries', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
+  loop
+    execute format('delete from public.%I where public.is_demo_id(id)', t);
+    get diagnostics v_n = row_count;
+    v_total := v_total + v_n;
+  end loop;
+  return v_total;
+end $$;
+revoke all on function public.demo_status() from public, anon;
+revoke all on function public.lock_demo_accounts() from public, anon;
+revoke all on function public.clear_demo_data() from public, anon;
+grant execute on function public.demo_status() to authenticated;
+grant execute on function public.lock_demo_accounts() to authenticated;
+grant execute on function public.clear_demo_data() to authenticated;
+
+-- ------------------------------------------------------------------ WhatsApp chatbot state
+alter table public.wa_sessions enable row level security;   -- no policies: Edge Function (service role) only
+revoke all on public.wa_sessions from anon, authenticated;
+grant all on public.wa_sessions to service_role;
+grant select, insert, update on public.visit_feedback to service_role;
+grant select on public.appointments, public.doctors, public.patients, public.departments to service_role;
+
+-- tables created in this section need the standard grants too
+grant select, insert, update, delete on public.visit_feedback, public.staff_invites to authenticated;
+
+-- ------------------------------------------------------------------ WhatsApp chatbot helpers (service role only)
+-- The sender's number is verified by WhatsApp itself, so the bot can book / list / cancel for that number.
+create or replace function public.bot_free_slots(p_doctor uuid, p_limit int default 8)
+returns table (slot_date date, slot_time text)
+language sql stable security definer set search_path = public as $$
+  with days as (
+    select (now() at time zone 'Asia/Kolkata')::date + g as d
+    from generate_series(0, least(coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30), 60)) g
+  ), times as (
+    select to_char(time '08:00' + make_interval(mins => 30 * g), 'HH24:MI') as t from generate_series(0, 21) g
+  )
+  select days.d, times.t
+  from days cross join times
+  where public.slot_problem(p_doctor, days.d, times.t, true) is null
+    and not exists (select 1 from public.appointments a
+                    where a.doctor_id = p_doctor and a.appointment_date = days.d and left(a.appointment_time, 5) = times.t
+                      and a.status not in ('cancelled', 'no_show'))
+  order by 1, 2
+  limit greatest(1, least(p_limit, 20))
+$$;
+
+create or replace function public.bot_patient(p_phone text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('id', p.id, 'full_name', p.full_name, 'mrn', p.mrn)
+  from public.patients p
+  where public.norm_phone(p.phone) = public.norm_phone(p_phone)
+  order by p.created_at
+  limit 1
+$$;
+
+create or replace function public.bot_upcoming(p_phone text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', a.id, 'ref', coalesce(a.booking_ref, upper(left(a.id::text, 8))), 'date', a.appointment_date,
+           'time', left(a.appointment_time, 5), 'status', a.status, 'doctor', d.full_name) order by a.appointment_date, a.appointment_time), '[]'::jsonb)
+  from public.appointments a
+  join public.patients p on p.id = a.patient_id
+  join public.doctors d on d.id = a.doctor_id
+  where public.norm_phone(p.phone) = public.norm_phone(p_phone)
+    and a.appointment_date >= (now() at time zone 'Asia/Kolkata')::date
+    and a.status in ('scheduled', 'confirmed')
+$$;
+
+create or replace function public.whatsapp_cancel_appointment(p_phone text, p_appt uuid)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  perform set_config('app.actor_name', 'WhatsApp bot', true);
+  perform set_config('app.actor_role', 'public', true);
+  update public.appointments a set status = 'cancelled'
+  from public.patients p
+  where a.id = p_appt and p.id = a.patient_id and public.norm_phone(p.phone) = public.norm_phone(p_phone)
+    and a.status in ('scheduled', 'confirmed') and a.appointment_date >= (now() at time zone 'Asia/Kolkata')::date
+  returning a.id into v_id;
+  if v_id is null then raise exception 'This appointment cannot be cancelled here. Please call the hospital.'; end if;
+  return true;
+end $$;
+
+revoke all on function public.bot_free_slots(uuid, int) from public, anon, authenticated;
+revoke all on function public.bot_patient(text) from public, anon, authenticated;
+revoke all on function public.bot_upcoming(text) from public, anon, authenticated;
+revoke all on function public.whatsapp_cancel_appointment(text, uuid) from public, anon, authenticated;
+grant execute on function public.bot_free_slots(uuid, int) to service_role;
+grant execute on function public.bot_patient(text) to service_role;
+grant execute on function public.bot_upcoming(text) to service_role;
+grant execute on function public.whatsapp_cancel_appointment(text, uuid) to service_role;
 
 commit;
 

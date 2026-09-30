@@ -1,3 +1,4 @@
+import type { SiteSettings } from '../site/cms/types'
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { Role, TableName, Profile, Patient, Doctor, DB } from '../types'
@@ -11,6 +12,8 @@ export interface ResourceCtx {
   me: { patient: Patient | null; doctor: Doctor | null }
   lk: Lookups
   navigate: (to: string) => void
+  /** hospital details from Settings (letterhead for downloads, booking rules) */
+  site: SiteSettings
   /** fire-and-forget side-effect helpers (invalidate caches afterwards) */
   patch: <T extends TableName>(table: T, id: string, patch: Partial<Row<T>>) => Promise<void>
   insert: <T extends TableName>(table: T, row: Partial<Row<T>>) => Promise<void>

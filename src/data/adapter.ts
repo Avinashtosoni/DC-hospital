@@ -15,7 +15,8 @@ export interface DataAdapter {
   reset?(): Promise<void>
 }
 
-export interface SignUpInput { full_name: string; email: string; password: string; phone?: string }
+export interface SignUpInput { full_name: string; email: string; password: string; phone?: string; invite_token?: string }
+export type InviteInfo = { ok: true; email: string; full_name: string; role: Profile['role']; phone?: string | null } | { ok: false; error: string }
 
 export interface AuthAdapter {
   getCurrent(): Promise<Profile | null>
