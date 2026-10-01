@@ -155,7 +155,9 @@ create policy notification_outbox_owner_read on public.notification_outbox for s
 -- Queue one message per enabled channel for an event. Never raises (a failed notification must not
 -- roll back the booking / invoice that triggered it).
 drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid) cascade;
-create function public.notify_enqueue(p_event text, p_phone text, p_email text, p_vars jsonb, p_related_table text default null, p_related_id uuid default null)
+drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid, text[]) cascade;
+-- p_only: restrict to these channels (e.g. the booking OTP channel the visitor picked); null = every enabled channel
+create function public.notify_enqueue(p_event text, p_phone text, p_email text, p_vars jsonb, p_related_table text default null, p_related_id uuid default null, p_only text[] default null)
 returns int language plpgsql volatile security definer set search_path = public as $$
 declare
   n        jsonb := (select data -> 'notifications' from public.app_settings where key = 'app');
@@ -181,6 +183,7 @@ begin
   foreach ch in array array['sms', 'whatsapp', 'email'] loop
     continue when coalesce((n -> 'events' -> p_event ->> ch)::boolean, false) is not true;
     continue when coalesce((n -> ch ->> 'enabled')::boolean, false) is not true;
+    continue when p_only is not null and not (ch = any (p_only));
     if ch = 'email' then
       v_to := nullif(lower(trim(coalesce(p_email, ''))), '');
       continue when v_to is null or v_to !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$';
@@ -188,7 +191,8 @@ begin
       v_to := right(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), 10);
       continue when v_to !~ '^[6-9][0-9]{9}$';
     end if;
-    v_body := coalesce(tpl ->> 'text', '');
+    -- WhatsApp may have its own wording (bold, emoji, line breaks); otherwise the shared text is used
+    v_body := case when ch = 'whatsapp' and coalesce(tpl ->> 'waText', '') <> '' then tpl ->> 'waText' else coalesce(tpl ->> 'text', '') end;
     v_subj := coalesce(tpl ->> 'subject', '');
     continue when v_body = '';
     for k in select jsonb_object_keys(v_vars) loop
@@ -204,7 +208,7 @@ exception when others then
   raise warning 'notify_enqueue(%) failed: %', p_event, sqlerrm;
   return 0;
 end $$;
-revoke all on function public.notify_enqueue(text, text, text, jsonb, text, uuid) from public, anon, authenticated;
+revoke all on function public.notify_enqueue(text, text, text, jsonb, text, uuid, text[]) from public, anon, authenticated;
 
 create or replace function public.fmt_appt_time(t text)
 returns text language sql immutable as $$ select trim(to_char(t::time, 'FMHH12:MI AM')) $$;

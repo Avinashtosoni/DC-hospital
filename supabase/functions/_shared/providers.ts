@@ -9,7 +9,7 @@ export interface Ctx { n: any; secrets: Record<string, string>; hospital: string
 export interface Result { ok: boolean; ref?: string; error?: string }
 
 /** Errors that will not fix themselves on retry (bad config) → mark failed immediately. */
-export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template/i.test(error)
+export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the API key|session was not found|Chat ID format/i.test(error)
 /** Wait before retry n (1-based): 2, 4, 8 … minutes. */
 export const retryDelayMs = (attempts: number) => 2 ** Math.max(1, attempts) * 60_000
 
@@ -70,12 +70,69 @@ async function sms(m: Msg, c: Ctx): Promise<Result> {
 }
 
 // ------------------------------------------------------------------ WhatsApp
+/** Mobile number → WhatsApp Web chat ID using the configured format (default 91{phone}@c.us). */
+export function chatIdFor(recipient: string, format?: string) {
+  const fmt = (format || '').trim() || '91{phone}@c.us'
+  if (!fmt.includes('{phone}')) throw new Error('Chat ID format must contain {phone}')
+  return fmt.replace('{phone}', recipient.replace(/\D/g, '').slice(-10))
+}
+/** Chat ID / JID from an incoming message (919876543210@c.us, whatsapp:+91…, 91…) → 10-digit mobile, or '' for groups etc. */
+export function phoneFromChatId(id: string) {
+  // only real phone JIDs: @lid is a privacy ID (not a number), groups / channels / status are not people
+  if (!id || (id.includes('@') && !/@(c\.us|s\.whatsapp\.net)$/.test(id))) return ''
+  const digits = id.split('@')[0].replace(/\D/g, '')
+  return digits.length >= 10 ? digits.slice(-10) : ''
+}
+const openwaBase = (url: string) => {
+  const u = (url ?? '').trim().replace(/\/+$/, '').replace(/\/api$/, '')
+  if (!/^https?:\/\//.test(u)) throw new Error('WA CRM / OpenWA URL must start with https:// (e.g. https://wacrm.example.in)')
+  return u
+}
+
+/** Is the OpenWA WhatsApp session connected? Used by the Send-test button for a clear error. */
+export async function openwaStatus(c: Ctx): Promise<{ ok: boolean; status?: string; phone?: string; error?: string }> {
+  const cfg = c.n.whatsapp ?? {}
+  try {
+    need(cfg.openwaSession, 'OpenWA session ID'); need(c.secrets.openwa_api_key, 'WA CRM / OpenWA API key')
+    const r = await fetch(`${openwaBase(cfg.openwaUrl)}/api/sessions/${encodeURIComponent(cfg.openwaSession)}`, { headers: { 'X-API-Key': c.secrets.openwa_api_key }, redirect: 'manual' })
+    if (r.status === 401) throw new Error('OpenWA rejected the API key (401)')
+    if (r.status === 403) throw new Error('This API key is not allowed to use that session (403)')
+    if (r.status === 404) throw new Error('OpenWA session was not found — check the session ID')
+    if (!r.ok) throw new Error(`OpenWA HTTP ${r.status}: ${String(await err(r)).slice(0, 160)}`)
+    const j = await r.json()
+    return { ok: j.status === 'ready', status: j.status, phone: j.phone ?? undefined, error: j.status === 'ready' ? undefined : `WhatsApp session is "${j.status}" — open WA CRM and scan the QR code / reconnect` }
+  } catch (e) { return { ok: false, error: (e as Error).message } }
+}
+
+async function openwa(m: Msg, c: Ctx): Promise<Result> {
+  const cfg = c.n.whatsapp ?? {}
+  need(cfg.openwaSession, 'OpenWA session ID'); need(c.secrets.openwa_api_key, 'WA CRM / OpenWA API key')
+  const base = openwaBase(cfg.openwaUrl)
+  const chatId = chatIdFor(m.recipient, cfg.chatIdFormat)
+  const r = await fetch(`${base}/api/sessions/${encodeURIComponent(cfg.openwaSession)}/messages/send-text`, {
+    method: 'POST', redirect: 'manual',   // never re-send the key to a redirect target
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': c.secrets.openwa_api_key },
+    body: JSON.stringify({ chatId, text: m.body }),
+  })
+  if (!r.ok) {
+    const msg = String(await err(r)).slice(0, 200)
+    if (r.status === 401) throw new Error('OpenWA rejected the API key (401)')
+    if (r.status === 404) throw new Error(`OpenWA session was not found — check the session ID (${msg})`)
+    if (r.status === 409) throw new Error('WhatsApp session is not connected (409) — open WA CRM and scan the QR code')
+    if (r.status === 429) throw new Error(`OpenWA is pacing sends (429) — will retry: ${msg}`)
+    throw new Error(`OpenWA HTTP ${r.status}: ${msg}`)
+  }
+  const j = await r.json().catch(() => ({}))
+  return { ok: true, ref: j.messageId ?? j.id ?? j.waMessageId ?? chatId }
+}
+
 async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
   const cfg = c.n.whatsapp ?? {}
   const tpl = c.n.templates?.[m.event] ?? {}
   const to = m.recipient.replace(/\D/g, '').slice(-10)
   const lang = cfg.language || 'en'
   switch (cfg.provider) {
+    case 'openwa': return openwa(m, c)
     case 'meta': {
       need(cfg.phoneNumberId, 'WhatsApp phone number ID'); need(c.secrets.meta_access_token, 'Meta access token')
       let payload: any

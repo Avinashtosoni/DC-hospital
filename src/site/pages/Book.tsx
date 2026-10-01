@@ -12,7 +12,7 @@ import { useContact, useSite } from '../cms/content'
 import { iconFor } from '../cms/icons'
 import { useSeo } from '../hooks'
 import { AmbientBackdrop, Breadcrumbs, inr } from '../ui'
-import { BookingError, bookingApi, icsFor, loadReceipt, phone10, prettyPhone, saveReceipt, slotsFor as slotsForRaw, validMobile, type BookingReceipt } from '../../booking/api'
+import { BookingError, bookingApi, icsFor, loadReceipt, phone10, prettyPhone, saveReceipt, slotsFor as slotsForRaw, validMobile, type BookingReceipt, type OtpChannel } from '../../booking/api'
 import { BOOK_QK, buildDirectory, firstFree, useBookingData, useDoctorDays, whenLabel, type BookDoc } from '../../booking/useBooking'
 import { InvoiceDocument, printInvoice } from '../../components/InvoiceDocument'
 import { LanguageSwitch, useT } from '../../i18n'
@@ -461,7 +461,11 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   const phone = phone10(f.phone)
   const verified = token && token.phone === phone ? token.token : null
   const [code, setCode] = useState('')
-  const [sent, setSent] = useState<{ at: number; demo: string | null } | null>(null)
+  const [sent, setSent] = useState<{ at: number; demo: string | null; channel: OtpChannel | null } | null>(null)
+  // channels that can deliver the code (null = still loading); the preferred one is listed first
+  const [channels, setChannels] = useState<OtpChannel[] | null>(null)
+  const preferred: OtpChannel = settings.booking.otpPreferred ?? 'whatsapp'
+  const ordered = (channels ?? []).slice().sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : 0))
   const [busy, setBusy] = useState<'send' | 'verify' | 'book' | null>(null)
   const [err, setErr] = useState('')
   const [now, setNow] = useState(Date.now())
@@ -469,17 +473,27 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t) }, [])
   const wait = sent ? Math.max(0, 30 - Math.floor((now - sent.at) / 1000)) : 0
 
-  const send = async () => {
+  const send = async (channel?: OtpChannel) => {
     setBusy('send'); setErr('')
     try {
-      const r = await bookingApi.requestOtp(phone, settings)
-      setSent({ at: Date.now(), demo: r.demo_code ?? null }); setCode('')
-      toast.success(t('Code sent to {phone}', { phone: prettyPhone(phone) }))
+      const r = await bookingApi.requestOtp(phone, settings, channel)
+      const used = r.channels[0] ?? channel ?? null
+      setSent({ at: Date.now(), demo: r.demo_code ?? null, channel: used }); setCode('')
+      toast.success(used === 'whatsapp' ? t('Code sent on WhatsApp to {phone}', { phone: prettyPhone(phone) }) : t('Code sent to {phone}', { phone: prettyPhone(phone) }))
       setTimeout(() => inputRef.current?.focus(), 50)
     } catch (e) { setErr((e as Error).message) } finally { setBusy(null) }
   }
+  // with a single channel (or none) the code goes out straight away; with WhatsApp + SMS the visitor picks
   const sentOnce = useRef(false)
-  useEffect(() => { if (!verified && !sentOnce.current) { sentOnce.current = true; send() } }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (verified || sentOnce.current) return
+    sentOnce.current = true
+    bookingApi.otpChannels().catch(() => [] as OtpChannel[]).then((list) => {
+      setChannels(list)
+      if (list.length <= 1) send(list[0])
+    })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const other = sent?.channel ? ordered.find((c) => c !== sent.channel) : undefined
 
   const verifyAndBook = async (c = code) => {
     if (!/^\d{6}$/.test(c)) return setErr(t('Enter the 6-digit code'))
@@ -502,13 +516,46 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
     </div>
   )
 
+  // WhatsApp + SMS available and nothing sent yet → let the visitor choose
+  if (!sent && ordered.length > 1) return (
+    <div>
+      <StepTitle title={t('Verify your mobile')} sub={<>{t('Where should we send your 6-digit code for')} <b className="text-peri-900">{prettyPhone(phone)}</b>? · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
+      <div className="grid gap-3 sm:grid-cols-2" role="group" aria-label={t('Send the code by')}>
+        {ordered.map((c, i) => {
+          const wa = c === 'whatsapp'
+          return (
+            <button key={c} type="button" disabled={!!busy} onClick={() => send(c)}
+              className={cn('group flex items-center gap-4 rounded-2xl border-2 p-4 text-left transition disabled:opacity-60',
+                i === 0 ? (wa ? 'border-emerald-500 bg-emerald-50/70 hover:bg-emerald-50' : 'border-peri-600 bg-peri-50 hover:bg-peri-100/70') : 'border-peri-200 bg-white hover:border-peri-400')}>
+              <span className={cn('grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-white', wa ? 'bg-[#25D366]' : 'bg-peri-700')}>
+                {busy === 'send' ? <Loader2 className="h-6 w-6 animate-spin" /> : wa ? <MessageCircle className="h-6 w-6" /> : <Smartphone className="h-6 w-6" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 font-display text-base font-bold text-peri-900">{wa ? t('Get code on WhatsApp') : t('Get code by SMS')}
+                  {i === 0 && <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700 ring-1 ring-emerald-200">{t('Recommended')}</span>}</span>
+                <span className="mt-0.5 block text-xs text-slate-500">{wa ? t('Instant, free — arrives as a WhatsApp chat') : t('Text message to your mobile')}</span>
+              </span>
+              <ChevronRight className="h-5 w-5 shrink-0 text-peri-400 transition group-hover:translate-x-0.5" />
+            </button>
+          )
+        })}
+      </div>
+      {err && <p role="alert" className="mt-3 text-sm font-medium text-rose-600">{err}</p>}
+      <p className="mt-4 flex items-start gap-2 text-xs text-slate-500"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-peri-500" />{t('Your booking confirmation will also be sent on WhatsApp / SMS to this number.')}</p>
+      <p className="mt-2 text-xs text-slate-500">{t('Already registered?')} <Link to="/login" className="font-semibold text-peri-700 underline">{t('Sign in')}</Link> {t('to book from your patient portal without a code.')}</p>
+    </div>
+  )
+
   return (
     <div>
-      <StepTitle title={t('Verify your mobile')} sub={<>{t('Enter the 6-digit code sent to')} <b className="text-peri-900">{prettyPhone(phone)}</b> · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
+      <StepTitle title={t('Verify your mobile')} sub={channels === null && !sent ? t('Sending code…') : <>{sent?.channel === 'whatsapp' ? t('Enter the 6-digit code sent on WhatsApp to') : t('Enter the 6-digit code sent to')} <b className="text-peri-900">{prettyPhone(phone)}</b> · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
+      {sent?.channel === 'whatsapp' && !sent.demo && (
+        <p className="mb-4 flex items-center gap-2 rounded-2xl bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800"><MessageCircle className="h-4 w-4 shrink-0" />{t('Open WhatsApp — the code is in a chat from {hospital}.', { hospital: settings.brand?.shortName || settings.name })}</p>
+      )}
       {sent?.demo && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <Smartphone className="h-5 w-5 shrink-0 text-amber-600" />
-          <span className="flex-1">{t('Demo mode — no SMS gateway is connected yet. Your code is')} <b className="font-mono text-base tracking-[.25em]">{sent.demo}</b></span>
+          <span className="flex-1">{sent.channel === 'whatsapp' ? t('Demo mode — WhatsApp is simulated. Your code is') : t('Demo mode — no SMS gateway is connected yet. Your code is')} <b className="font-mono text-base tracking-[.25em]">{sent.demo}</b></span>
           <button type="button" onClick={() => { setCode(sent.demo!); verifyAndBook(sent.demo!) }} className="rounded-full bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">{t('Use code')}</button>
         </div>
       )}
@@ -524,7 +571,10 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-slate-500">
           {busy === 'send' ? <span className="inline-flex items-center gap-1.5"><Loader2 className="h-4 w-4 animate-spin" />{t('Sending code…')}</span>
             : wait > 0 ? <span>{t('Resend code in {s}s', { s: wait })}</span>
-              : <button type="button" onClick={send} className="font-semibold text-peri-800 underline">{sent ? t('Resend code') : t('Send code')}</button>}
+              : <>
+                <button type="button" onClick={() => send(sent?.channel ?? undefined)} className="font-semibold text-peri-800 underline">{sent ? t('Resend code') : t('Send code')}</button>
+                {other && <><span className="text-slate-300">·</span><button type="button" onClick={() => send(other)} className="font-semibold text-peri-800 underline">{other === 'sms' ? t('Send by SMS instead') : t('Send on WhatsApp instead')}</button></>}
+              </>}
           <span className="text-slate-300">·</span><span>{t('Code valid for 10 minutes')}</span>
         </div>
         <NextBar type="submit" disabled={code.length !== 6} loading={busy === 'verify' || busy === 'book'} label={busy === 'book' ? t('Confirming your appointment…') : busy === 'verify' ? t('Verifying…') : t('Verify & confirm booking')} />

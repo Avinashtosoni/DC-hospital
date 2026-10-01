@@ -6,6 +6,8 @@
 //   Meta Cloud API  GET  ?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…   (webhook verification)
 //                   POST JSON { entry: [{ changes: [{ value: { messages: [...] } }] }] }  — signed with X-Hub-Signature-256
 //   Twilio          POST form  From=whatsapp:+91…&Body=…                               — signed with X-Twilio-Signature
+//   OpenWA / WA CRM POST JSON { event: "message.received", sessionId, data: { id, from, body, fromMe } }
+//                   — signed with X-OpenWA-Signature: sha256=<hmac of the raw body> (secret required)
 // In-app simulator (Settings → Notifications → WhatsApp chatbot):
 //   POST JSON { simulate: { from: "98…", text: "hi" } } with a signed-in owner / receptionist token → { state, replies }
 //
@@ -15,6 +17,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { botReply, type BotDeps, type BotState } from '../_shared/bot.ts'
 import { deliver, type Ctx } from '../_shared/providers.ts'
+import { parseOpenwa } from '../_shared/openwa.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -75,6 +78,7 @@ async function hmac(alg: 'SHA-256' | 'SHA-1', key: string, data: string) {
 }
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b))
+const seen = new Set<string>()   // recently handled OpenWA message ids (per instance)
 const safeEq = (a: string, b: string) => a.length === b.length && [...a].reduce((d, c, i) => d | (c.charCodeAt(0) ^ b.charCodeAt(i)), 0) === 0
 
 // ------------------------------------------------------------------ handler
@@ -124,6 +128,22 @@ Deno.serve(async (req) => {
     const phone = phone10(body.simulate.from)
     if (!/^[6-9]\d{9}$/.test(phone)) return json({ error: 'Enter a valid 10-digit mobile number.' }, 400)
     return json(await converse(phone, String(body.simulate.text ?? ''), setup))
+  }
+
+  // ---- OpenWA / WA CRM (self-hosted WhatsApp Web gateway) — see ../_shared/openwa.ts
+  const owaSig = req.headers.get('x-openwa-signature')
+  if (owaSig !== null || (typeof body.event === 'string' && body.data && body.sessionId)) {
+    const cfg = setup.ctx.n.whatsapp ?? {}
+    const m = await parseOpenwa(raw, owaSig, { secret: setup.ctx.secrets.openwa_webhook_secret, session: cfg.openwaSession })
+    if (m.kind === 'reject') return new Response(m.reason, { status: m.status })
+    if (m.kind === 'ignore' || !setup.bot || cfg.provider !== 'openwa') return json({ ok: true })
+    if (m.key && seen.has(m.key)) return json({ ok: true, duplicate: true })   // OpenWA retries deliveries
+    if (m.key) { seen.add(m.key); if (seen.size > 500) seen.delete(seen.values().next().value!) }
+    try {
+      const res = await converse(m.phone, m.text, setup)
+      for (const reply of res.replies) await deliver({ event: 'bot', channel: 'whatsapp', recipient: m.phone, body: reply, vars: {} }, setup.ctx)
+    } catch (e) { console.error('whatsapp-bot (openwa)', e) }
+    return json({ ok: true })
   }
 
   // ---- Meta Cloud API

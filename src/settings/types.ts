@@ -13,6 +13,9 @@ export interface EventTemplate {
   subject: string
   /** Approved WhatsApp template name (Meta / Interakt). Empty = send plain text (only works inside a 24h chat window). */
   waTemplate: string
+  /** Optional WhatsApp-only wording (*bold*, emoji, line breaks). Empty = `text` is used on WhatsApp too.
+   *  Sent as-is by OpenWA / Twilio / webhook; with Meta / Interakt it is used when no approved template is set. */
+  waText?: string
   /** Comma-separated tokens that fill the WhatsApp template's {{1}}, {{2}}… in order. */
   waParams: string
   /** DLT template ID (India) — used by MSG91 flows and Fast2SMS DLT route. */
@@ -32,13 +35,18 @@ export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: C
   { id: 'staff_invite', label: 'Staff invitation', hint: 'Owner invites a team member from Users & Roles', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'role', 'link', 'hospital'] },
 ]
 
-const T = (text: string, subject: string, waTemplate = '', waParams = ''): EventTemplate => ({ text, subject, waTemplate, waParams, smsTemplateId: '' })
+const T = (text: string, subject: string, waTemplate = '', waParams = '', waText = ''): EventTemplate => ({ text, subject, waTemplate, waParams, smsTemplateId: '', waText })
 export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
-  otp: T('{code} is your {hospital} booking code. It is valid for 10 minutes. Do not share it with anyone.', 'Your booking code', '', 'code'),
-  appointment_booked: T('Hi {name}, your appointment with {doctor} is confirmed for {date} at {time}. Ref {ref}. Please arrive 15 min early. {hospital} {hospital_phone}', 'Appointment confirmed — {date} at {time}', '', 'name,doctor,date,time,ref'),
-  appointment_reminder: T('Reminder: {name}, you have an appointment with {doctor} tomorrow, {date} at {time}. Ref {ref}. {hospital} {hospital_phone}', 'Reminder: your appointment tomorrow at {time}', '', 'name,doctor,date,time'),
-  appointment_rescheduled: T('Hi {name}, your appointment with {doctor} has been moved to {date} at {time}. Ref {ref}. Call {hospital_phone} if this does not suit you. {hospital}', 'Your appointment has been rescheduled', '', 'name,doctor,date,time'),
-  appointment_cancelled: T('Hi {name}, your appointment with {doctor} on {date} at {time} has been cancelled. Call {hospital_phone} to rebook. {hospital}', 'Your appointment was cancelled', '', 'name,doctor,date,time'),
+  otp: T('{code} is your {hospital} booking code. It is valid for 10 minutes. Do not share it with anyone.', 'Your booking code', '', 'code',
+    '🔐 *{code}* is your {hospital} verification code.\n\nIt is valid for 10 minutes. Do not share it with anyone — our staff will never ask for it.'),
+  appointment_booked: T('Hi {name}, your appointment with {doctor} is confirmed for {date} at {time}. Ref {ref}. Please arrive 15 min early. {hospital} {hospital_phone}', 'Appointment confirmed — {date} at {time}', '', 'name,doctor,date,time,ref',
+    '✅ *Appointment confirmed*\n\nHi {name},\n🩺 {doctor}\n🗓 {date} at {time}\n🔖 Ref: *{ref}*\n\nPlease arrive 15 minutes early with a photo ID. Pay at the reception.\n📍 {address}\n📞 {hospital_phone}\n\n— {hospital}'),
+  appointment_reminder: T('Reminder: {name}, you have an appointment with {doctor} tomorrow, {date} at {time}. Ref {ref}. {hospital} {hospital_phone}', 'Reminder: your appointment tomorrow at {time}', '', 'name,doctor,date,time',
+    '⏰ *Reminder*\n\nHi {name}, you have an appointment *tomorrow*.\n🩺 {doctor}\n🗓 {date} at {time}\n🔖 Ref: {ref}\n\nNeed to change it? Call {hospital_phone}.\n— {hospital}'),
+  appointment_rescheduled: T('Hi {name}, your appointment with {doctor} has been moved to {date} at {time}. Ref {ref}. Call {hospital_phone} if this does not suit you. {hospital}', 'Your appointment has been rescheduled', '', 'name,doctor,date,time',
+    '🔁 *Appointment rescheduled*\n\nHi {name}, your visit with {doctor} is now on\n🗓 *{date} at {time}*\n🔖 Ref: {ref}\n\nCall {hospital_phone} if this does not suit you.\n— {hospital}'),
+  appointment_cancelled: T('Hi {name}, your appointment with {doctor} on {date} at {time} has been cancelled. Call {hospital_phone} to rebook. {hospital}', 'Your appointment was cancelled', '', 'name,doctor,date,time',
+    '❌ *Appointment cancelled*\n\nHi {name}, your visit with {doctor} on {date} at {time} has been cancelled.\n\nTo book again, call {hospital_phone} or reply *1* here.\n— {hospital}'),
   invoice_created: T('Hi {name}, invoice {invoice} for {amount} has been generated at {hospital}. Due {due_date}.', 'Invoice {invoice} from {hospital}', '', 'name,invoice,amount'),
   payment_received: T('Thank you {name}. We received {amount} by {method} against invoice {invoice}. {hospital}', 'Payment received — {amount}', '', 'name,amount,invoice'),
   lab_report_ready: T('Hi {name}, your {test} report is ready. View it in the patient portal or collect it from the lab. {hospital} {hospital_phone}', 'Your {test} report is ready', '', 'name,test'),
@@ -48,12 +56,17 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
 
 export type EmailProvider = 'resend' | 'sendgrid' | 'smtp'
 export type SmsProvider = 'msg91' | 'twilio' | 'fast2sms' | 'webhook'
-export type WhatsappProvider = 'meta' | 'twilio' | 'interakt' | 'webhook'
+/** openwa = self-hosted OpenWA / WA CRM gateway (WhatsApp Web session, free text, no templates) */
+export type WhatsappProvider = 'openwa' | 'meta' | 'twilio' | 'interakt' | 'webhook'
 
 export interface NotificationSettings {
   email: { enabled: boolean; provider: EmailProvider; fromName: string; fromEmail: string; replyTo: string; smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string }
   sms: { enabled: boolean; provider: SmsProvider; senderId: string; dltEntityId: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string }
   whatsapp: { enabled: boolean; provider: WhatsappProvider; phoneNumberId: string; businessAccountId: string; language: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string
+    /** OpenWA / WA CRM: gateway origin (e.g. https://wacrm.example.in) and the WhatsApp session ID */
+    openwaUrl: string; openwaSession: string
+    /** How a mobile number becomes a chat ID. {phone} = 10-digit number. Default 91{phone}@c.us */
+    chatIdFormat: string
     /** answer incoming chats with the booking bot (supabase/functions/whatsapp-bot) */
     botEnabled: boolean }
   events: Record<NotifyEvent, Partial<Record<Channel, boolean>>>
@@ -74,6 +87,8 @@ export const SECRET_FIELDS: Record<string, { label: string; placeholder: string 
   whatsapp_webhook_secret: { label: 'Webhook bearer token (optional)', placeholder: 'Sent as Authorization: Bearer …' },
   whatsapp_verify_token: { label: 'Chatbot webhook verify token', placeholder: 'Any long random text — paste the same in Meta → Webhooks' },
   meta_app_secret: { label: 'Meta app secret (signs incoming webhooks)', placeholder: 'App settings → Basic → App secret' },
+  openwa_api_key: { label: 'WA CRM / OpenWA API key', placeholder: 'owa_k1_…  (operator role is enough)' },
+  openwa_webhook_secret: { label: 'OpenWA webhook secret (signs incoming messages)', placeholder: 'Same secret you set on the OpenWA webhook' },
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -118,9 +133,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   notifications: {
     email: { enabled: false, provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
     sms: { enabled: false, provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
-    whatsapp: { enabled: false, provider: 'meta', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', botEnabled: false },
+    whatsapp: { enabled: false, provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', botEnabled: false },
     events: {
-      otp: { sms: true, whatsapp: false },
+      otp: { sms: true, whatsapp: true },
       appointment_booked: { sms: true, whatsapp: true, email: true },
       appointment_reminder: { sms: true, whatsapp: true, email: false },
       appointment_rescheduled: { sms: true, whatsapp: true, email: true },

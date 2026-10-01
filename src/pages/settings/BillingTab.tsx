@@ -1,6 +1,6 @@
 import { CalendarPlus, ExternalLink, Receipt } from 'lucide-react'
 import { Field, Input, Select, Textarea } from '../../components/ui'
-import { Section, Toggle, type TabCtx } from './shared'
+import { Section, Segmented, Toggle, type TabCtx } from './shared'
 
 const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/
 const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/
@@ -41,6 +41,9 @@ export function BillingTab({ ctx }: { ctx: TabCtx }) {
             <Field label="Patient reschedule / cancel cut-off (hours)" hint="Patients can move or cancel online until this long before the visit"><Input type="number" min={0} max={72} step={1} value={bk.rescheduleCutoffHours ?? 4} onChange={(e) => editSite((d) => { d.booking.rescheduleCutoffHours = Math.min(72, Math.max(0, Number(e.target.value) || 0)) })} /></Field>
             <Field label="Payment note" className="sm:col-span-2" hint="Shown on the confirmation and the invoice"><Input value={bk.payNote} onChange={(e) => editSite((d) => { d.booking.payNote = e.target.value })} /></Field>
           </div>
+          <Field label="Booking code (OTP) — offer first" hint="When both WhatsApp and SMS are switched on for “Booking OTP” (Notifications tab), visitors can pick either; this one is highlighted. Signed-in patients book from the portal without an OTP.">
+            <Segmented size="sm" value={bk.otpPreferred ?? 'whatsapp'} onChange={(v) => editSite((d) => { d.booking.otpPreferred = v })} options={[{ value: 'whatsapp', label: 'WhatsApp' }, { value: 'sms', label: 'SMS' }]} />
+          </Field>
           <Toggle label="Show the OTP on screen when no SMS gateway is connected" hint="For demos and testing only. Hidden automatically once SMS or WhatsApp delivers the code. Turn OFF in production." checked={bk.showDemoOtp} onChange={(v) => editSite((d) => { d.booking.showDemoOtp = v })} />
         </div>
       </Section>

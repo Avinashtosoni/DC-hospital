@@ -5,6 +5,7 @@
  */
 import { beforeAll, describe, expect, test } from 'vitest'
 import { freshDb, USER, type Db } from './harness'
+import { DEFAULT_APP_SETTINGS } from '../../src/settings/types'
 
 let db: Db
 beforeAll(async () => { db = await freshDb('master') }, 180_000)
@@ -201,6 +202,69 @@ describe('notification queue', () => {
     const all = await db.as<{ recipient: string; last_attempt_at: string }>('service', 'select recipient, last_attempt_at from public.claim_notifications(25)')
     expect(all.map((r) => r.recipient)).toEqual(['9876500002'])
     expect(all[0].last_attempt_at).toBeTruthy()
+  })
+})
+
+describe('booking OTP channel choice + WhatsApp confirmation', () => {
+  const setNotify = (mut: (n: typeof DEFAULT_APP_SETTINGS.notifications) => void) => {
+    const n = structuredClone(DEFAULT_APP_SETTINGS.notifications); mut(n)
+    return db.as(null, `insert into public.app_settings (key, data) values ('app', jsonb_build_object('notifications', $1::jsonb))
+      on conflict (key) do update set data = excluded.data`, [JSON.stringify(n)])
+  }
+  const outbox = (ref: string) => db.as<{ channel: string; body: string }>(null, 'select channel, body from public.notification_outbox where related_id = $1 order by channel', [ref])
+
+  test('no channel switched on → none offered, code only on screen (demo)', async () => {
+    await setNotify(() => {})
+    expect((await db.one<{ c: string[] }>('anon', 'select public.booking_otp_channels() c')).c).toEqual([])
+    const r = await db.one<{ r: { queued: number; channels: string[]; demo_code: string } }>('anon', `select public.request_booking_otp('9876511111', 'whatsapp') r`)
+    expect(r.r.queued).toBe(0); expect(r.r.channels).toEqual([]); expect(r.r.demo_code).toMatch(/^\d{6}$/)
+  })
+  test('WhatsApp + SMS on → both offered (WhatsApp first); the picked channel alone gets the code, with WhatsApp wording', async () => {
+    await setNotify((n) => { n.whatsapp.enabled = true; n.sms.enabled = true; n.events.otp = { sms: true, whatsapp: true } })
+    expect((await db.one<{ c: string[] }>('anon', 'select public.booking_otp_channels() c')).c).toEqual(['whatsapp', 'sms'])
+    const wa = await db.one<{ r: { ref: string; queued: number; channels: string[]; demo_code: string | null } }>('anon', `select public.request_booking_otp('9876522222', 'whatsapp') r`)
+    expect(wa.r).toMatchObject({ queued: 1, channels: ['whatsapp'], demo_code: null })
+    const rows = await outbox(wa.r.ref)
+    expect(rows.map((r) => r.channel)).toEqual(['whatsapp'])
+    expect(rows[0].body).toMatch(/^🔐 \*\d{6}\* is your DC Hospital verification code/)
+    // SMS pick (another number) → plain SMS text
+    const sms = await db.one<{ r: { ref: string; channels: string[] } }>('anon', `select public.request_booking_otp('9876533333', 'sms') r`)
+    expect(sms.r.channels).toEqual(['sms'])
+    expect((await outbox(sms.r.ref))[0].body).toMatch(/^\d{6} is your DC Hospital booking code/)
+    // no pick / unknown → every available channel
+    const all = await db.one<{ r: { ref: string; channels: string[] } }>('anon', `select public.request_booking_otp('9876544444', 'pigeon') r`)
+    expect(all.r.channels).toEqual(['whatsapp', 'sms'])
+    expect((await outbox(all.r.ref)).length).toBe(2)
+  })
+  test('only WhatsApp ticked for the OTP → SMS pick falls back to WhatsApp', async () => {
+    await setNotify((n) => { n.whatsapp.enabled = true; n.sms.enabled = true; n.events.otp = { sms: false, whatsapp: true } })
+    expect((await db.one<{ c: string[] }>('anon', 'select public.booking_otp_channels() c')).c).toEqual(['whatsapp'])
+    const r = await db.one<{ r: { channels: string[] } }>('anon', `select public.request_booking_otp('9876555555', 'sms') r`)
+    expect(r.r.channels).toEqual(['whatsapp'])
+  })
+  test('website booking queues a WhatsApp confirmation with the WhatsApp template', async () => {
+    await setNotify((n) => { n.whatsapp.enabled = true; n.events.otp = { sms: false, whatsapp: true } })
+    const phone = '9876566666'
+    const otp = await db.one<{ r: { ref: string } }>('anon', 'select public.request_booking_otp($1, $2) r', [phone, 'whatsapp'])
+    // read the code the way the edge function would (vars), as the test cannot see the hash
+    const code = (await db.one<{ c: string }>(null, `select vars ->> 'code' c from public.notification_outbox where related_id = $1`, [otp.r.ref])).c
+    const v = await db.one<{ r: { token: string } }>('anon', 'select public.verify_booking_otp($1, $2) r', [phone, code])
+    const doc = await activeDoctor()
+    const [slot] = await freeSlots(doc)
+    const res = await db.one<{ r: { ref: string; appointment: { id: string } } }>('anon',
+      `select public.public_book_appointment($1, $2, $3::date, $4, 'Meera Iyer', 'female', null, null, null) r`, [v.r.token, doc, slot.day, slot.tm])
+    const msg = await db.one<{ channel: string; recipient: string; body: string }>(null,
+      `select channel, recipient, body from public.notification_outbox where related_id = $1 and event = 'appointment_booked'`, [res.r.appointment.id])
+    expect(msg.channel).toBe('whatsapp')
+    expect(msg.recipient).toBe(phone)
+    expect(msg.body).toContain('✅ *Appointment confirmed*')
+    expect(msg.body).toContain(`Ref: *${res.r.ref}*`)
+    expect(msg.body).toContain('Hi Meera')
+    expect(msg.body).not.toMatch(/\{\w+\}/)   // every token filled
+  })
+  test('anon cannot call the internal sender directly', async () => {
+    await expect(db.as('anon', `select public.send_booking_otp('9876500000', '123456', null, null)`)).rejects.toThrow(/permission denied/)
+    await expect(db.as('anon', `select public.notify_enqueue('otp', '9876500000', null, '{}'::jsonb)`)).rejects.toThrow(/permission denied/)
   })
 })
 

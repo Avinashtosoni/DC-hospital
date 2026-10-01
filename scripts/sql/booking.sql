@@ -4,7 +4,8 @@
 --  Anonymous visitors never touch the tables directly. They call these SECURITY DEFINER functions:
 --    public_doctors()                          bookable doctors (no private fields)
 --    public_availability(doctor, from, to)     booked slots, approved leave/blocks, hospital holidays
---    request_booking_otp(phone)                sends a 6-digit code (rate limited: 1 / 30 s, 5 / hour)
+--    booking_otp_channels()                    which channels can deliver the code ('whatsapp', 'sms')
+--    request_booking_otp(phone, channel)       sends a 6-digit code on the chosen channel (rate limited: 1 / 30 s, 5 / hour)
 --    verify_booking_otp(phone, code)           5 attempts per code, 10 minute expiry → one-time token
 --    public_book_appointment(token, …)         re-validates the slot server-side, then creates
 --                                              patient (if new) → appointment → unpaid invoice
@@ -18,6 +19,10 @@
 drop function if exists public.public_doctors() cascade;
 drop function if exists public.public_availability(uuid, date, date) cascade;
 drop function if exists public.request_booking_otp(text) cascade;
+drop function if exists public.request_booking_otp(text, text) cascade;
+drop function if exists public.booking_otp_channels() cascade;
+drop function if exists public.send_booking_otp(text, text, uuid) cascade;
+drop function if exists public.send_booking_otp(text, text, uuid, text[]) cascade;
 drop function if exists public.verify_booking_otp(text, text) cascade;
 drop function if exists public.public_book_appointment(uuid, uuid, date, text, text, text, date, text, text) cascade;
 drop function if exists public.send_booking_otp(text, text) cascade;
@@ -42,12 +47,34 @@ $$;
 -- messages were queued. 0 = no gateway configured → the booking page may show the code on screen (demo mode).
 -- Delivery is done by the Edge Function `notify` (supabase/functions/notify), which reads the credentials.
 drop function if exists public.send_booking_otp(text, text);
-create or replace function public.send_booking_otp(p_phone text, p_code text, p_ref uuid default null)
+create or replace function public.send_booking_otp(p_phone text, p_code text, p_ref uuid default null, p_only text[] default null)
 returns int language plpgsql security definer set search_path = public as $$
 begin
-  return coalesce(public.notify_enqueue('otp', p_phone, null, jsonb_build_object('code', p_code, 'otp', p_code), 'booking_otps', p_ref), 0);
+  return coalesce(public.notify_enqueue('otp', p_phone, null, jsonb_build_object('code', p_code, 'otp', p_code), 'booking_otps', p_ref, p_only), 0);
 exception when undefined_function then
   return 0;
+end $$;
+
+-- Channels that can deliver the booking code right now: switched on in Settings → Notifications AND ticked for
+-- the "Booking OTP" event. WhatsApp first. Public (the booking page shows a WhatsApp / SMS choice); reveals no config.
+create or replace function public.booking_otp_channels()
+returns text[] language plpgsql stable security definer set search_path = public as $$
+declare
+  n   jsonb;
+  ch  text;
+  out text[] := '{}';
+begin
+  -- plpgsql (not sql): app_settings is created later in this file set (settings.sql)
+  select data -> 'notifications' into n from public.app_settings where key = 'app';
+  if n is null then return out; end if;
+  foreach ch in array array['whatsapp', 'sms'] loop
+    if coalesce((n -> ch ->> 'enabled')::boolean, false)
+       and coalesce((n -> 'events' -> 'otp' ->> ch)::boolean, false)
+       and coalesce(n -> 'templates' -> 'otp' ->> 'text', '') <> '' then
+      out := out || ch;
+    end if;
+  end loop;
+  return out;
 end $$;
 
 create or replace function public.public_doctors()
@@ -83,13 +110,16 @@ returns jsonb language sql stable security definer set search_path = public as $
       from public.holidays h, r where h.holiday_date between r.f and r.t), '[]'::jsonb))
 $$;
 
-create or replace function public.request_booking_otp(p_phone text)
+-- p_channel: 'whatsapp' or 'sms' as picked by the visitor; null / unavailable → every available channel
+create or replace function public.request_booking_otp(p_phone text, p_channel text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
   v_phone  text := public.norm_phone(p_phone);
   v_code   text;
   v_queued int;
   v_id     uuid;
+  v_avail  text[] := public.booking_otp_channels();
+  v_use    text[];
 begin
   if public.booking_setting('enabled', 'true') <> 'true' then
     raise exception 'Online booking is switched off right now. Please call the hospital to book.';
@@ -108,11 +138,13 @@ begin
   insert into public.booking_otps (phone, code_hash, expires_at)
   values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
   returning id into v_id;
-  v_queued := public.send_booking_otp(v_phone, v_code, v_id);
+  v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;
+  v_queued := case when cardinality(v_use) > 0 then public.send_booking_otp(v_phone, v_code, v_id, v_use) else 0 end;
 
   -- the code is only ever returned to the browser when no SMS/WhatsApp gateway took it AND demo mode is on
   -- `ref` lets the browser ask the notify function to deliver exactly this message right away
   return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', v_queued, 'ref', v_id,
+    'channels', case when v_queued > 0 then to_jsonb(v_use) else '[]'::jsonb end,
     'demo_code', case when v_queued = 0 and public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
 end $$;
 
@@ -326,12 +358,13 @@ grant execute on function public.whatsapp_book_appointment(text, uuid, date, tex
 grant execute on function public.public_doctors() to service_role;
 grant execute on function public.public_availability(uuid, date, date) to service_role;
 
-revoke all on function public.send_booking_otp(text, text, uuid) from public, anon, authenticated;
+revoke all on function public.send_booking_otp(text, text, uuid, text[]) from public, anon, authenticated;
 revoke all on function public.slot_problem(uuid, date, text, boolean) from public, anon;
 grant execute on function public.slot_problem(uuid, date, text, boolean) to authenticated;
 revoke all on function public.booking_setting(text, text, text) from public, anon;
 grant execute on function public.public_doctors() to anon, authenticated;
 grant execute on function public.public_availability(uuid, date, date) to anon, authenticated;
-grant execute on function public.request_booking_otp(text) to anon, authenticated;
+grant execute on function public.request_booking_otp(text, text) to anon, authenticated;
+grant execute on function public.booking_otp_channels() to anon, authenticated;
 grant execute on function public.verify_booking_otp(text, text) to anon, authenticated;
 grant execute on function public.public_book_appointment(uuid, uuid, date, text, text, text, date, text, text) to anon, authenticated;

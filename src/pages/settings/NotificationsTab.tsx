@@ -86,7 +86,8 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
   return (
     <div className="space-y-4">
       <Segmented size="sm" value={cfg.provider} onChange={(v) => set((s) => { s.provider = v })}
-        options={[{ value: 'meta', label: 'Meta Cloud API' }, { value: 'interakt', label: 'Interakt' }, { value: 'twilio', label: 'Twilio' }, { value: 'webhook', label: 'Custom webhook' }]} />
+        options={[{ value: 'openwa', label: 'WA CRM / OpenWA' }, { value: 'meta', label: 'Meta Cloud API' }, { value: 'interakt', label: 'Interakt' }, { value: 'twilio', label: 'Twilio' }, { value: 'webhook', label: 'Custom webhook' }]} />
+      {cfg.provider === 'openwa' && <OpenwaFields cfg={cfg} set={set} secrets={secrets} />}
       {cfg.provider === 'meta' && <>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Phone number ID"><Input value={cfg.phoneNumberId} onChange={(e) => set((s) => { s.phoneNumberId = e.target.value.trim() })} placeholder="1234567890…" className="font-mono text-xs" /></Field>
@@ -109,11 +110,42 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
       {(cfg.provider === 'meta' || cfg.provider === 'interakt') && (
         <Field label="Template language code" hint="Must match the language your templates were approved in"><Input value={cfg.language} onChange={(e) => set((s) => { s.language = e.target.value.trim() })} placeholder="en" className="w-32" /></Field>
       )}
-      <p className="text-xs text-slate-500">WhatsApp only allows free text inside a 24-hour chat window. For appointment and billing messages, get a <b>utility template</b> approved and enter its name in <b>Message templates</b>. The OTP uses an <b>authentication</b> template.</p>
+      {cfg.provider !== 'openwa' && <p className="text-xs text-slate-500">WhatsApp only allows free text inside a 24-hour chat window. For appointment and billing messages, get a <b>utility template</b> approved and enter its name in <b>Message templates</b>. The OTP uses an <b>authentication</b> template.</p>}
       {cfg.provider === 'meta' && <Help href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started">Meta Cloud API setup guide</Help>}
       {cfg.provider === 'interakt' && <Help href="https://app.interakt.ai/settings/developer-setting">Interakt → Developer settings</Help>}
     </div>
   )
+}
+
+/** Self-hosted OpenWA gateway (e.g. WA CRM): a linked WhatsApp number sends plain text — no Meta templates needed. */
+function OpenwaFields({ cfg, set, secrets }: { cfg: AppSettings['notifications']['whatsapp']; set: (fn: (s: AppSettings['notifications']['whatsapp']) => void) => void; secrets: SecretStatus[] | undefined }) {
+  // accept a pasted endpoint like https://host/api/sessions/<id>/messages/send-text and split it
+  // keep what is typed; tidy it up when the field loses focus (or right away for a pasted full URL)
+  const tidy = (v: string) => {
+    const m = v.trim().match(/^(https?:\/\/[^/\s]+)(?:\/api)?(?:\/sessions\/([^/\s]+))?/)
+    set((s) => { s.openwaUrl = m ? m[1] : v.trim(); if (m?.[2]) s.openwaSession = m[2] })
+  }
+  const onUrl = (v: string) => { if (/\/sessions\/[^/\s]+\/messages/.test(v)) tidy(v); else set((s) => { s.openwaUrl = v.trim() }) }
+  const fmt = cfg.chatIdFormat || '91{phone}@c.us'
+  let example = ''
+  try { example = fmt.includes('{phone}') ? fmt.replace('{phone}', '9876543210') : '' } catch { /* */ }
+  return <>
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Gateway URL" hint="Paste the base URL or the full send-text URL — the session ID is filled in for you">
+        <Input value={cfg.openwaUrl} onChange={(e) => onUrl(e.target.value)} onBlur={(e) => tidy(e.target.value)} placeholder="https://wacrm.digitalcomrade.in" className="font-mono text-xs" /></Field>
+      <Field label="Session ID" hint="WA CRM → Sessions → the linked WhatsApp number">
+        <Input value={cfg.openwaSession} onChange={(e) => set((s) => { s.openwaSession = e.target.value.trim() })} placeholder="9b11cfeb-b5a2-…" className="font-mono text-xs" /></Field>
+    </div>
+    <SecretInput name="openwa_api_key" secrets={secrets} />
+    <Field label="Chat ID format" hint={<>How a patient's mobile becomes the <code>chatId</code>. <code>{'{phone}'}</code> = 10-digit number{example && <> · e.g. <code>{example}</code></>}</>}>
+      <Input value={cfg.chatIdFormat} onChange={(e) => set((s) => { s.chatIdFormat = e.target.value.replace(/\s/g, '') })} placeholder="91{phone}@c.us" className="w-56 font-mono text-xs" /></Field>
+    <div className="rounded-lg bg-brand-50/70 px-3 py-2.5 text-xs text-brand-900 ring-1 ring-brand-100">
+      <p className="font-semibold">How it sends</p>
+      <p className="mt-0.5 font-mono text-[11px] leading-relaxed text-brand-800">POST {(cfg.openwaUrl || 'https://…').replace(/\/$/, '')}/api/sessions/{cfg.openwaSession || '<session>'}/messages/send-text<br />X-API-Key: ••••  ·  {'{'} "chatId": "{example || '91…@c.us'}", "text": "…" {'}'}</p>
+      <p className="mt-1.5">Messages go out from your linked WhatsApp number as normal chats — <b>no Meta template approval</b>, so the WhatsApp text in each template below is sent as-is. Keep the phone online and the session <b>ready</b>; <i>Send test</i> checks this first. Use an API key with the <b>operator</b> role scoped to this session.</p>
+    </div>
+    <Help href={`${(cfg.openwaUrl || 'https://github.com/rmyndharis/OpenWA').replace(/\/$/, '')}`}>Open WA CRM</Help>
+  </>
 }
 
 function EmailForm({ ctx, secrets, cfg }: P<'email'>) {
@@ -187,7 +219,7 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
               <span className="min-w-0 break-words">{result.message}{result.provider_ref && <span className="mt-0.5 block font-mono text-[10px] opacity-70">ref {result.provider_ref}</span>}</span>
             </div>
           )}
-          <p className="text-[11px] text-slate-400">{channel === 'whatsapp' ? 'Meta sends its approved “hello_world” template for tests.' : 'Credentials are stored server-side and are never shown again after saving.'}</p>
+          <p className="text-[11px] text-slate-400">{channel === 'whatsapp' && cfg.provider === 'meta' ? 'Meta sends its approved “hello_world” template for tests.' : channel === 'whatsapp' && cfg.provider === 'openwa' ? 'Checks that the WhatsApp session is connected, then sends a test chat.' : 'Credentials are stored server-side and are never shown again after saving.'}</p>
         </div>
       </div>
     </Section>
@@ -222,8 +254,18 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
             <span className="ml-auto text-[11px] text-slate-400">{seg.chars} chars · {seg.parts} SMS{seg.parts > 1 ? ' parts' : ''}{seg.unicode ? ' (Unicode)' : ''}</span>
           </div>
           {unknown.length > 0 && <p className="mt-1 text-xs text-amber-700">Unknown token{unknown.length > 1 ? 's' : ''}: {unknown.map((u) => `{${u}}`).join(', ')}. These stay as typed.</p>}
-          <p className="mt-1 text-xs text-slate-400">Used as the SMS text (Twilio / Quick route / webhook), WhatsApp free text and the email body.</p>
+          <p className="mt-1 text-xs text-slate-400">Used as the SMS text (Twilio / Quick route / webhook) and the email body{def.channels.includes('whatsapp') ? ', and on WhatsApp when the WhatsApp text below is empty' : ''}.</p>
         </div>
+        {def.channels.includes('whatsapp') && (
+          <div>
+            <span className="label flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" />WhatsApp text <span className="font-normal normal-case text-slate-400">(optional)</span></span>
+            <Textarea rows={6} value={t.waText ?? ''} onChange={(e) => set((x) => { x.waText = e.target.value })} placeholder={t.text} className="font-[inherit]" />
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {def.tokens.map((k) => <button key={k} type="button" onClick={() => set((x) => { x.waText = (x.waText ?? '') + `{${k}}` })} className="rounded-md bg-emerald-50 px-1.5 py-0.5 font-mono text-[11px] text-emerald-800 ring-1 ring-emerald-100 hover:bg-emerald-100">{`{${k}}`}</button>)}
+            </div>
+            <p className="mt-1 text-xs text-slate-400">WhatsApp formatting works: <code>*bold*</code>, <code>_italic_</code>, emoji and line breaks. Sent as-is by WA CRM / OpenWA, Twilio and webhook; Meta / Interakt use it only when no approved template name is set.</p>
+          </div>
+        )}
         {def.channels.includes('email') && <Field label="Email subject"><Input value={t.subject} onChange={(e) => set((x) => { x.subject = e.target.value })} /></Field>}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="DLT / MSG91 template ID" hint="Required for MSG91; Fast2SMS DLT message ID"><Input value={t.smsTemplateId} onChange={(e) => set((x) => { x.smsTemplateId = e.target.value.trim() })} className="font-mono text-xs" placeholder="e.g. 65f1c2…" /></Field>
@@ -235,7 +277,10 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
         <div className="rounded-xl bg-slate-50 p-4">
           <p className="label mb-2">Preview with sample data</p>
           <div className="space-y-3">
-            <div className="max-w-sm rounded-2xl rounded-tl-sm bg-white px-3.5 py-2.5 text-sm text-slate-700 shadow-sm ring-1 ring-slate-100">{fill(t.text, vars)}</div>
+            <div className="max-w-sm rounded-2xl rounded-tl-sm bg-white px-3.5 py-2.5 text-sm text-slate-700 shadow-sm ring-1 ring-slate-100"><span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">SMS / email</span>{fill(t.text, vars)}</div>
+            {def.channels.includes('whatsapp') && (
+              <div className="max-w-sm rounded-2xl rounded-tl-sm bg-[#dcf8c6] px-3.5 py-2.5 text-sm text-slate-800 shadow-sm"><span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">WhatsApp</span><WaText text={fill(t.waText || t.text, vars)} /></div>
+            )}
             {def.channels.includes('email') && <p className="text-xs text-slate-500"><b>Subject:</b> {fill(t.subject, vars)}</p>}
             {t.waParams && <p className="text-xs text-slate-500"><b>Variables:</b> {t.waParams.split(',').filter(Boolean).map((k, i) => <span key={i} className="mr-2 font-mono">{`{{${i + 1}}}`}={vars[k] ?? k}</span>)}</p>}
           </div>
@@ -243,6 +288,12 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
       </div>
     </Drawer>
   )
+}
+
+/** Render WhatsApp *bold* / _italic_ / ~strike~ and line breaks for the preview. */
+function WaText({ text }: { text: string }) {
+  return <span className="whitespace-pre-wrap break-words">{text.split(/(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g).map((part, i) =>
+    /^\*.+\*$/.test(part) ? <b key={i}>{part.slice(1, -1)}</b> : /^_.+_$/.test(part) ? <i key={i}>{part.slice(1, -1)}</i> : /^~.+~$/.test(part) ? <s key={i}>{part.slice(1, -1)}</s> : part)}</span>
 }
 
 // ------------------------------------------------------------------ events matrix
@@ -390,7 +441,7 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
         <div className="space-y-4 text-sm text-slate-600">
           <ol className="list-decimal space-y-2 pl-5">
             <li>Deploy once: <code className="rounded bg-slate-100 px-1 text-xs">supabase functions deploy whatsapp-bot --no-verify-jwt</code></li>
-            <li>Set the provider in the <b>WhatsApp</b> card above (Meta Cloud API or Twilio) and turn it on.</li>
+            <li>Set the provider in the <b>WhatsApp</b> card above (WA CRM / OpenWA, Meta Cloud API or Twilio) and turn it on.</li>
             <li>Point your provider’s incoming-message webhook to:
               <div className="mt-1.5 flex items-center gap-2"><code className="min-w-0 flex-1 truncate rounded-lg bg-slate-100 px-2 py-1.5 text-xs">{hook}</code>
                 {supabaseUrl && <Button size="sm" variant="outline" icon={<Copy className="h-3.5 w-3.5" />} onClick={copy}>Copy</Button>}</div>
@@ -401,8 +452,12 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
             <SecretInput name="whatsapp_verify_token" secrets={secrets} />
             <SecretInput name="meta_app_secret" secrets={secrets} />
           </>}
+          {w.provider === 'openwa' && <>
+            <p>In <b>WA CRM → Sessions → {w.openwaSession ? <code className="text-xs">{w.openwaSession.slice(0, 8)}…</code> : 'your session'} → Webhooks</b>, add the URL, subscribe to <b>message.received</b> and set a <b>secret</b>. Paste the same secret below — unsigned requests are rejected, because the sender’s number is the patient’s identity.</p>
+            <SecretInput name="openwa_webhook_secret" secrets={secrets} />
+          </>}
           {w.provider === 'twilio' && <p>In Twilio → Messaging → WhatsApp sender → “When a message comes in”, paste the URL (HTTP POST). Requests are checked with your Twilio auth token.</p>}
-          {(w.provider === 'interakt' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
+          {(w.provider === 'interakt' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>WA CRM / OpenWA</b>, <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
           <p className="text-xs text-slate-500">Bookings from the bot use the same slot rules as the website (holidays, leave, notice period) and are marked <b>source: WhatsApp</b>. The patient’s WhatsApp number is their verification, so no OTP is needed. Chats reset after 30 minutes of silence.</p>
         </div>
         <BotSimulator />

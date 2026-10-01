@@ -145,13 +145,42 @@ Demo logins use a public password (`Demo@123`), so **never run a real hospital o
 | **Post-visit rating** | After a visit is marked *completed*, the patient gets a feedback link (SMS / WhatsApp / e-mail, event *feedback_request*) and a prompt on their dashboard: 1–5 stars, tags, comment, *would recommend?*. One rating per visit, within 60 days. Staff see results under **Patient Feedback** (`/ratings`); doctors see only their own. |
 | **WhatsApp chatbot** | Patients message the hospital's WhatsApp number: *1* book (speciality → doctor → free slot → name → confirm), *2* see / cancel appointments, *3* timings & address, *4* reception. Works in Hindi (`hindi`). Same slot rules as the website; bookings are tagged *source: WhatsApp* and get an unpaid invoice. Try it in **Settings → Notifications → WhatsApp booking chatbot** (a live chat preview). |
 
+### WhatsApp via WA CRM / OpenWA (recommended for India)
+
+[OpenWA](https://github.com/rmyndharis/OpenWA)-based gateways such as **WA CRM** send from your own linked WhatsApp number as normal chats, so **no Meta template approval** is needed. OTPs, confirmations and reminders go out exactly as written.
+
+1. **Settings → Notifications → WhatsApp →** choose **WA CRM / OpenWA**.
+2. **Gateway URL:** paste the base URL (`https://wacrm.example.in`) or the whole `…/api/sessions/<id>/messages/send-text` URL; the **Session ID** is filled in for you.
+3. **API key:** paste the `owa_k1_…` key and click *Save*. It is stored write-only in `app_secrets`; the browser can never read it back. Use a key with the **operator** role, scoped to this session.
+4. **Chat ID format:** default `91{phone}@c.us` (`{phone}` = 10-digit mobile).
+5. Turn the channel on, **Save changes**, then **Send test**. The test first checks that the WhatsApp session is `ready`; if it isn't, it tells you to scan the QR in WA CRM.
+
+How a message is sent (by the `notify` Edge Function — the key never reaches the browser):
+
+```
+POST <gateway>/api/sessions/<session>/messages/send-text
+X-API-Key: <key>
+{ "chatId": "919876543210@c.us", "text": "…" }
+```
+
+Errors are explained in the delivery log. A disconnected phone (409) or pacing (429) is retried 2/4/8 minutes later; a bad key or unknown session is not retried.
+
+### Booking OTP on WhatsApp + WhatsApp confirmation
+
+* **Visitors who are not registered** verify their mobile on `/book` with a 6-digit code. When both WhatsApp and SMS are ticked for **Booking OTP** (Notifications → Messages & templates), they pick **Get code on WhatsApp** or **Get code by SMS**; the one chosen in **Settings → Billing & booking → Booking code (OTP) — offer first** is highlighted. With only one channel on, the code goes out straight away. After 30 s they can resend, or switch to the other channel.
+* Server side: `booking_otp_channels()` (public) lists the usable channels and `request_booking_otp(phone, channel)` queues the code **only on the chosen channel**, with the same rate limits (1 per 30 s, 5 per hour, 10-minute expiry, 5 attempts). If no gateway is connected, the page says so instead of pretending a code was sent.
+* Signed-in patients book from the portal without an OTP.
+* When the booking is made, **Appointment booked** is queued on WhatsApp (and SMS / email if ticked) and delivered immediately.
+* Every template has an optional **WhatsApp text** with `*bold*`, emoji and line breaks, plus a WhatsApp-bubble preview. The OTP, booked, reminder, rescheduled and cancelled messages come with WhatsApp wording out of the box. Empty = the SMS text is used.
+
 ### Turning on the WhatsApp chatbot
 
 1. `supabase functions deploy whatsapp-bot --no-verify-jwt` (the webhook is public; requests are verified by signature instead).
-2. Settings → Notifications → **WhatsApp**: choose **Meta Cloud API** or **Twilio**, enter the credentials, turn it on.
+2. Settings → Notifications → **WhatsApp**: choose **WA CRM / OpenWA**, **Meta Cloud API** or **Twilio**, enter the credentials, turn it on.
 3. **WhatsApp booking chatbot** card → turn it on and copy the webhook URL (`https://<project>.supabase.co/functions/v1/whatsapp-bot`).
    * **Meta:** WhatsApp → Configuration → Webhook → paste the URL, set a *verify token* (save the same text in the card), subscribe to `messages`. Save the **app secret** too so every incoming request's `X-Hub-Signature-256` is checked.
    * **Twilio:** WhatsApp sender → *When a message comes in* → the URL (POST). Requests are checked against your Twilio auth token.
+   * **WA CRM / OpenWA:** Sessions → your session → Webhooks → add the URL, subscribe to `message.received`, set a **secret** and save the same secret in the card. Each delivery's `X-OpenWA-Signature` is verified; unsigned requests are rejected, because the sender's number is the patient's identity. Group chats, your own messages and `@lid` privacy IDs are ignored.
 
 The conversation logic is `supabase/functions/_shared/bot.ts` — plain TypeScript used by the Edge Function, the in-app preview and the tests. Chat state is kept per number in `wa_sessions` (service role only) and resets after 30 minutes.
 

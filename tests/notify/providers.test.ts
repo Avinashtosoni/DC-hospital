@@ -5,7 +5,7 @@
  * Notifications → "Send test".)
  */
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { deliver, isPermanent, retryDelayMs, type Ctx, type Msg } from '../../supabase/functions/_shared/providers'
+import { chatIdFor, deliver, isPermanent, openwaStatus, phoneFromChatId, retryDelayMs, type Ctx, type Msg } from '../../supabase/functions/_shared/providers'
 
 type Call = { url: string; init: RequestInit & { headers: Record<string, string> } }
 let calls: Call[] = []
@@ -148,5 +148,80 @@ describe('webhook + retry policy', () => {
   test('backoff grows 2 → 4 → 8 minutes', () => {
     expect([1, 2, 3].map(retryDelayMs)).toEqual([120_000, 240_000, 480_000])
     expect(isPermanent('HTTP 503')).toBe(false)
+  })
+})
+
+describe('WhatsApp — WA CRM / OpenWA gateway', () => {
+  const KEY = 'owa_k1_test'
+  const SESSION = '9b11cfeb-b5a2-4636-8415-d29cf3555089'
+  const wa = (extra: Record<string, unknown> = {}) => ctx({ whatsapp: { enabled: true, provider: 'openwa', openwaUrl: 'https://wacrm.example.in/', openwaSession: SESSION, ...extra } }, { openwa_api_key: KEY })
+
+  test('send-text: URL, X-API-Key header and { chatId, text } body (chat ID from the mobile)', async () => {
+    mockFetch(201, { messageId: 'true_919876543210@c.us_3EB0' })
+    const r = await deliver(confirm, wa())
+    expect(r).toEqual({ ok: true, ref: 'true_919876543210@c.us_3EB0' })
+    expect(calls[0].url).toBe(`https://wacrm.example.in/api/sessions/${SESSION}/messages/send-text`)
+    expect(calls[0].init.method).toBe('POST')
+    expect(calls[0].init.headers['X-API-Key']).toBe(KEY)
+    expect(calls[0].init.headers['Content-Type']).toBe('application/json')
+    expect(calls[0].init.redirect).toBe('manual')   // key never follows a redirect
+    expect(jsonBody()).toEqual({ chatId: '919876543210@c.us', text: 'Hi Asha, confirmed' })
+  })
+  test('the OTP goes out as plain text — no Meta template needed', async () => {
+    mockFetch(200, { id: 'm1' })
+    const r = await deliver({ ...otp, channel: 'whatsapp' }, wa())
+    expect(r.ok).toBe(true)
+    expect(jsonBody()).toEqual({ chatId: '919876543210@c.us', text: 'Your code is 123456' })
+  })
+  test('custom chat ID format, and a pasted /api base URL is tolerated', async () => {
+    mockFetch(200, {})
+    await deliver(confirm, wa({ chatIdFormat: '{phone}@s.whatsapp.net', openwaUrl: 'https://wacrm.example.in/api' }))
+    expect(calls[0].url).toBe(`https://wacrm.example.in/api/sessions/${SESSION}/messages/send-text`)
+    expect(jsonBody().chatId).toBe('9876543210@s.whatsapp.net')
+  })
+  test('missing key / session / URL are permanent config errors, nothing sent', async () => {
+    mockFetch()
+    for (const c of [ctx({ whatsapp: { enabled: true, provider: 'openwa', openwaUrl: 'https://x.in', openwaSession: SESSION } }),
+      ctx({ whatsapp: { enabled: true, provider: 'openwa', openwaUrl: 'https://x.in' } }, { openwa_api_key: KEY }),
+      ctx({ whatsapp: { enabled: true, provider: 'openwa', openwaUrl: 'wacrm.example.in', openwaSession: SESSION } }, { openwa_api_key: KEY })]) {
+      const r = await deliver(confirm, c)
+      expect(r.ok).toBe(false)
+      expect(isPermanent(r.error)).toBe(true)
+    }
+    expect(calls).toHaveLength(0)
+  })
+  test('gateway errors are explained; disconnected phone and pacing are retried, bad key is not', async () => {
+    mockFetch(409, { statusCode: 409, message: 'Session not ready', error: 'Conflict' })
+    let r = await deliver(confirm, wa())
+    expect(r.error).toMatch(/not connected.*scan the QR/)
+    expect(isPermanent(r.error)).toBe(false)
+    mockFetch(429, { statusCode: 429, code: 'SEND_PACING_LIMITED', message: 'Slow down', retryAfterSeconds: 5 })
+    r = await deliver(confirm, wa())
+    expect(r.error).toMatch(/pacing/)
+    expect(isPermanent(r.error)).toBe(false)
+    mockFetch(401, { statusCode: 401, message: 'Invalid API key' })
+    r = await deliver(confirm, wa())
+    expect(r.error).toMatch(/rejected the API key/)
+    expect(isPermanent(r.error)).toBe(true)
+  })
+  test('session status check (used by Send test)', async () => {
+    mockFetch(200, { id: SESSION, status: 'ready', phone: '919000000001' })
+    expect(await openwaStatus(wa())).toEqual({ ok: true, status: 'ready', phone: '919000000001', error: undefined })
+    expect(calls[0].url).toBe(`https://wacrm.example.in/api/sessions/${SESSION}`)
+    expect(calls[0].init.headers['X-API-Key']).toBe(KEY)
+    mockFetch(200, { id: SESSION, status: 'qr_ready' })
+    const st = await openwaStatus(wa())
+    expect(st.ok).toBe(false)
+    expect(st.error).toMatch(/"qr_ready".*scan the QR/)
+  })
+  test('chat ID helpers', () => {
+    expect(chatIdFor('+91 98765 43210')).toBe('919876543210@c.us')
+    expect(() => chatIdFor('9876543210', '91@c.us')).toThrow(/\{phone\}/)
+    expect(phoneFromChatId('919876543210@c.us')).toBe('9876543210')
+    expect(phoneFromChatId('whatsapp:+919876543210')).toBe('9876543210')
+    expect(phoneFromChatId('120363025@g.us')).toBe('')
+    expect(phoneFromChatId('status@broadcast')).toBe('')
+    expect(phoneFromChatId('2401234567@lid')).toBe('')   // privacy ID, not a phone
+    expect(phoneFromChatId('919876543210@s.whatsapp.net')).toBe('9876543210')
   })
 })

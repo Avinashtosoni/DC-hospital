@@ -73,6 +73,8 @@ export interface SiteSettings {
     showDemoOtp: boolean
     /** patients can move / cancel their own visit online until this many hours before it */
     rescheduleCutoffHours: number
+    /** which channel is offered first for the booking code when both WhatsApp and SMS are available */
+    otpPreferred?: 'whatsapp' | 'sms'
   }
   /** Letterhead + tax details printed on invoices / bills of supply. */
   billing: {

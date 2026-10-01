@@ -13,7 +13,7 @@
 // read with the service-role key that Supabase injects automatically. Nothing secret is ever returned.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { deliver, isPermanent, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
+import { deliver, isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -66,7 +66,14 @@ Deno.serve(async (req) => {
     const c = await loadCtx()
     const m: Msg = { event: 'test', channel, recipient: channel === 'email' ? to : to.replace(/\D/g, '').slice(-10), subject: `Test email from ${c.hospital}`,
       body: `This is a test message from ${c.hospital}. If you received it, ${channel.toUpperCase()} notifications are working.`, vars: { hospital: c.hospital } }
+    // OpenWA: check the WhatsApp session first so a disconnected phone gives a clear answer
+    let st: Awaited<ReturnType<typeof openwaStatus>> | null = null
+    if (channel === 'whatsapp' && c.n.whatsapp?.provider === 'openwa') {
+      st = await openwaStatus(c)
+      if (!st.ok) return json({ ok: false, message: st.error })
+    }
     const r = await deliver(m, c)
+    if (r.ok && st?.phone) r.ref = `${r.ref} · from ${st.phone}`
     await admin.from('notification_outbox').insert({ event: 'test', channel, recipient: m.recipient, subject: m.subject, body: m.body, status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null })
     return json({ ok: r.ok, message: r.ok ? `Sent via ${c.n[channel]?.provider}${r.ref ? ` · ${r.ref}` : ''}` : r.error, provider_ref: r.ref ?? null })
   }

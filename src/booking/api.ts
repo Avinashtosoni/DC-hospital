@@ -81,6 +81,9 @@ export const bookingWindow = (cfg: Cfg, from = new Date()) =>
   Array.from({ length: Math.max(1, Math.min(90, cfg.booking.advanceDays)) + 1 }, (_, i) => format(addDays(from, i), 'yyyy-MM-dd'))
 
 // ------------------------------------------------------------------ demo-mode (local) implementation
+export type OtpChannel = 'whatsapp' | 'sms'
+export interface OtpResult { sent: boolean; expires_in: number; demo_code: string | null; channels: OtpChannel[] }
+
 const OTP_KEY = 'dch:booking-otp'
 const TOKEN_KEY = 'dch:booking-token'
 interface LocalOtp { phone: string; code: string; expires: number; attempts: number; sentAt: number; history: number[] }
@@ -105,7 +108,9 @@ const local = {
       holidays: holidays.filter((h) => h.holiday_date >= from && h.holiday_date <= to),
     }
   },
-  async requestOtp(phone: string, cfg: Cfg) {
+  // demo mode: both channels are offered so the choice can be tried; delivery is simulated
+  async otpChannels(): Promise<OtpChannel[]> { return ['whatsapp', 'sms'] },
+  async requestOtp(phone: string, cfg: Cfg, channel?: OtpChannel): Promise<OtpResult> {
     await new Promise((r) => setTimeout(r, 500))
     if (!cfg.booking.enabled) throw new BookingError('Online booking is switched off right now. Please call the hospital to book.')
     if (!validMobile(phone)) throw new BookingError('Please enter a valid 10-digit Indian mobile number.')
@@ -116,7 +121,7 @@ const local = {
     if (history.length >= 5) throw new BookingError('Too many codes requested for this number. Please try again in an hour.')
     const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1e6).padStart(6, '0')
     sessionStorage.setItem(OTP_KEY, JSON.stringify({ phone: p, code, expires: now + 600e3, attempts: 0, sentAt: now, history: [...history, now] } satisfies LocalOtp))
-    return { sent: true, expires_in: 600, demo_code: cfg.booking.showDemoOtp ? code : null }
+    return { sent: true, expires_in: 600, demo_code: cfg.booking.showDemoOtp ? code : null, channels: [channel ?? 'sms'] }
   },
   async verifyOtp(phone: string, code: string): Promise<{ ok: boolean; token?: string; error?: string }> {
     await new Promise((r) => setTimeout(r, 400))
@@ -195,10 +200,12 @@ const local = {
 const remote = {
   doctors: () => rpc<PublicDoctor[]>('public_doctors'),
   availability: (doctorId: string | null, from: string, to: string) => rpc<Availability>('public_availability', { p_doctor: doctorId, p_from: from, p_to: to }),
-  requestOtp: async (phone: string) => {
-    const r = await rpc<{ sent: boolean; expires_in: number; queued?: number; ref?: string; demo_code: string | null }>('request_booking_otp', { p_phone: phone })
+  otpChannels: async () => (await rpc<OtpChannel[] | null>('booking_otp_channels')) ?? [],
+  requestOtp: async (phone: string, channel?: OtpChannel): Promise<OtpResult> => {
+    const r = await rpc<OtpResult & { queued?: number; ref?: string }>('request_booking_otp', { p_phone: phone, p_channel: channel ?? null })
     if (r.queued) flushNotificationsSoon(0, [r.ref])   // deliver the SMS / WhatsApp right away
-    return r
+    else if (!r.demo_code) throw new BookingError('We could not send a code right now — no SMS or WhatsApp service is connected. Please call the hospital to book.')
+    return { ...r, channels: r.channels ?? [] }
   },
   verifyOtp: (phone: string, code: string) => rpc<{ ok: boolean; token?: string; error?: string }>('verify_booking_otp', { p_phone: phone, p_code: code }),
   book: (i: BookingInput) => rpc<BookingReceipt>('public_book_appointment', {
@@ -211,7 +218,9 @@ export const bookingApi = {
   mode: isSupabaseConfigured ? 'supabase' as const : 'local' as const,
   doctors: () => (isSupabaseConfigured ? remote.doctors() : local.doctors()),
   availability: (doctorId: string | null, from: string, to: string) => (isSupabaseConfigured ? remote.availability(doctorId, from, to) : local.availability(doctorId, from, to)),
-  requestOtp: (phone: string, cfg: Cfg) => (isSupabaseConfigured ? remote.requestOtp(phone) : local.requestOtp(phone, cfg)),
+  /** channels that can deliver the booking code, WhatsApp first */
+  otpChannels: () => (isSupabaseConfigured ? remote.otpChannels() : local.otpChannels()),
+  requestOtp: (phone: string, cfg: Cfg, channel?: OtpChannel) => (isSupabaseConfigured ? remote.requestOtp(phone, channel) : local.requestOtp(phone, cfg, channel)),
   verifyOtp: (phone: string, code: string) => (isSupabaseConfigured ? remote.verifyOtp(phone, code) : local.verifyOtp(phone, code)),
   book: async (input: BookingInput, cfg: Cfg) => {
     const r = await (isSupabaseConfigured ? remote.book(input) : local.book(input, cfg))

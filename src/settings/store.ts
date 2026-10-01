@@ -161,6 +161,12 @@ export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretS
   }
   if (channel === 'whatsapp') {
     const w = n.whatsapp
+    if (w.provider === 'openwa') {
+      if (!/^https?:\/\/[^/\s]+/.test(w.openwaUrl ?? '')) out.push('WA CRM / OpenWA URL is required (e.g. https://wacrm.example.in)')
+      if (!w.openwaSession) out.push('WhatsApp session ID is required')
+      if (!has('openwa_api_key')) out.push('WA CRM / OpenWA API key is not saved')
+      if (w.chatIdFormat && !w.chatIdFormat.includes('{phone}')) out.push('Chat ID format must contain {phone}')
+    }
     if (w.provider === 'meta') { if (!w.phoneNumberId) out.push('Phone number ID is required'); if (!has('meta_access_token')) out.push('Meta access token is not saved') }
     if (w.provider === 'twilio') { if (!w.twilioAccountSid) out.push('Twilio Account SID is required'); if (!w.twilioFrom) out.push('Twilio WhatsApp sender is required'); if (!has('twilio_auth_token')) out.push('Twilio auth token is not saved (shared with SMS)') }
     if (w.provider === 'interakt' && !has('interakt_api_key')) out.push('Interakt API key is not saved')

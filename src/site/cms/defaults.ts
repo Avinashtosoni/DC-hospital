@@ -61,6 +61,7 @@ export const DEFAULT_CONTENT: SiteContent = {
       payNote: 'Pay at the reception when you arrive — cash, card or UPI. Please come 15 minutes early with a photo ID.',
       showDemoOtp: true,
       rescheduleCutoffHours: 4,
+      otpPreferred: 'whatsapp',
     },
     billing: {
       legalName: 'DC Hospital Private Limited',
