@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { CalendarClock } from 'lucide-react'
 import { Button, Modal, Skeleton } from '../../components/ui'
 import { db } from '../../data/adapter'
-import { qk, useTable } from '../../hooks/useData'
+import { qk, useRow } from '../../hooks/useData'
 import { useBookingData, useDoctorDays } from '../../booking/useBooking'
 import { FeedbackForm } from '../../feedback/FeedbackForm'
 import { useT } from '../../i18n'
@@ -21,8 +21,8 @@ export function RescheduleDialog({ id, onClose }: { id: string | null; onClose: 
   const { t } = useT()
   const site = useSiteSettings()
   const qc = useQueryClient()
-  const appts = useTable('appointments')
-  const appt = appts.data?.find((a) => a.id === id)
+  const apptQ = useRow('appointments', id ?? undefined)
+  const appt = apptQ.data ?? undefined
   const { days, docsQ, availQ } = useBookingData(site)
   const doc = docsQ.data?.find((d) => d.id === appt?.doctor_id)
   // the patient's own current slot counts as free
@@ -61,7 +61,7 @@ export function RescheduleDialog({ id, onClose }: { id: string | null; onClose: 
         <Button variant="outline" onClick={onClose}>{t('Keep current time')}</Button>
         <Button onClick={save} loading={saving} disabled={!time}>{t('Confirm new time')}</Button>
       </> : <Button variant="outline" onClick={onClose}>{t('Close')}</Button>}>
-      {!appt ? (appts.isLoading ? <Skeleton className="h-40" /> : <p className="text-sm text-slate-500">{t('Appointment not found.')}</p>) : (
+      {!appt ? (apptQ.isLoading ? <Skeleton className="h-40" /> : <p className="text-sm text-slate-500">{t('Appointment not found.')}</p>) : (
         <div className="space-y-4">
           <div className="rounded-xl bg-brand-50/70 px-4 py-3 text-sm ring-1 ring-brand-100">
             <p className="font-medium text-brand-950">{doc?.full_name ?? t('Doctor')}</p>

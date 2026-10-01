@@ -12,10 +12,12 @@ import { can } from '../../auth/permissions'
 import { ResourcePage, RowMenu } from '../../components/ResourcePage'
 import { ResourceFormDrawer } from '../../components/ResourceForm'
 import { Avatar, Button, PageHeader, Select, Skeleton, StatusBadge } from '../../components/ui'
-import { useCreate, useTable, useUpdate } from '../../hooks/useData'
+import { useByIds, useCreate, useTable, useUpdate, useWindow } from '../../hooks/useData'
+import { useMe } from '../../hooks/useScope'
+import type { Filter } from '../../data/query'
 import { cn, fmtTime, num, today } from '../../lib/utils'
 import {
-  APPT_STYLE, LEAVE_LABEL, LEVEL, REST_LABEL, SLOTS, WEEKDAYS, blockAt, conflictOf, doctorSlots, holdsSlot, levelOf, summarizeDay,
+  APPT_STYLE, LEAVE_LABEL, LEVEL, REST_LABEL, SLOTS, WEEKDAYS, blockAt, conflictOf, doctorSlots, holdsSlot, levelOf, summarizeDay, upcomingOpenQuery,
   type DaySummary, type Level, type ScheduleExt,
 } from '../../lib/schedule'
 import { appointmentsRes } from '../../resources/definitions'
@@ -73,8 +75,8 @@ function ViewSwitcher({ view, onChange }: { view: View; onChange: (v: View) => v
 
 // ================================================================== calendar shell
 function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'>; setView: (v: View) => void; switcher: ReactNode }) {
-  const { ctx } = useResourceCtx(appointmentsRes.relations)
-  const apptQ = useTable('appointments')
+  const { user } = useAuth()
+  const me = useMe()
   const docQ = useTable('doctors')
   const deptQ = useTable('departments')
   const leaveQ = useTable('doctor_leaves')
@@ -83,10 +85,19 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
   const create = useCreate('appointments', { label: 'Appointment' })
   const update = useUpdate('appointments', { label: 'Appointment' })
   const [params, setParams] = useSearchParams()
-  const role = ctx?.role
+  const role = user?.role
   const isDoctor = role === 'doctor'
 
   const cursor = /^\d{4}-\d{2}-\d{2}$/.test(params.get('date') ?? '') ? params.get('date')! : today()
+  // only the visible month grid (± a week) is read — a doctor only ever reads their own bookings
+  const [winFrom, winTo] = useMemo(() => {
+    const d = parseISO(cursor)
+    return [iso(addDays(startOfMonth(d), -7)), iso(addDays(endOfMonth(d), 7))]
+  }, [cursor])
+  const myDoc = me.doctor?.id ?? ''
+  const apptQ = useWindow('appointments', { where: [['appointment_date', 'gte', winFrom], ['appointment_date', 'lte', winTo], ...(isDoctor ? [['doctor_id', 'eq', myDoc] as Filter] : [])] },
+    { enabled: !isDoctor || !!myDoc })
+  const upcomingQ = useWindow('appointments', upcomingOpenQuery())
   const dept = params.get('dept') ?? ''
   const docId = params.get('doctor') ?? ''
   const setParam = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); setParams(n, { replace: true }) }
@@ -95,11 +106,11 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
   // ---- scope: doctors only see their own column; filters narrow everyone else
   const doctors = useMemo(() => {
     let d = (docQ.data ?? []).filter((x) => x.status !== 'inactive')
-    if (isDoctor) d = d.filter((x) => x.id === ctx?.me.doctor?.id)
+    if (isDoctor) d = d.filter((x) => x.id === myDoc)
     if (dept) d = d.filter((x) => x.department_id === dept)
     if (docId) d = d.filter((x) => x.id === docId)
     return d.sort((a, b) => a.full_name.localeCompare(b.full_name))
-  }, [docQ.data, isDoctor, ctx, dept, docId])
+  }, [docQ.data, isDoctor, myDoc, dept, docId])
   const docSet = useMemo(() => new Set(doctors.map((d) => d.id)), [doctors])
   const appts = useMemo(() => (apptQ.data ?? []).filter((a) => docSet.has(a.doctor_id)), [apptQ.data, docSet])
   const byDate = useMemo(() => {
@@ -112,8 +123,17 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
   const clashes = useMemo(() => {
     const t = today()
     const docs = new Map((docQ.data ?? []).map((d) => [d.id, d]))
-    return (apptQ.data ?? []).filter((a) => a.appointment_date >= t && (!isDoctor || a.doctor_id === ctx?.me.doctor?.id) && conflictOf(a, docs.get(a.doctor_id), ext))
-  }, [apptQ.data, docQ.data, ext, isDoctor, ctx])
+    return (upcomingQ.data ?? []).filter((a) => a.appointment_date >= t && (!isDoctor || a.doctor_id === myDoc) && conflictOf(a, docs.get(a.doctor_id), ext))
+  }, [upcomingQ.data, docQ.data, ext, isDoctor, myDoc])
+
+  // patient names for what is actually drawn: the chosen day's list + the first two chips of every month cell
+  const shownPatients = useMemo(() => {
+    const ids = (byDate.get(cursor) ?? []).map((a) => a.patient_id)
+    if (view === 'month') for (const list of byDate.values()) list.filter(holdsSlot).sort((a, b) => a.appointment_time.localeCompare(b.appointment_time)).slice(0, 2).forEach((a) => ids.push(a.patient_id))
+    return ids
+  }, [byDate, cursor, view])
+  const pLk = useByIds('patients', shownPatients)
+  const { ctx } = useResourceCtx(appointmentsRes.relations, { patients: pLk })
 
   // ---- create / edit drawer
   const [drawer, setDrawer] = useState<{ open: boolean; initial: Appointment | null; prefill: Record<string, any> }>({ open: false, initial: null, prefill: {} })
@@ -130,7 +150,7 @@ function CalendarViews({ view, setView, switcher }: { view: Exclude<View, 'list'
     else create.mutate(payload as never)
   }
 
-  const loading = apptQ.isPending || docQ.isPending || !ctx
+  const loading = apptQ.isLoading || docQ.isPending || !ctx
   const title = role === 'doctor' ? 'My Appointments' : 'Appointments'
   const label = view === 'month' ? format(parseISO(cursor), 'MMMM yyyy') : format(parseISO(cursor), 'EEEE, d MMMM yyyy')
   const step = (dir: 1 | -1) => setCursor(iso(view === 'month' ? addMonths(parseISO(cursor), dir) : addDays(parseISO(cursor), dir)))

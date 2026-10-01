@@ -1,5 +1,7 @@
 import { format, parseISO } from 'date-fns'
 import type { Appointment, Doctor, DoctorLeave, Holiday, LeaveKind } from '../types'
+import type { Query } from '../data/query'
+import { today } from './utils'
 
 /**
  * Availability engine shared by the dashboard calendar, the reschedule queue and online booking.
@@ -172,3 +174,6 @@ export const APPT_STYLE: Record<Appointment['status'], string> = {
   cancelled: 'border-l-slate-300 bg-slate-50 text-slate-400 line-through',
   no_show: 'border-l-rose-300 bg-rose-50/60 text-rose-400 line-through',
 }
+
+/** Live bookings from today on — enough for clash counts, the reschedule queue and free-slot checks. */
+export const upcomingOpenQuery = (): Query => ({ where: [['appointment_date', 'gte', today()], ['status', 'in', ['scheduled', 'confirmed', 'checked_in']]] })

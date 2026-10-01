@@ -10,8 +10,9 @@ import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
 import { ResourcePage } from '../components/ResourcePage'
 import { Avatar, Badge, Button, ConfirmDialog, EmptyState, Modal, PageHeader, Select, Skeleton } from '../components/ui'
-import { useTable, useUpdate } from '../hooks/useData'
-import { conflictOf, freeSlots, type ScheduleExt } from '../lib/schedule'
+import { useByIds, useLookup, useTable, useUpdate, useWindow } from '../hooks/useData'
+import { useMe } from '../hooks/useScope'
+import { conflictOf, freeSlots, upcomingOpenQuery, type ScheduleExt } from '../lib/schedule'
 import { ago, cn, fmtDate, fmtTime, today } from '../lib/utils'
 import { useSiteSettings } from '../site/cms/content'
 import { holidaysRes, leavesRes } from '../resources/definitions'
@@ -30,7 +31,7 @@ export default function SchedulePage() {
   // badge counts (shared react-query cache with the tabs below)
   const leaves = useTable('doctor_leaves').data ?? []
   const holidays = useTable('holidays').data ?? []
-  const appts = useTable('appointments').data ?? []
+  const appts = useWindow('appointments', upcomingOpenQuery()).data ?? []
   const docs = useTable('doctors').data ?? []
   const me = docs.find((d) => d.profile_id === user?.id)
   const isDoctor = user?.role === 'doctor'
@@ -70,8 +71,11 @@ const shortWhy = (why: string) => why.replace(/^Dr\.[^—]+— /, '').replace(/^
 
 function RescheduleQueue({ tabs }: { tabs: ReactNode }) {
   const site = useSiteSettings()
-  const { ctx } = useResourceCtx(['patients', 'doctors', 'departments', 'doctor_leaves', 'holidays'])
-  const apptQ = useTable('appointments')
+  const { user } = useAuth()
+  const me = useMe()
+  const dLk = useLookup('doctors')
+  // upcoming live bookings only (not the whole appointments table)
+  const apptQ = useWindow('appointments', upcomingOpenQuery())
   const leaveQ = useTable('doctor_leaves')
   const holQ = useTable('holidays')
   const update = useUpdate('appointments', { label: 'Appointment', silent: true })
@@ -81,19 +85,21 @@ function RescheduleQueue({ tabs }: { tabs: ReactNode }) {
   const [moving, setMoving] = useState<{ a: Appointment; why: string } | null>(null)
   const [cancelling, setCancelling] = useState<{ a: Appointment; why: string } | null>(null)
   const docFilter = params.get('doctor') ?? ''
-  const role = ctx?.role
+  const role = user?.role
   const canAct = can(role, 'appointments', 'update')
   const ext = useMemo<ScheduleExt>(() => ({ leaves: leaveQ.data ?? [], holidays: holQ.data ?? [] }), [leaveQ.data, holQ.data])
 
   const items = useMemo(() => {
-    if (!ctx) return []
     const t = today()
     return (apptQ.data ?? [])
-      .filter((a) => a.appointment_date >= t && (role !== 'doctor' || a.doctor_id === ctx.me.doctor?.id) && (!docFilter || a.doctor_id === docFilter))
-      .map((a) => ({ a, why: conflictOf(a, ctx.lk.doctors.get(a.doctor_id), ext) }))
+      .filter((a) => a.appointment_date >= t && (role !== 'doctor' || a.doctor_id === me.doctor?.id) && (!docFilter || a.doctor_id === docFilter))
+      .map((a) => ({ a, why: conflictOf(a, dLk.get(a.doctor_id), ext) }))
       .filter((x): x is { a: Appointment; why: string } => !!x.why)
       .sort((x, y) => (x.a.appointment_date + x.a.appointment_time).localeCompare(y.a.appointment_date + y.a.appointment_time))
-  }, [apptQ.data, ctx, ext, docFilter, role])
+  }, [apptQ.data, dLk, me.doctor, ext, docFilter, role])
+  // names / phones only for the patients in the queue
+  const pLk = useByIds('patients', items.map((x) => x.a.patient_id))
+  const { ctx } = useResourceCtx(['doctors', 'departments', 'doctor_leaves', 'holidays'], { patients: pLk })
 
   const visible = useMemo(() => {
     const s = search.trim().toLowerCase()

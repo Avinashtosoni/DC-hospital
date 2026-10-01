@@ -10,7 +10,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
+
 import {
   AlertOctagon, ArrowLeft, Ban, CheckCheck, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Copy, Download, Inbox, Keyboard,
   Mail, MailOpen, MessageCircle, Phone, PlayCircle, RefreshCw, Search, Star, StickyNote, Tag, Trash2, Undo2, X, Archive,
@@ -18,7 +19,10 @@ import {
 import { toast } from 'sonner'
 import { differenceInCalendarDays, format, isSameYear, isToday, isYesterday } from 'date-fns'
 import { Avatar, Button, ConfirmDialog, EmptyState, Modal, Skeleton, Textarea } from '../components/ui'
-import { qk, useRemove, useTable, useUpdate } from '../hooks/useData'
+import { qk, useCount, useRemove, useRow, useRows, useUpdate } from '../hooks/useData'
+import { db, queryAll } from '../data/adapter'
+import type { Filter, Query } from '../data/query'
+import { useDebounced } from '../components/ResourcePage'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
 import { useSiteSettings } from '../site/cms/content'
@@ -52,6 +56,22 @@ const TOPICS: { name: string; dot: string; chip: string }[] = [
   { name: 'Something else', dot: 'bg-slate-400', chip: 'bg-slate-100 text-slate-700 ring-slate-200' },
 ]
 const topicStyle = (t: string) => TOPICS.find((x) => x.name === t) ?? TOPICS[TOPICS.length - 1]
+
+// the same folders / labels as database filters — only one page of messages is ever downloaded
+const FOLDER_WHERE: Record<Folder, Filter[]> = {
+  inbox: [['status', 'in', ['new', 'in_progress']]],
+  starred: [['starred', 'eq', true], ['status', 'neq', 'spam']],
+  unread: [['read_at', 'is_null'], ['status', 'neq', 'spam']],
+  in_progress: [['status', 'eq', 'in_progress']],
+  resolved: [['status', 'eq', 'resolved']],
+  spam: [['status', 'eq', 'spam']],
+  all: [['status', 'neq', 'spam']],
+}
+const labelWhere = (name: string): Filter[] => {
+  const last = TOPICS[TOPICS.length - 1].name // the catch-all label also holds topics we don't know
+  return [['status', 'neq', 'spam'], name === last ? ['topic', 'nin', TOPICS.slice(0, -1).map((t) => t.name)] : ['topic', 'eq', name]]
+}
+const SEARCH_COLS = ['ref', 'name', 'phone', 'email', 'topic', 'speciality', 'message', 'notes']
 
 const STATUS: Record<EnquiryStatus, { label: string; cls: string; icon: typeof Inbox }> = {
   new: { label: 'New', cls: 'bg-sky-50 text-sky-700 ring-sky-200', icon: Mail },
@@ -119,7 +139,6 @@ export default function EnquiriesPage() {
   const { user } = useAuth()
   const site = useSiteSettings()
   const qc = useQueryClient()
-  const list = useTable('site_enquiries')
   const update = useUpdate('site_enquiries', { silent: true, label: 'enquiry' })
   const remove = useRemove('site_enquiries', { silent: true, label: 'enquiry' })
   const canDelete = can(user?.role, 'site_enquiries', 'delete')
@@ -144,22 +163,36 @@ export default function EnquiriesPage() {
   // refresh every 30 s so new website messages show up without a reload
   useEffect(() => { const t = setInterval(() => qc.invalidateQueries({ queryKey: qk('site_enquiries') }), 30_000); return () => clearInterval(t) }, [qc])
 
-  const all = useMemo(() => (list.data ?? []).slice().sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')), [list.data])
-  const counts = useMemo(() => Object.fromEntries(FOLDERS.map((f) => [f.id, all.filter(f.match).length])) as Record<Folder, number>, [all])
-  const inboxUnread = useMemo(() => all.filter((r) => FOLDERS[0].match(r) && isUnread(r)).length, [all])
-  const labelCounts = useMemo(() => Object.fromEntries(TOPICS.map((t) => [t.name, all.filter((r) => r.status !== 'spam' && topicStyle(r.topic).name === t.name).length])), [all])
+  const term = useDebounced(q.trim(), 250)
+  const baseQuery = useMemo<Query>(() => ({
+    where: label ? labelWhere(label) : FOLDER_WHERE[folder],
+    search: term ? { term, columns: SEARCH_COLS } : undefined,
+    order: [{ column: 'created_at', asc: false }],
+  }), [folder, label, term])
+  useEffect(() => { setPage(0); setSelected(new Set()); setCursor(0) }, [folder, label, term])
+  const list = useRows('site_enquiries', { ...baseQuery, range: [page * PAGE, page * PAGE + PAGE - 1], count: true }, { keepPrevious: true })
+  const pageRows = useMemo(() => list.data?.rows ?? [], [list.data])
+  const total = list.data?.count ?? pageRows.length
+  const pages = Math.max(1, Math.ceil(total / PAGE))
+  useEffect(() => { if (page > 0 && page >= pages) setPage(pages - 1) }, [page, pages])
 
-  const rows = useMemo(() => {
-    const f = FOLDERS.find((x) => x.id === folder)!
-    const needle = q.trim().toLowerCase()
-    return all.filter((r) => (label ? topicStyle(r.topic).name === label && r.status !== 'spam' : f.match(r))
-      && (!needle || `${r.ref} ${r.name} ${r.phone} ${phoneDigits(r.phone)} ${r.email ?? ''} ${r.topic} ${r.speciality ?? ''} ${r.message} ${r.notes ?? ''}`.toLowerCase().includes(needle)))
-  }, [all, folder, label, q])
-  useEffect(() => { setPage(0); setSelected(new Set()); setCursor(0) }, [folder, label, q])
-  const pages = Math.max(1, Math.ceil(rows.length / PAGE))
-  const pageRows = rows.slice(page * PAGE, page * PAGE + PAGE)
-  const open = openId ? all.find((r) => r.id === openId) ?? null : null
-  const openIdx = open ? rows.findIndex((r) => r.id === open.id) : -1
+  // sidebar counters — cheap head-only counts
+  const cInbox = useCount('site_enquiries', [...FOLDER_WHERE.inbox, ['read_at', 'is_null']])
+  const cUnread = useCount('site_enquiries', FOLDER_WHERE.unread)
+  const cProgress = useCount('site_enquiries', FOLDER_WHERE.in_progress)
+  const inboxUnread = cInbox.count ?? 0
+  const counts = { inbox: inboxUnread, unread: cUnread.count ?? 0, in_progress: cProgress.count ?? 0 } as Record<Folder, number>
+  const labelQs = useQueries({ queries: TOPICS.map((t) => ({ queryKey: [...qk('site_enquiries'), 'count', 'label', t.name], queryFn: () => db.query('site_enquiries', { where: labelWhere(t.name), head: true, count: true }).then((r) => r.count ?? 0) })) })
+  const labelCounts = Object.fromEntries(TOPICS.map((t, i) => [t.name, labelQs[i].data ?? 0])) as Record<string, number>
+
+  // the open message may sit on another page (deep link) — fetch it on its own then
+  const inPage = openId ? pageRows.find((r) => r.id === openId) : undefined
+  const openQ = useRow('site_enquiries', openId && !inPage ? openId : undefined)
+  const open = openId ? inPage ?? openQ.data ?? null : null
+  const idxInPage = open ? pageRows.findIndex((r) => r.id === open.id) : -1
+  const openIdx = idxInPage < 0 ? -1 : page * PAGE + idxInPage
+  const rows = pageRows
+  const known = useCallback((id: string) => pageRows.find((r) => r.id === id) ?? (open?.id === id ? open : undefined), [pageRows, open])
 
   // ---------------------------------------------------------------- actions
   const patchMany = useCallback(async (ids: string[], patch: Partial<SiteEnquiry>) => {
@@ -168,7 +201,7 @@ export default function EnquiriesPage() {
   /** status change with an Undo toast, like Gmail */
   const setStatus = useCallback((ids: string[], status: EnquiryStatus) => {
     if (!ids.length) return
-    const prev = ids.map((id) => [id, all.find((r) => r.id === id)?.status] as const).filter(([, s]) => s && s !== status)
+    const prev = ids.map((id) => [id, known(id)?.status] as const).filter(([, s]) => s && s !== status)
     if (!prev.length) return
     patchMany(prev.map(([id]) => id), { status })
     setSelected(new Set())
@@ -176,7 +209,7 @@ export default function EnquiriesPage() {
     toast.success(`${n === 1 ? 'Enquiry' : `${n} enquiries`} ${status === 'spam' ? 'reported as spam' : status === 'resolved' ? 'marked resolved' : status === 'in_progress' ? 'marked in progress' : 'moved to New'}`, {
       action: { label: 'Undo', onClick: () => prev.forEach(([id, s]) => update.mutate({ id, patch: { status: s! } })) },
     })
-  }, [all, patchMany, update])
+  }, [known, patchMany, update])
   const setRead = useCallback((ids: string[], read: boolean) => { patchMany(ids, { read_at: read ? new Date().toISOString() : null }); setSelected(new Set()) }, [patchMany])
   const toggleStar = useCallback((r: SiteEnquiry) => update.mutate({ id: r.id, patch: { starred: !r.starred } }), [update])
   const doDelete = async (ids: string[]) => {
@@ -192,13 +225,14 @@ export default function EnquiriesPage() {
   }, [setParam, update])
   const close = useCallback(() => setParam({ id: null }), [setParam])
   const step = useCallback((d: 1 | -1) => {
-    if (openIdx < 0) return
-    const next = rows[openIdx + d]
-    if (next) { openRow(next); const p = Math.floor((openIdx + d) / PAGE); if (p !== page) setPage(p) }
-  }, [openIdx, rows, openRow, page])
+    if (idxInPage < 0) return
+    const next = rows[idxInPage + d]
+    if (next) openRow(next)
+    else if (d === 1 ? page < pages - 1 : page > 0) { setPage(page + d); close() } // continue on the neighbouring page
+  }, [idxInPage, rows, openRow, page, pages, close])
   /** after resolving / spamming the open message, move on to the next one (Gmail "auto-advance") */
   const actOnOpen = (fn: () => void) => {
-    const next = rows[openIdx + 1] ?? rows[openIdx - 1]
+    const next = idxInPage < 0 ? undefined : rows[idxInPage + 1] ?? rows[idxInPage - 1]
     fn()
     if (next && next.id !== open?.id && folder !== 'all') openRow(next); else if (folder !== 'all') close()
   }
@@ -237,13 +271,20 @@ export default function EnquiriesPage() {
   const allSel = pageIds.length > 0 && pageIds.every((id) => selected.has(id))
   const someSel = pageIds.some((id) => selected.has(id))
   const sel = [...selected]
-  const selRows = all.filter((r) => selected.has(r.id))
+  const selRows = pageRows.filter((r) => selected.has(r.id))
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
-  const exportCsv = () => downloadCsv(`enquiries-${format(new Date(), 'yyyy-MM-dd')}.csv`, rows.map((r) => ({
-    Ref: r.ref, Received: r.created_at ? format(new Date(r.created_at), 'yyyy-MM-dd HH:mm') : '', Name: r.name, Mobile: r.phone, Email: r.email ?? '',
-    Topic: r.topic, Speciality: r.speciality ?? '', Message: r.message, Status: STATUS[r.status].label, Starred: r.starred ? 'yes' : '', Notes: r.notes ?? '',
-  })))
+  const [exporting, setExporting] = useState(false)
+  const exportCsv = async () => {
+    setExporting(true)
+    try {
+      const all = await queryAll('site_enquiries', baseQuery, 20000)
+      downloadCsv(`enquiries-${format(new Date(), 'yyyy-MM-dd')}.csv`, all.map((r) => ({
+        Ref: r.ref, Received: r.created_at ? format(new Date(r.created_at), 'yyyy-MM-dd HH:mm') : '', Name: r.name, Mobile: r.phone, Email: r.email ?? '',
+        Topic: r.topic, Speciality: r.speciality ?? '', Message: r.message, Status: STATUS[r.status].label, Starred: r.starred ? 'yes' : '', Notes: r.notes ?? '',
+      })))
+    } catch (e) { toast.error('Export failed', { description: (e as Error).message }) } finally { setExporting(false) }
+  }
 
   const title = label ?? FOLDERS.find((f) => f.id === folder)!.label
   const split = !!open
@@ -260,7 +301,7 @@ export default function EnquiriesPage() {
           <p className="text-xs text-slate-500">Messages from the website Contact page</p>
         </div>
         <div className="flex gap-1 lg:order-last lg:shrink-0">
-          <Button variant="outline" size="sm" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!rows.length}>Export</Button>
+          <Button variant="outline" size="sm" icon={<Download className="h-4 w-4" />} onClick={exportCsv} loading={exporting} disabled={!total}>Export</Button>
           <IconBtn label="Keyboard shortcuts" kbd="?" onClick={() => setHelp(true)} className="hidden sm:grid"><Keyboard className="h-[18px] w-[18px]" /></IconBtn>
         </div>
         </div>
@@ -345,7 +386,7 @@ export default function EnquiriesPage() {
                 </>
               )}
               <div className="ml-auto flex items-center gap-0.5 pl-2 text-xs text-slate-500">
-                <span className="whitespace-nowrap tabular-nums">{rows.length ? `${page * PAGE + 1}–${Math.min(rows.length, page * PAGE + PAGE)} of ${rows.length}` : '0 of 0'}</span>
+                <span className="whitespace-nowrap tabular-nums">{total ? `${page * PAGE + 1}–${Math.min(total, page * PAGE + PAGE)} of ${total}` : '0 of 0'}</span>
                 <IconBtn label="Newer" disabled={page === 0} onClick={() => setPage((p) => p - 1)}><ChevronLeft className="h-[18px] w-[18px]" /></IconBtn>
                 <IconBtn label="Older" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)}><ChevronRight className="h-[18px] w-[18px]" /></IconBtn>
               </div>
@@ -353,7 +394,7 @@ export default function EnquiriesPage() {
 
             {/* rows */}
             <div ref={listRef} className="scrollbar-thin min-h-[320px] flex-1 overflow-y-auto" role="list" aria-label={`${title} enquiries`}>
-              {list.isPending ? (
+              {list.isLoading ? (
                 <div className="divide-y divide-slate-100">{Array.from({ length: 7 }, (_, i) => <div key={i} className="flex items-center gap-3 px-4 py-3.5"><Skeleton className="h-4 w-4" /><Skeleton className="h-4 w-32" /><Skeleton className="h-4 flex-1" /><Skeleton className="h-4 w-12" /></div>)}</div>
               ) : list.isError ? (
                 <p className="m-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{(list.error as Error).message}</p>
@@ -374,7 +415,7 @@ export default function EnquiriesPage() {
 
           {/* reading pane */}
           {open ? (
-            <Reader key={open.id} r={open} pos={openIdx} total={rows.length} canDelete={canDelete} hospital={site.brand?.shortName || site.name}
+            <Reader key={open.id} r={open} pos={openIdx} total={total} canDelete={canDelete} hospital={site.brand?.shortName || site.name}
               onClose={close} onPrev={() => step(-1)} onNext={() => step(1)} onStar={() => toggleStar(open)}
               onStatus={(s) => (s === 'resolved' || s === 'spam') && folder !== 'all' && folder !== s ? actOnOpen(() => setStatus([open.id], s)) : setStatus([open.id], s)}
               onUnread={() => { setRead([open.id], false); close() }} onDelete={() => setConfirmDelete([open.id])}

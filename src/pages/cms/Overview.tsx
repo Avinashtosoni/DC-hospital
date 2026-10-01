@@ -5,7 +5,7 @@ import {
   ArrowRight, CircleDot, CloudUpload, Database, ExternalLink, EyeOff, FilePenLine, Globe, ImageIcon, Inbox, Keyboard, Layers, Sparkles,
 } from 'lucide-react'
 import { Badge, Button, Skeleton } from '../../components/ui'
-import { useTable } from '../../hooks/useData'
+import { useCount } from '../../hooks/useData'
 import { ago, cn } from '../../lib/utils'
 import { cms, type ContentRows } from '../../site/cms/store'
 import type { ContentKey, SiteContent } from '../../site/cms/types'
@@ -35,8 +35,8 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
   compact?: boolean; rows?: ContentRows; loading: boolean; site: SiteContent; dirtyKeys: ContentKey[]
   onOpen: (k: ContentKey | 'media') => void; onPublishAll: () => void; publishingAll: boolean
 }) {
-  const enquiries = useTable('site_enquiries')
-  const newEnq = enquiries.data?.filter((e) => e.status === 'new').length ?? 0
+  const enquiries = useCount('site_enquiries', [['status', 'eq', 'new']])
+  const newEnq = enquiries.count ?? 0
   const pages = site.settings.pages
   const visiblePages = 1 + Object.values(pages).filter(Boolean).length
   const totalPages = 1 + Object.keys(pages).length
@@ -49,7 +49,7 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
     { label: 'Visible pages', value: `${visiblePages}/${totalPages}`, hint: visiblePages === totalPages ? 'All pages are live' : `${totalPages - visiblePages} hidden from the menu`, icon: Globe, onClick: () => onOpen('settings') },
     { label: 'Customised sections', value: `${edited}/${SECTIONS.length}`, hint: edited ? 'Edited from the original' : 'Still the original content', icon: FilePenLine },
     { label: 'Unpublished drafts', value: String(dirtyKeys.length), hint: dirtyKeys.length ? 'Waiting to be published' : 'Everything is live', icon: CircleDot, warn: dirtyKeys.length > 0 },
-    { label: 'New enquiries', value: enquiries.isPending ? '—' : String(newEnq), hint: 'From the website forms', icon: Inbox, to: '/enquiries' },
+    { label: 'New enquiries', value: enquiries.isLoading ? '—' : String(newEnq), hint: 'From the website forms', icon: Inbox, to: '/enquiries' },
   ]
 
   return (

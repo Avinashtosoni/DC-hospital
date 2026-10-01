@@ -7,7 +7,7 @@ import {
 import { toast } from 'sonner'
 import { useAuth } from '../auth/AuthProvider'
 import { db } from '../data/adapter'
-import { useTable, useUpdate } from '../hooks/useData'
+import { useCount, useRows, useTable, useUpdate, useWindow } from '../hooks/useData'
 import { useMe } from '../hooks/useScope'
 import { Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, Field, Input, PageHeader, Select, Skeleton, StatusBadge, Textarea } from '../components/ui'
 import { AuditItem, useAuditResolver } from '../components/RecordHistory'
@@ -149,22 +149,29 @@ export default function ProfilePage() {
 function RoleStats() {
   const { user } = useAuth()
   const me = useMe()
-  const appts = useTable('appointments').data ?? []
-  const invoices = useTable('invoices').data ?? []
-  const audit = useTable('audit_log', { enabled: user?.role !== 'patient' }).data ?? []
   const t = today()
+  const role = user?.role
+  // counts come from the database; nothing here downloads a whole table
+  const doc = me.doctor?.id ?? '', pat = me.patient?.id ?? ''
+  const isDoc = role === 'doctor' && !!doc, isPat = role === 'patient' && !!pat, isStaff = !!user && role !== 'doctor' && role !== 'patient'
+  const week = useMemo(() => new Date(Math.floor(Date.now() / 3_600_000 - 7 * 24) * 3_600_000).toISOString(), [])
+  const dToday = useCount('appointments', [['doctor_id', 'eq', doc], ['appointment_date', 'eq', t], ['status', 'neq', 'cancelled']], { enabled: isDoc })
+  const dUpcoming = useCount('appointments', [['doctor_id', 'eq', doc], ['appointment_date', 'gt', t], ['status', 'in', ['scheduled', 'confirmed']]], { enabled: isDoc })
+  const dSeen = useCount('appointments', [['doctor_id', 'eq', doc], ['status', 'eq', 'completed']], { enabled: isDoc })
+  const pUpcoming = useCount('appointments', [['patient_id', 'eq', pat], ['appointment_date', 'gte', t], ['status', 'in', ['scheduled', 'confirmed']]], { enabled: isPat })
+  const pVisits = useCount('appointments', [['patient_id', 'eq', pat], ['status', 'eq', 'completed']], { enabled: isPat })
+  const pBills = useWindow('invoices', { where: [['patient_id', 'eq', pat], ['status', 'in', ['unpaid', 'partial', 'overdue']]] }, { enabled: isPat })
+  const aWeek = useCount('audit_log', [['actor_id', 'eq', user?.id ?? ''], ['created_at', 'gte', week]], { enabled: isStaff })
+  const aCreated = useCount('audit_log', [['actor_id', 'eq', user?.id ?? ''], ['action', 'eq', 'insert']], { enabled: isStaff })
+  const aLast = useRows('audit_log', { where: [['actor_id', 'eq', user?.id ?? '']], order: [{ column: 'created_at', asc: false }], range: [0, 0] }, { enabled: isStaff })
   let items: [string, ReactNode][] = []
-  if (user?.role === 'doctor' && me.doctor) {
-    const mine = appts.filter((a) => a.doctor_id === me.doctor!.id)
-    items = [['Today', mine.filter((a) => a.appointment_date === t && a.status !== 'cancelled').length], ['Upcoming', mine.filter((a) => a.appointment_date > t && (a.status === 'scheduled' || a.status === 'confirmed')).length], ['Seen (all time)', mine.filter((a) => a.status === 'completed').length], ['Fee', money(me.doctor.consultation_fee)]]
-  } else if (user?.role === 'patient' && me.patient) {
-    const mine = appts.filter((a) => a.patient_id === me.patient!.id)
-    const bills = invoices.filter((i) => i.patient_id === me.patient!.id && i.status !== 'cancelled')
-    items = [['MRN', me.patient.mrn], ['Upcoming visits', mine.filter((a) => a.appointment_date >= t && (a.status === 'scheduled' || a.status === 'confirmed')).length], ['Visits', mine.filter((a) => a.status === 'completed').length], ['Outstanding', money(bills.reduce((s, i) => s + invoiceBalance(i), 0))]]
-  } else if (user) {
-    const mine = audit.filter((e) => e.actor_id === user.id)
-    const week = new Date(Date.now() - 7 * 864e5).toISOString()
-    items = [['Role', ROLE_LABEL[user.role]], ['Changes this week', mine.filter((e) => (e.created_at ?? '') >= week).length], ['Records created', mine.filter((e) => e.action === 'insert').length], ['Last active', mine[0]?.created_at ? fmtDate(mine[0].created_at, 'dd MMM, HH:mm') : '—']]
+  if (isDoc && me.doctor) {
+    items = [['Today', dToday.count ?? '…'], ['Upcoming', dUpcoming.count ?? '…'], ['Seen (all time)', dSeen.count ?? '…'], ['Fee', money(me.doctor.consultation_fee)]]
+  } else if (isPat && me.patient) {
+    items = [['MRN', me.patient.mrn], ['Upcoming visits', pUpcoming.count ?? '…'], ['Visits', pVisits.count ?? '…'], ['Outstanding', money((pBills.data ?? []).reduce((s, i) => s + invoiceBalance(i), 0))]]
+  } else if (isStaff && user) {
+    const last = aLast.data?.rows[0]?.created_at
+    items = [['Role', ROLE_LABEL[user.role]], ['Changes this week', aWeek.count ?? '…'], ['Records created', aCreated.count ?? '…'], ['Last active', last ? fmtDate(last, 'dd MMM, HH:mm') : '—']]
   }
   if (!items.length) return null
   return (
@@ -307,9 +314,9 @@ function Preferences() {
 // ------------------------------------------------------------------ my recent activity (from the audit log)
 function MyActivity() {
   const { user } = useAuth()
-  const q = useTable('audit_log')
-  const resolve = useAuditResolver()
-  const mine = useMemo(() => (q.data ?? []).filter((e) => e.actor_id === user?.id).sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')).slice(0, 8), [q.data, user])
+  const q = useRows('audit_log', { where: [['actor_id', 'eq', user?.id ?? '']], order: [{ column: 'created_at', asc: false }], range: [0, 7] }, { enabled: !!user && user.role !== 'patient' })
+  const mine = useMemo(() => q.data?.rows ?? [], [q.data])
+  const resolve = useAuditResolver(mine)
   return (
     <Card>
       <CardHeader title="My recent activity" subtitle="From the audit log" icon={<History className="h-4 w-4" />} action={user?.role === 'owner' ? <Link to="/audit" className="text-xs font-medium text-brand-700 hover:underline">Full log</Link> : undefined} />

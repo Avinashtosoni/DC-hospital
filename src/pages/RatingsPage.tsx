@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { MessageSquareQuote, Star, ThumbsUp, Users } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
-import { useLookup, useTable } from '../hooks/useData'
+import { useByIds, useLookup, useWindow } from '../hooks/useData'
+import type { Filter } from '../data/query'
 import { useMe } from '../hooks/useScope'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Select, Skeleton, StatCard } from '../components/ui'
 import { StarRating } from '../feedback/FeedbackForm'
@@ -17,13 +18,17 @@ const PERIODS = [[30, 'Last 30 days'], [90, 'Last 90 days'], [365, 'Last 12 mont
 export default function RatingsPage() {
   const { user } = useAuth()
   const me = useMe()
-  const fb = useTable('visit_feedback')
   const docs = useLookup('doctors')
-  const pats = useLookup('patients')
   const [days, setDays] = useState<number>(90)
   const [doctor, setDoctor] = useState('')
   const [stars, setStars] = useState('')
   const isDoctor = user?.role === 'doctor'
+  // only the chosen period (and, for doctors, their own reviews) is read from the database
+  const sinceIso = useMemo(() => (days ? new Date(Math.floor(Date.now() / 3_600_000 - days * 24) * 3_600_000).toISOString() : ''), [days])
+  const fb = useWindow('visit_feedback', { where: [
+    ...(sinceIso ? [['created_at', 'gte', sinceIso] as Filter] : []),
+    ...(isDoctor ? [['doctor_id', 'eq', me.doctor?.id ?? ''] as Filter] : []),
+  ], order: [{ column: 'created_at', asc: false }] }, { enabled: !isDoctor || !!me.doctor })
 
   const inPeriod = useMemo(() => {
     const since = days ? Date.now() - days * 864e5 : 0
@@ -47,6 +52,7 @@ export default function RatingsPage() {
     return { good: top(good), bad: top(bad) }
   }, [inPeriod])
   const loading = fb.isLoading
+  const pats = useByIds('patients', rows.slice(0, 100).map((r) => r.patient_id))
 
   return (
     <div>

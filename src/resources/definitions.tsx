@@ -114,8 +114,16 @@ export const appointmentsRes = defineResource({
   table: 'appointments', path: '/appointments', singular: 'Appointment', icon: CalendarCheck,
   title: (role) => (role === 'patient' || role === 'doctor' ? 'My Appointments' : 'Appointments'),
   description: (role) => role === 'patient' ? 'Book, track or cancel your visits.' : role === 'doctor' ? 'Your consultation schedule.' : 'Schedule and manage OPD appointments across departments.',
-  relations: ['patients', 'doctors', 'departments', 'doctor_leaves', 'holidays'],
+  relations: ['doctors', 'departments', 'doctor_leaves', 'holidays'],
   defaultSort: { key: 'appointment_date', dir: 'desc' },
+  server: {
+    search: ['reason', 'status', 'booking_ref'],
+    searchVia: [viaPatient, { column: 'doctor_id', table: 'doctors', columns: ['full_name'] }],
+    scope: (c) => (isPatient(c) ? [['patient_id', 'eq', c.me.patient?.id ?? NO_ID]] : c.role === 'doctor' ? [['doctor_id', 'eq', c.me.doctor?.id ?? NO_ID]] : []),
+    filters: { when: (v) => { const t = today(); return [v === 'today' ? ['appointment_date', 'eq', t] : v === 'upcoming' ? ['appointment_date', 'gte', t] : ['appointment_date', 'lt', t]] } },
+    sort: { appointment_date: 'appointment_date,appointment_time', doctor: 'doctor_id', doctor_p: 'doctor_id', type: 'type', reason: 'reason', status: 'status' },
+    resolve: { patient_id: 'patients' },
+  },
   scope: (r, c) => (isPatient(c) ? r.patient_id === c.me.patient?.id : c.role === 'doctor' ? r.doctor_id === c.me.doctor?.id : true),
   searchText: (r, c) => `${pName(c, r.patient_id)} ${dName(c, r.doctor_id)} ${r.reason} ${r.status}`,
   filters: [

@@ -48,8 +48,8 @@ async function buildServerQuery(def: ResourceDef, ctx: ResourceCtx, st: ListStat
     })))
     search = { term, columns: spec.search, ids }
   }
-  const col = spec.sort?.[st.sort.key]
-  return { where, search, order: col ? [{ column: col, asc: st.sort.dir === 'asc' }] : undefined }
+  const cols = spec.sort?.[st.sort.key]?.split(',') ?? []
+  return { where, search, order: cols.length ? cols.map((column) => ({ column, asc: st.sort.dir === 'asc' })) : undefined }
 }
 
 export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExtra?: ReactNode }) {

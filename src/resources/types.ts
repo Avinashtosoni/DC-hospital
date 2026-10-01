@@ -94,7 +94,7 @@ export interface ServerSpec {
   scope?: (ctx: ResourceCtx) => Filter[]
   /** filter key → database filters for the chosen value (default: column = value) */
   filters?: Record<string, (value: string, ctx: ResourceCtx) => Filter[]>
-  /** column key → database column used for sorting; columns not listed are not sortable */
+  /** column key → database column(s) used for sorting (comma-separated for tie-breaks); unlisted columns are not sortable */
   sort?: Record<string, string>
   /** foreign keys resolved for the visible page: column → table (fills ctx.lk for those rows) */
   resolve?: Record<string, TableName>
