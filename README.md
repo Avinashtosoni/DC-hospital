@@ -107,7 +107,12 @@ The hospital **owner** can edit every public page without touching code:
 - **Version history** — every publish/reset keeps the previous version; restore it with one click.
 - **Validation** — duplicate/invalid URL slugs are blocked before publishing.
 - Headings support `*highlight*` and texts support `{phone}`, `{email}`, `{address}`, `{name}` tokens from Site settings.
-- **Contact form → Enquiries**: messages from `/contact` land in *Dashboard → Website → Enquiries* (owner & receptionist) with call/email/status actions.
+- **Contact form → Enquiries**: messages from `/contact` land in *Dashboard → Website → Enquiries* (owner & receptionist), a Gmail-style inbox:
+  folders (Inbox / Starred / Unread / In progress / Resolved / Spam), topic labels, bold unread rows, a reading pane with
+  Call / WhatsApp / email reply, status and internal notes, bulk actions with Undo, CSV export and keyboard shortcuts
+  (`j`/`k`, `e` resolve, `!` spam, `s` star, `/` search, `?` help). Read/star state is stored in `site_enquiries.read_at` / `starred`.
+  Upgrading an existing database: `alter table public.site_enquiries add column if not exists starred boolean not null default false, add column if not exists read_at timestamptz;`
+  then re-run the `site_enquiries_public_insert` policy from `master.sql` (or simply re-run `master.sql`).
 
 **Storage.** With Supabase, content lives in `site_content` (one JSONB row per section), history in `site_content_revisions`
 (written by a trigger that also stamps who published), images in the public `site-media` storage bucket and enquiries in

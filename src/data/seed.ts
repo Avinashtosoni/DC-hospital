@@ -585,6 +585,8 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
   ]
   const site_enquiries: SiteEnquiry[] = enquiryDefs.map(([name, phone, email, topic, speciality, message, status, day, notes], i) => ({
     id: sid(16, i + 1), ref: `DCH-${String(482101 + i * 37)}`, name, phone, email, topic, speciality, message, status, notes,
+    starred: i === 0 || i === 2,
+    read_at: status === 'new' ? null : d.ts(day, '18:00'),
     created_at: d.ts(day, `${String(9 + i).padStart(2, '0')}:${i % 2 ? '40' : '15'}`),
   }))
 

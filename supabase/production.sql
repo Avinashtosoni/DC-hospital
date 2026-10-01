@@ -287,6 +287,8 @@ create table public.site_enquiries (
   message     text not null check (char_length(message) between 1 and 2000),
   status      text not null default 'new' check (status in ('new', 'in_progress', 'resolved', 'spam')),
   notes       text,
+  starred     boolean not null default false,   -- inbox: staff flag for follow-up
+  read_at     timestamptz,                       -- inbox: null = unread (bold)
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
@@ -895,7 +897,8 @@ declare
 begin
   if tg_op = 'UPDATE' then
     for k in select jsonb_object_keys(v_new) loop
-      continue when k in ('id', 'created_at', 'updated_at');
+      -- read_at / starred are personal inbox state (enquiries), not worth an audit entry
+      continue when k in ('id', 'created_at', 'updated_at', 'read_at', 'starred');
       if (v_new -> k) is distinct from (v_old -> k) then
         v_changes := v_changes || jsonb_build_object(k, jsonb_build_object('from', v_old -> k, 'to', v_new -> k));
       end if;
@@ -1017,7 +1020,7 @@ create policy site_content_revisions_owner_read on public.site_content_revisions
 -- Contact form: anyone (signed in or not) may send a *new* enquiry, but only staff can read them (policies above).
 drop policy if exists site_enquiries_public_insert on public.site_enquiries;
 create policy site_enquiries_public_insert on public.site_enquiries for insert to anon, authenticated
-  with check (status = 'new' and notes is null);
+  with check (status = 'new' and notes is null and starred = false and read_at is null);
 
 revoke all on public.site_content, public.site_content_revisions from anon;
 grant select on public.site_content to anon;

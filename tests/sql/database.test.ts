@@ -322,3 +322,19 @@ describe('WhatsApp chatbot helpers', () => {
     expect((await db.one<{ status: string }>(null, 'select status from public.appointments where id = $1', [r.r.appointment.id])).status).toBe('cancelled')
   })
 })
+
+describe('Website enquiries inbox', () => {
+  test('visitors cannot pre-star or pre-read; reception can star / mark read; patients see nothing', async () => {
+    const ins = `insert into public.site_enquiries (name, phone, topic, message, starred, read_at) values ('Web Visitor', '9876500001', 'Careers', 'Hi', $1, $2)`
+    await expect(db.as('anon', ins, [true, null])).rejects.toThrow(/row-level security/)
+    await expect(db.as('anon', ins, [false, new Date().toISOString()])).rejects.toThrow(/row-level security/)
+    await db.as('anon', ins, [false, null])
+    const row = await db.one<{ id: string; starred: boolean; read_at: string | null }>(USER.receptionist, `select id, starred, read_at from public.site_enquiries where name = 'Web Visitor'`)
+    expect(row).toMatchObject({ starred: false, read_at: null })
+    await db.as(USER.receptionist, 'update public.site_enquiries set starred = true, read_at = now() where id = $1', [row.id])
+    const after = await db.one<{ starred: boolean; read_at: string | null }>(USER.owner, 'select starred, read_at from public.site_enquiries where id = $1', [row.id])
+    expect(after.starred).toBe(true)
+    expect(after.read_at).not.toBeNull()
+    expect(await db.as(USER.patient, 'select id from public.site_enquiries')).toEqual([])
+  })
+})

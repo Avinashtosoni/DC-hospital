@@ -293,6 +293,8 @@ create table public.site_enquiries (
   message     text not null check (char_length(message) between 1 and 2000),
   status      text not null default 'new' check (status in ('new', 'in_progress', 'resolved', 'spam')),
   notes       text,
+  starred     boolean not null default false,   -- inbox: staff flag for follow-up
+  read_at     timestamptz,                       -- inbox: null = unread (bold)
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
@@ -3507,14 +3509,14 @@ insert into public.notices (id, title, body, audience, priority, published_on, c
   ('d0c00015-0000-4000-8000-000000000006', 'Night shift roster updated', 'The revised night shift roster for nursing staff is available with the Head Nurse.', 'staff', 'normal', (current_date + -10), ((current_date + -10) + time '17:00'));
 
 -- site_enquiries (7)
-insert into public.site_enquiries (id, ref, name, phone, email, topic, speciality, message, status, notes, created_at) values
-  ('d0c00016-0000-4000-8000-000000000001', 'DCH-482101', 'Sunita Agarwal', '9810012345', 'sunita.a@gmail.com', 'Book an appointment', 'Cardiology', 'I would like a cardiology consultation for my father (68). He has had chest discomfort on walking for a week.', 'new', null, ((current_date + 0) + time '09:15')),
-  ('d0c00016-0000-4000-8000-000000000002', 'DCH-482138', 'Rohit Malhotra', '9899023456', null, 'Billing & insurance', null, 'Is Star Health cashless accepted for a planned knee replacement? Please share the documents needed.', 'new', null, ((current_date + 0) + time '10:40')),
-  ('d0c00016-0000-4000-8000-000000000003', 'DCH-482175', 'Meenakshi Iyer', '9711034567', 'meenakshi.iyer@outlook.com', 'Medical records', null, 'I need a copy of my discharge summary from March for an insurance claim.', 'in_progress', 'Records desk informed; ready for pickup tomorrow.', ((current_date + -1) + time '11:15')),
-  ('d0c00016-0000-4000-8000-000000000004', 'DCH-482212', 'Aman Gupta', '9953045678', 'aman.g@yahoo.in', 'Feedback or complaint', null, 'Wanted to thank the night nursing team in Ward B — they were incredibly kind to my mother.', 'resolved', 'Shared with nursing superintendent. Thanked patient by phone.', ((current_date + -3) + time '12:40')),
-  ('d0c00016-0000-4000-8000-000000000005', 'DCH-482249', 'Farah Khan', '9818056789', null, 'Book an appointment', 'Pediatrics', 'Need a vaccination appointment for my 9-month-old this Saturday morning if possible.', 'resolved', 'Booked with Dr. Ananya Iyer, Sat 10:30.', ((current_date + -4) + time '13:15')),
-  ('d0c00016-0000-4000-8000-000000000006', 'DCH-482286', 'Karan Sethi', '9650067890', 'karan.sethi@gmail.com', 'Careers', null, 'I am a BSc Nursing graduate with 3 years of ICU experience. Are there any openings?', 'in_progress', 'CV forwarded to HR.', ((current_date + -6) + time '14:40')),
-  ('d0c00016-0000-4000-8000-000000000007', 'DCH-482323', 'Win Big Offers', '9000000000', 'promo@spam.example', 'Something else', null, 'Get 10,000 followers instantly!!! Visit our site now.', 'spam', null, ((current_date + -7) + time '15:15'));
+insert into public.site_enquiries (id, ref, name, phone, email, topic, speciality, message, status, notes, starred, read_at, created_at) values
+  ('d0c00016-0000-4000-8000-000000000001', 'DCH-482101', 'Sunita Agarwal', '9810012345', 'sunita.a@gmail.com', 'Book an appointment', 'Cardiology', 'I would like a cardiology consultation for my father (68). He has had chest discomfort on walking for a week.', 'new', null, true, null, ((current_date + 0) + time '09:15')),
+  ('d0c00016-0000-4000-8000-000000000002', 'DCH-482138', 'Rohit Malhotra', '9899023456', null, 'Billing & insurance', null, 'Is Star Health cashless accepted for a planned knee replacement? Please share the documents needed.', 'new', null, false, null, ((current_date + 0) + time '10:40')),
+  ('d0c00016-0000-4000-8000-000000000003', 'DCH-482175', 'Meenakshi Iyer', '9711034567', 'meenakshi.iyer@outlook.com', 'Medical records', null, 'I need a copy of my discharge summary from March for an insurance claim.', 'in_progress', 'Records desk informed; ready for pickup tomorrow.', true, ((current_date + -1) + time '18:00'), ((current_date + -1) + time '11:15')),
+  ('d0c00016-0000-4000-8000-000000000004', 'DCH-482212', 'Aman Gupta', '9953045678', 'aman.g@yahoo.in', 'Feedback or complaint', null, 'Wanted to thank the night nursing team in Ward B — they were incredibly kind to my mother.', 'resolved', 'Shared with nursing superintendent. Thanked patient by phone.', false, ((current_date + -3) + time '18:00'), ((current_date + -3) + time '12:40')),
+  ('d0c00016-0000-4000-8000-000000000005', 'DCH-482249', 'Farah Khan', '9818056789', null, 'Book an appointment', 'Pediatrics', 'Need a vaccination appointment for my 9-month-old this Saturday morning if possible.', 'resolved', 'Booked with Dr. Ananya Iyer, Sat 10:30.', false, ((current_date + -4) + time '18:00'), ((current_date + -4) + time '13:15')),
+  ('d0c00016-0000-4000-8000-000000000006', 'DCH-482286', 'Karan Sethi', '9650067890', 'karan.sethi@gmail.com', 'Careers', null, 'I am a BSc Nursing graduate with 3 years of ICU experience. Are there any openings?', 'in_progress', 'CV forwarded to HR.', false, ((current_date + -6) + time '18:00'), ((current_date + -6) + time '14:40')),
+  ('d0c00016-0000-4000-8000-000000000007', 'DCH-482323', 'Win Big Offers', '9000000000', 'promo@spam.example', 'Something else', null, 'Get 10,000 followers instantly!!! Visit our site now.', 'spam', null, false, ((current_date + -7) + time '18:00'), ((current_date + -7) + time '15:15'));
 
 -- doctor_leaves (8)
 insert into public.doctor_leaves (id, doctor_id, kind, start_date, end_date, start_time, end_time, status, reason, created_at) values
@@ -3754,7 +3756,8 @@ declare
 begin
   if tg_op = 'UPDATE' then
     for k in select jsonb_object_keys(v_new) loop
-      continue when k in ('id', 'created_at', 'updated_at');
+      -- read_at / starred are personal inbox state (enquiries), not worth an audit entry
+      continue when k in ('id', 'created_at', 'updated_at', 'read_at', 'starred');
       if (v_new -> k) is distinct from (v_old -> k) then
         v_changes := v_changes || jsonb_build_object(k, jsonb_build_object('from', v_old -> k, 'to', v_new -> k));
       end if;
@@ -3876,7 +3879,7 @@ create policy site_content_revisions_owner_read on public.site_content_revisions
 -- Contact form: anyone (signed in or not) may send a *new* enquiry, but only staff can read them (policies above).
 drop policy if exists site_enquiries_public_insert on public.site_enquiries;
 create policy site_enquiries_public_insert on public.site_enquiries for insert to anon, authenticated
-  with check (status = 'new' and notes is null);
+  with check (status = 'new' and notes is null and starred = false and read_at is null);
 
 revoke all on public.site_content, public.site_content_revisions from anon;
 grant select on public.site_content to anon;

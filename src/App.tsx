@@ -43,15 +43,15 @@ const SchedulePage = lazy(() => import('./pages/SchedulePage'))
 const AuditPage = lazy(() => import('./pages/AuditPage'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const RatingsPage = lazy(() => import('./pages/RatingsPage'))
+const EnquiriesPage = lazy(() => import('./pages/EnquiriesPage'))
 
 const RESOURCES = [
   R.patientsRes, R.appointmentsRes, R.prescriptionsRes, R.labTestsRes, R.admissionsRes, R.doctorsRes, R.staffRes,
   R.departmentsRes, R.invoicesRes, R.paymentsRes, R.expensesRes, R.inventoryRes, R.noticesRes, R.usersRes,
-  R.enquiriesRes,
 ]
 
 /** Paths that belong to the signed-in app; anything else a guest opens gets the public 404. */
-const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile', '/ratings']
+const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile', '/ratings', '/enquiries']
 const isAppPath = (p: string) => APP_PREFIXES.some((x) => p === x || p.startsWith(`${x}/`))
 
 const PageLoader = () => <div className="grid h-64 place-items-center"><Spinner className="h-6 w-6" /></div>
@@ -88,6 +88,7 @@ export default function App() {
           <Route path="/schedule" element={<RequireNav path="/schedule"><Suspense fallback={<PageLoader />}><SchedulePage /></Suspense></RequireNav>} />
           <Route path="/audit" element={<RequireNav path="/audit"><Suspense fallback={<PageLoader />}><AuditPage /></Suspense></RequireNav>} />
           <Route path="/ratings" element={<RequireNav path="/ratings"><Suspense fallback={<PageLoader />}><RatingsPage /></Suspense></RequireNav>} />
+          <Route path="/enquiries" element={<RequireNav path="/enquiries"><Suspense fallback={<PageLoader />}><EnquiriesPage /></Suspense></RequireNav>} />
           <Route path="/profile" element={<Suspense fallback={<PageLoader />}><ProfilePage /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />
           <Route path="*" element={<EmptyState className="py-24" icon={<Compass className="h-6 w-6" />} title="Page not found" description="The page you're looking for doesn't exist." action={<Link to="/"><Button>Go to dashboard</Button></Link>} />} />

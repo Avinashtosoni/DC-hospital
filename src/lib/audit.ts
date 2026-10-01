@@ -19,7 +19,7 @@ export const AUDIT_TABLE_LABEL: Record<string, string> = {
 }
 
 /** Columns that change on every write and carry no meaning for a reviewer. */
-const IGNORED = new Set(['id', 'created_at', 'updated_at', '__optimistic'])
+const IGNORED = new Set(['id', 'created_at', 'updated_at', '__optimistic', 'read_at', 'starred'])
 
 const norm = (v: unknown) => (v === undefined || v === '' ? null : v)
 const same = (a: unknown, b: unknown) => JSON.stringify(norm(a)) === JSON.stringify(norm(b))

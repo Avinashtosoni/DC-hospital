@@ -262,6 +262,10 @@ export interface SiteEnquiry extends BaseRow {
   message: string
   status: EnquiryStatus
   notes?: string | null
+  /** inbox star (follow-up) */
+  starred?: boolean
+  /** when staff first opened it; null = unread */
+  read_at?: string | null
 }
 
 /** Patient rating after a completed visit (one per appointment). */

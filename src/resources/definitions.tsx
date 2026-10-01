@@ -1,13 +1,13 @@
 import {
   BedDouble, Building2, CalendarCheck, CalendarDays, CheckCircle2, ClipboardList, CreditCard, Eye, FileText, FlaskConical,
   CalendarOff, CalendarX2, PartyPopper, ThumbsDown, ThumbsUp, UserX, CalendarClock, Star, FileDown,
-  Inbox, Mail, Phone, LogOut, Megaphone, Package, PackagePlus, Pill, Printer, Receipt, Stethoscope, UserCheck, UserCog, Users, Wallet, XCircle, Ban, PlayCircle, TestTube,
+  LogOut, Megaphone, Package, PackagePlus, Pill, Printer, Receipt, Stethoscope, UserCheck, UserCog, Users, Wallet, XCircle, Ban, PlayCircle, TestTube,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns'
 import { downloadInvoice, downloadLabReport } from '../lib/pdf'
 import { toast } from 'sonner'
-import type { Admission, Appointment, Department, Doctor, DoctorLeave, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, SiteEnquiry, Staff } from '../types'
+import type { Admission, Appointment, Department, Doctor, DoctorLeave, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, Staff } from '../types'
 import { ROLE_LABEL } from '../types'
 import { Avatar, Badge, StatusBadge } from '../components/ui'
 import { age, fmtDate, fmtTime, money, today, titleCase } from '../lib/utils'
@@ -606,45 +606,6 @@ export const usersRes = defineResource({
     { name: 'phone', label: 'Phone', type: 'tel' },
     { name: 'role', label: 'Role', type: 'select', required: true, options: Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label })), span: 2, hint: 'Controls which modules this user can access' },
   ],
-})
-
-// ================================================================== WEBSITE ENQUIRIES (Contact form)
-const setEnquiry = (status: SiteEnquiry['status']) => (r: SiteEnquiry, c: ResourceCtx) => c.patch('site_enquiries', r.id, { status })
-export const enquiriesRes = defineResource({
-  table: 'site_enquiries', path: '/enquiries', title: 'Website Enquiries', singular: 'Enquiry', icon: Inbox,
-  description: 'Messages sent from the Contact page of the public website. Call back, add notes and track status.',
-  allowCreate: false,
-  canDelete: (_r, c) => c.role === 'owner',
-  defaultSort: { key: 'created_at', dir: 'desc' },
-  searchText: (r) => `${r.ref} ${r.name} ${r.phone} ${r.email ?? ''} ${r.topic} ${r.speciality ?? ''} ${r.message}`,
-  filters: [
-    { key: 'status', label: 'Status', options: opts('new', 'in_progress', 'resolved', 'spam') },
-    { key: 'topic', label: 'Topic', options: opts('Book an appointment', 'Billing & insurance', 'Medical records', 'Feedback or complaint', 'Careers', 'Something else').map((o) => ({ ...o, label: o.value })) },
-  ],
-  columns: [
-    { key: 'name', header: 'From', render: (r) => <Person name={r.name} sub={<span className="tabular-nums">{r.phone}{r.email ? ` · ${r.email}` : ''}</span>} />, sortValue: (r) => r.name },
-    { key: 'topic', header: 'Topic', render: (r) => <div><div className="font-medium text-slate-800">{r.topic}</div>{r.speciality && <div className="text-xs text-slate-500">{r.speciality}</div>}</div>, hideBelow: 'md' },
-    { key: 'message', header: 'Message', render: (r) => <span className="line-clamp-2 max-w-sm text-slate-600">{r.message}</span>, hideBelow: 'lg' },
-    { key: 'created_at', header: 'Received', render: (r) => <div><div className="text-slate-700">{fmtDate(r.created_at, 'dd MMM, hh:mm a')}</div><div className="font-mono text-[11px] text-slate-400">{r.ref}</div></div>, sortValue: (r) => r.created_at ?? '' },
-    { key: 'status', header: 'Status', render: (r) => <StatusBadge value={r.status} /> },
-  ],
-  rowActions: (r) => [
-    { label: 'Call back', icon: Phone, onClick: () => { window.location.href = `tel:${r.phone.replace(/\s+/g, '')}` } },
-    !!r.email && { label: 'Reply by email', icon: Mail, onClick: () => { window.location.href = `mailto:${r.email}?subject=${encodeURIComponent(`Your enquiry ${r.ref}`)}` } },
-    r.status === 'new' && { label: 'Mark in progress', icon: PlayCircle, onClick: setEnquiry('in_progress') },
-    r.status !== 'resolved' && { label: 'Mark resolved', icon: CheckCircle2, onClick: setEnquiry('resolved') },
-    r.status !== 'spam' && { label: 'Mark as spam', icon: Ban, onClick: setEnquiry('spam') },
-  ],
-  fields: [
-    { name: 'name', label: 'Name', type: 'text', required: true, readOnly: () => true },
-    { name: 'phone', label: 'Mobile', type: 'tel', required: true, readOnly: () => true },
-    { name: 'topic', label: 'Topic', type: 'text', readOnly: () => true },
-    { name: 'speciality', label: 'Speciality', type: 'text', readOnly: () => true },
-    { name: 'message', label: 'Message', type: 'textarea', readOnly: () => true },
-    { name: 'status', label: 'Status', type: 'select', required: true, options: opts('new', 'in_progress', 'resolved', 'spam') },
-    { name: 'notes', label: 'Internal notes', type: 'textarea', placeholder: 'Call outcome, follow-up, who is handling it…', hint: 'Only visible to hospital staff' },
-  ],
-  emptyText: 'No enquiries yet — messages from the website Contact page will appear here.',
 })
 
 // re-export row types used by pages (keeps imports tidy)

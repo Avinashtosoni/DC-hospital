@@ -271,6 +271,8 @@ create table public.site_enquiries (
   message     text not null check (char_length(message) between 1 and 2000),
   status      text not null default 'new' check (status in ('new', 'in_progress', 'resolved', 'spam')),
   notes       text,
+  starred     boolean not null default false,   -- inbox: staff flag for follow-up
+  read_at     timestamptz,                       -- inbox: null = unread (bold)
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );

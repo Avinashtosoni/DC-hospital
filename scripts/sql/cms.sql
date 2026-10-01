@@ -74,7 +74,7 @@ create policy site_content_revisions_owner_read on public.site_content_revisions
 -- Contact form: anyone (signed in or not) may send a *new* enquiry, but only staff can read them (policies above).
 drop policy if exists site_enquiries_public_insert on public.site_enquiries;
 create policy site_enquiries_public_insert on public.site_enquiries for insert to anon, authenticated
-  with check (status = 'new' and notes is null);
+  with check (status = 'new' and notes is null and starred = false and read_at is null);
 
 revoke all on public.site_content, public.site_content_revisions from anon;
 grant select on public.site_content to anon;

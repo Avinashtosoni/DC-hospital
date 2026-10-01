@@ -45,7 +45,8 @@ declare
 begin
   if tg_op = 'UPDATE' then
     for k in select jsonb_object_keys(v_new) loop
-      continue when k in ('id', 'created_at', 'updated_at');
+      -- read_at / starred are personal inbox state (enquiries), not worth an audit entry
+      continue when k in ('id', 'created_at', 'updated_at', 'read_at', 'starred');
       if (v_new -> k) is distinct from (v_old -> k) then
         v_changes := v_changes || jsonb_build_object(k, jsonb_build_object('from', v_old -> k, 'to', v_new -> k));
       end if;
