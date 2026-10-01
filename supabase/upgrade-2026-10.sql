@@ -6,7 +6,7 @@
 --   • MRN and invoice numbers assigned under a lock (no duplicates when two desks save together)
 --   • default dates use the Indian calendar day (Supabase runs on UTC)
 --   • site-wide OTP cap against SMS pumping; go-live cleanup keeps real records that point at demo ones
---   • server-side pagination: search / sort indexes and payment → invoice total sync (section 15)
+--   • server-side pagination: search / sort indexes and payment → invoice total sync, financial_report() for Reports (section 15)
 -- (New installs don't need this — production.sql / master.sql already include everything.)
 -- ============================================================================================================
 begin;

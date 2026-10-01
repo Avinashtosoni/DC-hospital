@@ -143,7 +143,16 @@ Demo logins use a public password (`Demo@123`), so **never run a real hospital o
 
 Re-running `master.sql` / `production.sql` **recreates the tables (data is lost)**. For a database that already holds real data,
 run **`supabase/upgrade-2026-10.sql`** instead. It is safe to run twice and keeps all rows; it adds the enquiry-inbox columns,
-no-cascade record protection, collision-proof MRN / invoice numbers, IST default dates and the OTP / Contact-form rate limits.
+no-cascade record protection, collision-proof MRN / invoice numbers, IST default dates, the OTP / Contact-form rate limits and
+the indexes / functions behind server-side pagination (section 15).
+
+### Server-side pagination (big hospitals)
+
+The app never downloads a whole patient, appointment, billing or audit table. Lists ask the database for **one page**
+(search, filters and sorting run in Postgres via PostgREST), dashboards read **head-only counts** and short date windows,
+and reports come from one aggregate call (`financial_report()`). Names on a page are resolved only for the rows shown.
+Payments keep `invoices.amount_paid` / `status` in sync with a database trigger, so balances stay right without
+re-reading every payment. Demo mode runs the very same queries against the browser store, so both modes behave alike.
 
 ### Production checklist (per hospital install)
 
