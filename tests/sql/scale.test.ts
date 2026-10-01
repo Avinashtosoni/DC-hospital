@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { freshDb, USER, type Db } from './harness'
+import { rawReport, type RawReport } from '../../src/lib/reports'
 
 let db: Db
 beforeAll(async () => { db = await freshDb('master') }, 180_000)
@@ -56,6 +57,28 @@ describe('payments keep invoice totals in the database', () => {
     const bad = await db.one<{ n: number }>(null, `select count(*)::int n from public.invoices i
       where i.amount_paid <> coalesce((select sum(amount) from public.payments p where p.invoice_id = i.id), 0)`)
     expect(bad.n).toBe(0)
+  })
+})
+
+describe('financial_report', () => {
+  test('database totals match the demo-mode calculation', async () => {
+    const from = (await db.one<{ d: string }>(null, `select (date_trunc('month', current_date) - interval '5 months')::date::text d`)).d
+    const sql = (await db.one<{ r: RawReport }>(USER.accountant, 'select public.financial_report($1::date) r', [from])).r
+    const num = (rows: Record<string, unknown>[], ...cols: string[]) => rows.map((r) => { for (const c of cols) r[c] = Number(r[c]); return r })
+    const inv = num(await db.as(null, `select issue_date::text, status, total, items from public.invoices`), 'total')
+    const pay = num(await db.as(null, `select paid_on::text, amount from public.payments`), 'amount')
+    const exp = num(await db.as(null, `select expense_date::text, amount, category from public.expenses`), 'amount')
+    const js = rawReport(inv as never, pay as never, exp as never, from)
+    for (const k of ['billed', 'collected', 'expenses', 'sources', 'cats', 'doctors'] as const) {
+      expect(Object.keys(sql[k]).sort(), k).toEqual(Object.keys(js[k]).sort())
+      for (const [key, v] of Object.entries(js[k])) expect(Number(sql[k][key]), `${k}.${key}`).toBeCloseTo(v, 2)
+    }
+    expect(Object.keys(js.billed).length).toBeGreaterThan(3)
+  })
+  test('row level security applies: a patient only gets their own billing and no expenses', async () => {
+    const r = (await db.one<{ r: RawReport }>(USER.patient, `select public.financial_report(current_date - 400) r`)).r
+    expect(r.expenses).toEqual({})
+    await expect(db.as('anon', `select public.financial_report(current_date)`)).rejects.toThrow(/permission denied/)
   })
 })
 

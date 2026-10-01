@@ -65,7 +65,7 @@ export function useWindow<T extends TableName>(table: T, q: Query, opts: { enabl
 }
 
 /** Number of rows matching the filters (no rows are transferred). */
-export function useCount(table: TableName, where: Filter[] = [], opts: { enabled?: boolean } = {}) {
+export function useCount(table: TableName, where: readonly Filter[] = [], opts: { enabled?: boolean } = {}) {
   const { allowed } = useAllowed(table)
   const q = useQuery({
     queryKey: [...qk(table), 'count', queryKey({ where })],

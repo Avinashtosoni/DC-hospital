@@ -1,49 +1,20 @@
 import { bc } from './dashboard/widgets'
 import { useMemo, useState } from 'react'
 import { Download, IndianRupee, Percent, PieChart as PieIcon, Receipt, TrendingDown, TrendingUp, Wallet } from 'lucide-react'
-import { format, startOfMonth, subMonths } from 'date-fns'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { useTable } from '../hooks/useData'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { qk } from '../hooks/useData'
+import { fetchReport, shapeReport } from '../lib/reports'
 import { Button, Card, CardHeader, PageHeader, Select, Skeleton, StatCard } from '../components/ui'
 import { Donut } from './dashboard/widgets'
-import { downloadCsv, money, moneyCompact, titleCase } from '../lib/utils'
-
-const source = (desc: string) =>
-  /^Consultation/i.test(desc) ? 'Consultations' : /^Lab/i.test(desc) ? 'Laboratory' : /bed charges|Nursing/i.test(desc) ? 'IPD / Room' : /Pharmacy/i.test(desc) ? 'Pharmacy' : /Procedure|OT/i.test(desc) ? 'Procedures' : 'Other'
+import { downloadCsv, money, moneyCompact } from '../lib/utils'
 
 export default function Reports() {
   const [months, setMonths] = useState(6)
-  const invoices = useTable('invoices')
-  const payments = useTable('payments')
-  const expenses = useTable('expenses')
-  const loading = invoices.isLoading || payments.isLoading || expenses.isLoading
-
-  const r = useMemo(() => {
-    const buckets = Array.from({ length: months }, (_, i) => { const d = startOfMonth(subMonths(new Date(), months - 1 - i)); return { key: format(d, 'yyyy-MM'), label: format(d, months > 6 ? 'MMM yy' : 'MMM yyyy') } })
-    const from = buckets[0].key
-    const inv = (invoices.data ?? []).filter((i) => i.issue_date.slice(0, 7) >= from && i.status !== 'cancelled' && i.status !== 'draft')
-    const pay = (payments.data ?? []).filter((p) => p.paid_on.slice(0, 7) >= from)
-    const exp = (expenses.data ?? []).filter((e) => e.expense_date.slice(0, 7) >= from)
-    const monthly = buckets.map((b) => {
-      const billed = inv.filter((i) => i.issue_date.startsWith(b.key)).reduce((s, i) => s + i.total, 0)
-      const collected = pay.filter((p) => p.paid_on.startsWith(b.key)).reduce((s, p) => s + p.amount, 0)
-      const spent = exp.filter((e) => e.expense_date.startsWith(b.key)).reduce((s, e) => s + e.amount, 0)
-      return { label: b.label, billed, collected, expenses: spent, net: collected - spent }
-    })
-    const sum = (k: 'billed' | 'collected' | 'expenses' | 'net') => monthly.reduce((s, m) => s + m[k], 0)
-    const bySource: Record<string, number> = {}
-    inv.forEach((i) => i.items.forEach((it) => { const s = source(it.description); bySource[s] = (bySource[s] ?? 0) + it.quantity * it.unit_price }))
-    const byCat: Record<string, number> = {}
-    exp.forEach((e) => { byCat[titleCase(e.category)] = (byCat[titleCase(e.category)] ?? 0) + e.amount })
-    const byDoctor: Record<string, number> = {}
-    inv.forEach((i) => i.items.forEach((it) => { const m = it.description.match(/^Consultation – (.+)$/); if (m) byDoctor[m[1]] = (byDoctor[m[1]] ?? 0) + it.quantity * it.unit_price }))
-    return {
-      monthly, billed: sum('billed'), collected: sum('collected'), spent: sum('expenses'), net: sum('net'),
-      sources: Object.entries(bySource).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
-      cats: Object.entries(byCat).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
-      doctors: Object.entries(byDoctor).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8),
-    }
-  }, [months, invoices.data, payments.data, expenses.data])
+  // totals come from the database (financial_report) — the browser never downloads every invoice
+  const q = useQuery({ queryKey: [...qk('invoices'), 'report', months], queryFn: () => fetchReport(months), staleTime: 60_000, placeholderData: keepPreviousData })
+  const loading = q.isLoading
+  const r = useMemo(() => shapeReport(q.data, months), [q.data, months])
 
   return (
     <div>

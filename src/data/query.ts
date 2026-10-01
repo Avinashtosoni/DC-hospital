@@ -18,7 +18,7 @@ export interface SearchSpec {
 }
 
 export interface Query {
-  where?: Filter[]
+  where?: readonly Filter[]
   search?: SearchSpec
   order?: { column: string; asc?: boolean }[]
   /** zero-based, inclusive [from, to] — same convention as PostgREST */

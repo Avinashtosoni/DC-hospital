@@ -5219,6 +5219,37 @@ drop trigger if exists trg_payments_sync_invoice on public.payments;
 create trigger trg_payments_sync_invoice after insert or update or delete on public.payments
   for each row execute function public.payments_sync_invoice();
 
+-- ---- Financial Reports totals (the Reports page never downloads every invoice). Runs with the caller's rights,
+--      so RLS decides who sees what (owner / accountant). Buckets mirror src/lib/reports.ts.
+create or replace function public.financial_report(p_from date)
+returns jsonb language plpgsql stable security invoker set search_path = public as $$
+declare r jsonb;
+begin
+  with inv as (
+    select issue_date, total, items from public.invoices where issue_date >= p_from and status not in ('cancelled', 'draft')
+  ), items as (
+    select coalesce(it ->> 'description', '') d,
+           coalesce((it ->> 'quantity')::numeric, 0) * coalesce((it ->> 'unit_price')::numeric, 0) amt
+    from inv cross join lateral jsonb_array_elements(case when jsonb_typeof(inv.items) = 'array' then inv.items else '[]'::jsonb end) it
+  )
+  select jsonb_build_object(
+    'billed', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(issue_date, 'YYYY-MM') m, sum(total) v from inv group by 1) x),
+    'collected', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(paid_on, 'YYYY-MM') m, sum(amount) v from public.payments where paid_on >= p_from group by 1) x),
+    'expenses', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(expense_date, 'YYYY-MM') m, sum(amount) v from public.expenses where expense_date >= p_from group by 1) x),
+    'cats', (select coalesce(jsonb_object_agg(category, v), '{}') from (select category, sum(amount) v from public.expenses where expense_date >= p_from group by 1) x),
+    'sources', (select coalesce(jsonb_object_agg(s, v), '{}') from (
+      select case when d ~* '^Consultation' then 'Consultations' when d ~* '^Lab' then 'Laboratory'
+                  when d ~* 'bed charges|Nursing' then 'IPD / Room' when d ~* 'Pharmacy' then 'Pharmacy'
+                  when d ~* 'Procedure|OT' then 'Procedures' else 'Other' end s, sum(amt) v
+      from items group by 1) x),
+    'doctors', (select coalesce(jsonb_object_agg(n, v), '{}') from (
+      select substring(d from '^Consultation – (.+)$') n, sum(amt) v from items where d ~ '^Consultation – .+' group by 1) x)
+  ) into r;
+  return r;
+end $$;
+revoke execute on function public.financial_report(date) from public, anon;
+grant execute on function public.financial_report(date) to authenticated;
+
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / Demo@123

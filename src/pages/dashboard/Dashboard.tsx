@@ -9,7 +9,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
 import { useSiteSettings } from '../../site/cms/content'
 import { Widget, WidgetScope } from '../../settings/widgetScope'
-import { useLookup, useTable, useUpdate } from '../../hooks/useData'
+import { useByIds, useCount, useLookup, useTable, useUpdate, useWindow } from '../../hooks/useData'
 import { useMe } from '../../hooks/useScope'
 import { Avatar, Badge, Button, Card, CardHeader, StatCard, StatusBadge } from '../../components/ui'
 import { Donut, Greeting, ListCard, ListRow, QuickAction, RevenueChart, SimpleBar, monthBuckets } from './widgets'
@@ -40,10 +40,15 @@ function RoleDashboard({ role }: { role?: string }) {
 }
 
 // ---------------------------------------------------------------- shared
+/** ISO timestamp rounded to the hour, so the query (and its cache key) stays stable between renders */
+const hoursAgo = (h: number) => new Date(Math.floor(Date.now() / 3_600_000 - h) * 3_600_000).toISOString()
+const OPEN_INVOICE = ['unpaid', 'partial', 'overdue']
+/** Finance widgets read a 6-month window of payments / expenses and the open invoices — never whole tables. */
 function useFinance() {
-  const invoices = useTable('invoices')
-  const payments = useTable('payments')
-  const expenses = useTable('expenses')
+  const since = `${monthBuckets(6)[0].key}-01`
+  const invoices = useWindow('invoices', { where: [['status', 'in', OPEN_INVOICE]] })
+  const payments = useWindow('payments', { where: [['paid_on', 'gte', since]], order: [{ column: 'paid_on', asc: false }] })
+  const expenses = useWindow('expenses', { where: [['expense_date', 'gte', since]] })
   return useMemo(() => {
     const buckets = monthBuckets(6)
     const series = buckets.map((b) => ({
@@ -95,20 +100,24 @@ function OwnerDashboard() {
   const site = useSiteSettings()
   const { user } = useAuth()
   const fin = useFinance()
-  const appts = useTable('appointments')
-  const patients = useTable('patients')
+  const t = today()
+  // last 30 days of bookings feed today's list, the 7-day bars and the department mix
+  const appts = useWindow('appointments', { where: [['appointment_date', 'gte', format(subDays(new Date(), 30), 'yyyy-MM-dd')], ['appointment_date', 'lte', t]] })
+  const patients = useCount('patients')
+  const monthAgo = hoursAgo(30 * 24)
+  const newPatientsQ = useCount('patients', [['created_at', 'gte', monthAgo]])
   const beds = useTable('beds')
   const inventory = useTable('inventory')
-  const admissions = useTable('admissions')
-  const pLk = useLookup('patients')
+  const admissions = useWindow('admissions', { where: [['status', 'eq', 'admitted']], order: [{ column: 'admission_date', asc: false }] })
   const dLk = useLookup('doctors')
   const deptLk = useLookup('departments')
-  const t = today()
   const todays = (appts.data ?? []).filter((a) => a.appointment_date === t).sort((a, b) => a.appointment_time.localeCompare(b.appointment_time))
+  const topOpen = fin.invoices.filter((i) => invoiceBalance(i) > 0).sort((a, b) => invoiceBalance(b) - invoiceBalance(a)).slice(0, 5)
+  const pLk = useByIds('patients', [...todays.slice(0, 7).map((a) => a.patient_id), ...(admissions.data ?? []).slice(0, 5).map((a) => a.patient_id), ...topOpen.map((i) => i.patient_id)])
   const occupied = (beds.data ?? []).filter((b) => b.status === 'occupied').length
   const totalBeds = beds.data?.length ?? 0
   const lowStock = (inventory.data ?? []).filter((i) => i.quantity <= i.reorder_level)
-  const newPatients = (patients.data ?? []).filter((p) => p.created_at && p.created_at >= subDays(new Date(), 30).toISOString()).length
+  const newPatients = newPatientsQ.count ?? 0
 
   const byDept = useMemo(() => {
     const m: Record<string, number> = {}
@@ -133,7 +142,7 @@ function OwnerDashboard() {
       </Greeting>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Revenue (this month)" value={money(fin.thisMonth?.revenue)} icon={<IndianRupee className="h-5 w-5" />} loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.revenue} prev={fin.lastMonth.revenue} />} />
-        <StatCard label="Total patients" value={num(patients.data?.length)} icon={<Users className="h-5 w-5" />} tone="blue" loading={patients.isLoading} hint={`+${newPatients} in last 30 days`} />
+        <StatCard label="Total patients" value={num(patients.count)} icon={<Users className="h-5 w-5" />} tone="blue" loading={patients.isLoading} hint={`+${newPatients} in last 30 days`} />
         <StatCard label="Today's appointments" value={todays.length} icon={<CalendarCheck className="h-5 w-5" />} tone="violet" loading={appts.isLoading} hint={`${todays.filter((a) => a.status === 'completed').length} completed`} />
         <StatCard label="Bed occupancy" value={totalBeds ? `${Math.round((occupied / totalBeds) * 100)}%` : '—'} icon={<BedDouble className="h-5 w-5" />} tone="amber" loading={beds.isLoading} hint={`${occupied} of ${totalBeds} beds occupied`} />
       </div>
@@ -171,7 +180,7 @@ function OwnerDashboard() {
           ))}
         </ListCard>
         <ListCard title="Outstanding invoices" subtitle={`${money(fin.outstanding)} receivable`} icon={<Receipt className="h-4 w-4" />} link="/invoices?status=overdue" loading={fin.loading} empty={!fin.invoices.some((i) => invoiceBalance(i) > 0)}>
-          {fin.invoices.filter((i) => invoiceBalance(i) > 0 && !['cancelled', 'draft'].includes(i.status)).sort((a, b) => invoiceBalance(b) - invoiceBalance(a)).slice(0, 5).map((i) => (
+          {topOpen.map((i) => (
             <ListRow key={i.id} to={`/invoices/${i.id}`} left={<div><div className="text-sm font-medium text-slate-800">{i.invoice_number} · {pLk.get(i.patient_id)?.full_name}</div><div className="text-xs text-slate-500">Due {fmtDate(i.due_date)}</div></div>} right={<div className="flex items-center gap-2"><span className="text-sm font-semibold text-rose-600">{money(invoiceBalance(i))}</span><StatusBadge value={i.status} /></div>} />
           ))}
         </ListCard>
@@ -184,15 +193,17 @@ function OwnerDashboard() {
 function DoctorDashboard() {
   const { user } = useAuth()
   const me = useMe()
-  const appts = useTable('appointments')
-  const labs = useTable('lab_tests')
-  const admissions = useTable('admissions')
-  const rx = useTable('prescriptions')
-  const pLk = useLookup('patients')
+  const docId = me.doctor?.id ?? ''
+  const t = today()
+  const on = { enabled: !!docId }
+  // this doctor's bookings from a week ago onwards, open lab orders, in-patients and follow-ups
+  const appts = useWindow('appointments', { where: [['doctor_id', 'eq', docId], ['appointment_date', 'gte', format(subDays(new Date(), 7), 'yyyy-MM-dd')]] }, on)
+  const labs = useWindow('lab_tests', { where: [['doctor_id', 'eq', docId], ['status', 'nin', ['completed', 'cancelled']]], order: [{ column: 'requested_on', asc: false }] }, on)
+  const admissions = useWindow('admissions', { where: [['doctor_id', 'eq', docId], ['status', 'eq', 'admitted']] }, on)
+  const rx = useWindow('prescriptions', { where: [['doctor_id', 'eq', docId], ['follow_up_date', 'gte', t]], order: [{ column: 'follow_up_date', asc: true }] }, on)
   const dLk = useLookup('doctors')
   const bLk = useLookup('beds')
-  const docId = me.doctor?.id
-  const t = today()
+  const pLk = useByIds('patients', [...(appts.data ?? []), ...(labs.data ?? []).slice(0, 5), ...(admissions.data ?? []), ...(rx.data ?? []).slice(0, 5)].map((r) => r.patient_id))
   const mine = (appts.data ?? []).filter((a) => a.doctor_id === docId)
   const todays = mine.filter((a) => a.appointment_date === t).sort((a, b) => a.appointment_time.localeCompare(b.appointment_time))
   const waiting = todays.filter((a) => a.status === 'checked_in').length
@@ -242,15 +253,15 @@ function DoctorDashboard() {
 // ---------------------------------------------------------------- RECEPTION
 function ReceptionDashboard() {
   const { user } = useAuth()
-  const appts = useTable('appointments')
-  const patients = useTable('patients')
+  const t = today()
+  const appts = useWindow('appointments', { where: [['appointment_date', 'eq', t]] })
+  const weekAgo = hoursAgo(7 * 24)
+  const newPatients = useCount('patients', [['created_at', 'gte', weekAgo]])
   const beds = useTable('beds')
   const wards = useTable('wards')
-  const pLk = useLookup('patients')
   const dLk = useLookup('doctors')
-  const t = today()
   const todays = (appts.data ?? []).filter((a) => a.appointment_date === t).sort((a, b) => a.appointment_time.localeCompare(b.appointment_time))
-  const weekAgo = subDays(new Date(), 7).toISOString()
+  const pLk = useByIds('patients', todays.map((a) => a.patient_id))
   const available = (beds.data ?? []).filter((b) => b.status === 'available')
   return (
     <div>
@@ -264,7 +275,7 @@ function ReceptionDashboard() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Today's appointments" value={todays.length} icon={<CalendarCheck className="h-5 w-5" />} loading={appts.isLoading} />
         <StatCard label="Checked in" value={todays.filter((a) => a.status === 'checked_in').length} icon={<UserCheck className="h-5 w-5" />} tone="violet" loading={appts.isLoading} hint="Waiting for doctor" />
-        <StatCard label="New patients (7d)" value={(patients.data ?? []).filter((p) => (p.created_at ?? '') >= weekAgo).length} icon={<UserPlus className="h-5 w-5" />} tone="blue" loading={patients.isLoading} />
+        <StatCard label="New patients (7d)" value={newPatients.count ?? 0} icon={<UserPlus className="h-5 w-5" />} tone="blue" loading={newPatients.isLoading} />
         <StatCard label="Available beds" value={available.length} icon={<BedDouble className="h-5 w-5" />} tone="green" loading={beds.isLoading} hint={`of ${beds.data?.length ?? 0} total`} />
       </div>
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
@@ -292,10 +303,10 @@ function ReceptionDashboard() {
 function AccountantDashboard() {
   const { user } = useAuth()
   const fin = useFinance()
-  const pLk = useLookup('patients')
   const net = (fin.thisMonth?.revenue ?? 0) - (fin.thisMonth?.expenses ?? 0)
   const overdue = fin.invoices.filter((i) => i.status === 'overdue').sort((a, b) => invoiceBalance(b) - invoiceBalance(a))
   const recent = [...fin.payments].sort((a, b) => b.paid_on.localeCompare(a.paid_on)).slice(0, 6)
+  const pLk = useByIds('patients', [...overdue.slice(0, 6), ...recent].map((r) => r.patient_id))
   return (
     <div>
       <Greeting name={user!.full_name} subtitle="Financial snapshot for this month.">
@@ -310,7 +321,7 @@ function AccountantDashboard() {
       </div>
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <Widget id="Cash flow"><Card className="xl:col-span-2"><CardHeader title="Cash flow" subtitle="Last 6 months" icon={<TrendingUp className="h-4 w-4" />} /><RevenueChart data={fin.series} loading={fin.loading} /></Card></Widget>
-        <Widget id="Collections by method"><Card><CardHeader title="Collections by method" icon={<CreditCard className="h-4 w-4" />} /><Donut data={fin.methods} loading={fin.loading} formatter={money} height={290} /></Card></Widget>
+        <Widget id="Collections by method"><Card><CardHeader title="Collections by method" subtitle="Last 6 months" icon={<CreditCard className="h-4 w-4" />} /><Donut data={fin.methods} loading={fin.loading} formatter={money} height={290} /></Card></Widget>
       </div>
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <ListCard title="Overdue invoices" icon={<AlertTriangle className="h-4 w-4" />} link="/invoices?status=overdue" loading={fin.loading} empty={!overdue.length} emptyText="No overdue invoices 🎉">
@@ -327,12 +338,12 @@ function AccountantDashboard() {
 // ---------------------------------------------------------------- STAFF
 function StaffDashboard() {
   const { user } = useAuth()
-  const labs = useTable('lab_tests')
-  const admissions = useTable('admissions')
+  const labs = useWindow('lab_tests', { where: [['status', 'in', ['requested', 'sample_collected', 'in_progress']]] })
+  const admissions = useWindow('admissions', { where: [['status', 'eq', 'admitted']], order: [{ column: 'admission_date', asc: false }] })
   const inventory = useTable('inventory')
   const beds = useTable('beds')
-  const pLk = useLookup('patients')
   const bLk = useLookup('beds')
+  const pLk = useByIds('patients', [...(labs.data ?? []), ...(admissions.data ?? [])].map((r) => r.patient_id))
   const upd = useUpdate('lab_tests', { label: 'Lab test' })
   const pending = (labs.data ?? []).filter((l) => ['requested', 'sample_collected', 'in_progress'].includes(l.status)).sort((a, b) => (a.priority === 'stat' ? -1 : b.priority === 'stat' ? 1 : a.requested_on.localeCompare(b.requested_on)))
   const inpatients = (admissions.data ?? []).filter((a) => a.status === 'admitted')
@@ -378,15 +389,17 @@ function PatientDashboard() {
   const { t } = useT()
   const site = useSiteSettings()
   const me = useMe()
-  const appts = useTable('appointments')
-  const rx = useTable('prescriptions')
-  const labs = useTable('lab_tests')
-  const invoices = useTable('invoices')
+  const pid = me.patient?.id ?? ''
+  // a patient's own records only (RLS enforces the same in Supabase)
+  const mineQ = { where: [['patient_id', 'eq', pid]] as const }, on = { enabled: !!pid }
+  const appts = useWindow('appointments', mineQ, on)
+  const rx = useWindow('prescriptions', mineQ, on)
+  const labs = useWindow('lab_tests', mineQ, on)
+  const invoices = useWindow('invoices', mineQ, on)
   const notices = useTable('notices')
-  const feedback = useTable('visit_feedback')
+  const feedback = useWindow('visit_feedback', mineQ, on)
   const dLk = useLookup('doctors')
   const deptLk = useLookup('departments')
-  const pid = me.patient?.id
   const td = today()
   const mine = (appts.data ?? []).filter((a) => a.patient_id === pid)
   const upcoming = mine.filter((a) => a.appointment_date >= td && ['scheduled', 'confirmed', 'checked_in'].includes(a.status)).sort((a, b) => (a.appointment_date + a.appointment_time).localeCompare(b.appointment_date + b.appointment_time))
