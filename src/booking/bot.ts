@@ -2,6 +2,7 @@
  * Browser side of the WhatsApp chatbot: runs the shared conversation engine against the demo data,
  * or asks the deployed `whatsapp-bot` Edge Function to simulate a chat (Supabase mode).
  */
+import { format } from 'date-fns'
 import { botReply, newBotState, type BotDeps, type BotState } from '../../supabase/functions/_shared/bot'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import { localAdapter } from '../data/localAdapter'
@@ -38,7 +39,7 @@ function localDeps(phone: string, site: SiteSettings): BotDeps {
     async upcoming() {
       const ids = new Set((await mine()).map((p) => p.id))
       const [appts, docs] = await Promise.all([localAdapter.list('appointments'), localAdapter.list('doctors')])
-      const today = new Date().toISOString().slice(0, 10)
+      const today = format(new Date(), 'yyyy-MM-dd')   // local calendar day (toISOString is UTC → yesterday before 05:30 IST)
       return appts.filter((a) => ids.has(a.patient_id) && a.appointment_date >= today && ['scheduled', 'confirmed'].includes(a.status))
         .sort((a, b) => (a.appointment_date + a.appointment_time).localeCompare(b.appointment_date + b.appointment_time))
         .slice(0, 9)

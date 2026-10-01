@@ -8,6 +8,8 @@ import { Button, EmptyState, Spinner } from './components/ui'
 import * as R from './resources/definitions'
 import Login from './pages/Login'
 import Register from './pages/Register'
+const ForgotPassword = lazy(() => import('./pages/PasswordReset').then((m) => ({ default: m.ForgotPassword })))
+const ResetPassword = lazy(() => import('./pages/PasswordReset').then((m) => ({ default: m.ResetPassword })))
 import { InviteStaff } from './pages/users/InviteStaff'
 
 // Public website
@@ -62,6 +64,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route element={<SiteLayout />}>
           {PUBLIC_PAGES.map(([path, Page]) => <Route key={path} path={path} element={<Page />} />)}
         </Route>

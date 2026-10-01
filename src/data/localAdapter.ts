@@ -52,6 +52,13 @@ export async function asActor<T>(name: string, role: string, fn: () => Promise<T
   try { return await fn() } finally { actorOverride = null }
 }
 
+/** Child tables whose rows block deleting a parent (mirrors `on delete restrict` in scripts/sql/schema.sql). */
+const RESTRICT: Partial<Record<string, [string, string][]>> = {
+  patients: [['appointments', 'patient_id'], ['prescriptions', 'patient_id'], ['lab_tests', 'patient_id'], ['admissions', 'patient_id'], ['invoices', 'patient_id'], ['payments', 'patient_id']],
+  doctors: [['appointments', 'doctor_id'], ['prescriptions', 'doctor_id']],
+  invoices: [['payments', 'invoice_id']],
+}
+
 /** Demo-mode equivalent of the audit triggers in scripts/sql/audit.sql. */
 function audit(table: TableName, action: 'insert' | 'update' | 'delete', before: Record<string, unknown> | null, after: Record<string, unknown> | null) {
   if (!isAudited(table)) return
@@ -123,6 +130,9 @@ export const localAdapter: DataAdapter = {
   async remove(table, id) {
     await latency()
     const store = load() as Record<string, { id: string }[]>
+    // same rule as the database (on delete restrict): clinical and billing history is never deleted along with a person
+    const linked = (RESTRICT[table] ?? []).some(([child, col]) => (store[child] ?? []).some((r) => (r as unknown as Record<string, unknown>)[col] === id))
+    if (linked) throw new Error('This record can\'t be deleted because appointments, bills or medical records are linked to it. Mark it inactive or cancelled instead.')
     const before = store[table].find((r) => r.id === id)
     store[table] = store[table].filter((r) => r.id !== id)
     if (before) audit(table, 'delete', before as Record<string, unknown>, null)
@@ -207,6 +217,12 @@ export const localAuth: AuthAdapter = {
     u.password = next
     localStorage.setItem(USERS_KEY, JSON.stringify(list))
   },
+  async requestPasswordReset() {
+    await latency()
+    throw new Error('Password reset by e-mail works once the hospital database is connected. In this demo every account uses the password Demo@123.')
+  },
+  async hasRecoverySession() { return false },
+  async setNewPassword() { throw new Error('Not available in demo mode') },
   async signOutEverywhere() {
     localStorage.removeItem(SESSION_KEY)
     emit()

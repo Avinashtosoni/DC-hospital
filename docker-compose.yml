@@ -10,6 +10,8 @@ services:
     environment:
       - VITE_SUPABASE_URL=${VITE_SUPABASE_URL:-}
       - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY:-}
+      # set to true for real hospitals: refuse to start in demo (browser-only) mode if Supabase is missing
+      - REQUIRE_BACKEND=${REQUIRE_BACKEND:-}
     # Coolify's proxy routes to container port 80 — no host port needed.
     # For local use without Coolify, uncomment:
     # ports:

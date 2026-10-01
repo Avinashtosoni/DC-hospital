@@ -76,6 +76,27 @@ drop policy if exists site_enquiries_public_insert on public.site_enquiries;
 create policy site_enquiries_public_insert on public.site_enquiries for insert to anon, authenticated
   with check (status = 'new' and notes is null and starred = false and read_at is null);
 
+-- Contact-form flood protection: 3 messages per mobile number per hour and 60 per hour for the whole site.
+-- Staff inserts are not limited.
+create or replace function public.limit_site_enquiries()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_digits text := right(regexp_replace(new.phone, '\D', '', 'g'), 10);
+begin
+  if auth.uid() is not null and public.is_staff() then return new; end if;
+  if (select count(*) from public.site_enquiries where created_at > now() - interval '1 hour'
+        and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits) >= 3 then
+    raise exception 'You have already sent us a few messages in the last hour — we will get back to you soon. For anything urgent please call us.';
+  end if;
+  if (select count(*) from public.site_enquiries where created_at > now() - interval '1 hour') >= 60 then
+    raise exception 'We are receiving a lot of messages right now. Please try again shortly or call us.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_site_enquiries_limit on public.site_enquiries;
+create trigger trg_site_enquiries_limit before insert on public.site_enquiries
+  for each row execute function public.limit_site_enquiries();
+revoke all on function public.limit_site_enquiries() from public, anon;
+
 revoke all on public.site_content, public.site_content_revisions from anon;
 grant select on public.site_content to anon;
 grant select, insert, update, delete on public.site_content to authenticated;

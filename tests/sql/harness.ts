@@ -33,11 +33,11 @@ export type Db = PGlite & {
   one<T = Record<string, unknown>>(who: string | null, sql: string, params?: unknown[]): Promise<T>
 }
 
-export async function freshDb(file: 'master' | 'production' = 'master'): Promise<Db> {
+export async function freshDb(file: 'master' | 'production' | { path: string } = 'master'): Promise<Db> {
   const db = (await PGlite.create({ extensions: { pgcrypto } })) as Db
   await db.exec(SUPABASE_STUBS)
   await db.exec('create extension if not exists pgcrypto with schema extensions;')
-  await db.exec(readFileSync(resolve(__dirname, `../../supabase/${file}.sql`), 'utf8'))
+  await db.exec(readFileSync(typeof file === 'string' ? resolve(__dirname, `../../supabase/${file}.sql`) : file.path, 'utf8'))
   /** run a query as a signed-in user id, 'anon', 'service' or null (superuser) */
   db.as = async (who, sql, params = []) => {
     await db.exec('reset role; select set_config(\'request.jwt.claim.sub\', \'\', false);')

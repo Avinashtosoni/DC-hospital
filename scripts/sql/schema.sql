@@ -24,6 +24,8 @@ drop function if exists public.my_patient_id() cascade;
 drop function if exists public.current_app_role() cascade;
 drop function if exists public.my_doctor_id() cascade;
 drop function if exists public.protect_patient_fields() cascade;
+drop function if exists public.assign_record_number() cascade;
+drop function if exists public.today_ist() cascade;
 drop type if exists public.app_role cascade;
 
 -- =====================================================================================================
@@ -34,6 +36,9 @@ create type public.app_role as enum ('owner', 'doctor', 'receptionist', 'account
 -- =====================================================================================================
 --  3. TABLES
 -- =====================================================================================================
+-- Calendar date in India. Supabase servers run on UTC, so plain current_date is still "yesterday" until 05:30 IST.
+create or replace function public.today_ist() returns date language sql stable as $$ select (now() at time zone 'Asia/Kolkata')::date $$;
+
 create table public.profiles (
   id          uuid primary key references auth.users (id) on delete cascade,
   full_name   text not null,
@@ -112,8 +117,8 @@ create table public.patients (
 
 create table public.appointments (
   id                uuid primary key default gen_random_uuid(),
-  patient_id        uuid not null references public.patients (id) on delete cascade,
-  doctor_id         uuid not null references public.doctors (id) on delete cascade,
+  patient_id        uuid not null references public.patients (id) on delete restrict,
+  doctor_id         uuid not null references public.doctors (id) on delete restrict,
   appointment_date  date not null,
   appointment_time  text not null check (appointment_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
   type              text not null default 'consultation' check (type in ('consultation', 'follow_up', 'emergency', 'checkup')),
@@ -129,21 +134,21 @@ create table public.appointments (
 
 create table public.prescriptions (
   id              uuid primary key default gen_random_uuid(),
-  patient_id      uuid not null references public.patients (id) on delete cascade,
-  doctor_id       uuid not null references public.doctors (id) on delete cascade,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  doctor_id       uuid not null references public.doctors (id) on delete restrict,
   diagnosis       text not null,
   symptoms        text,
   medications     jsonb not null default '[]'::jsonb,
   advice          text,
   follow_up_date  date,
-  prescribed_on   date not null default current_date,
+  prescribed_on   date not null default public.today_ist(),
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
 
 create table public.lab_tests (
   id            uuid primary key default gen_random_uuid(),
-  patient_id    uuid not null references public.patients (id) on delete cascade,
+  patient_id    uuid not null references public.patients (id) on delete restrict,
   doctor_id     uuid references public.doctors (id) on delete set null,
   test_name     text not null,
   category      text not null default 'Biochemistry',
@@ -151,7 +156,7 @@ create table public.lab_tests (
   status        text not null default 'requested' check (status in ('requested', 'sample_collected', 'in_progress', 'completed', 'cancelled')),
   result        text,
   price         numeric(12,2) not null default 0 check (price >= 0),
-  requested_on  date not null default current_date,
+  requested_on  date not null default public.today_ist(),
   completed_on  date,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
@@ -178,10 +183,10 @@ create table public.beds (
 
 create table public.admissions (
   id              uuid primary key default gen_random_uuid(),
-  patient_id      uuid not null references public.patients (id) on delete cascade,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
   doctor_id       uuid references public.doctors (id) on delete set null,
   bed_id          uuid references public.beds (id) on delete set null,
-  admission_date  date not null default current_date,
+  admission_date  date not null default public.today_ist(),
   discharge_date  date,
   reason          text,
   status          text not null default 'admitted' check (status in ('admitted', 'discharged')),
@@ -194,8 +199,8 @@ create table public.admissions (
 create table public.invoices (
   id              uuid primary key default gen_random_uuid(),
   invoice_number  text not null unique,
-  patient_id      uuid not null references public.patients (id) on delete cascade,
-  issue_date      date not null default current_date,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  issue_date      date not null default public.today_ist(),
   due_date        date,
   items           jsonb not null default '[]'::jsonb,
   subtotal        numeric(12,2) not null default 0,
@@ -211,11 +216,11 @@ create table public.invoices (
 
 create table public.payments (
   id          uuid primary key default gen_random_uuid(),
-  invoice_id  uuid not null references public.invoices (id) on delete cascade,
-  patient_id  uuid not null references public.patients (id) on delete cascade,
+  invoice_id  uuid not null references public.invoices (id) on delete restrict,
+  patient_id  uuid not null references public.patients (id) on delete restrict,
   amount      numeric(12,2) not null check (amount > 0),
   method      text not null default 'cash' check (method in ('cash', 'card', 'upi', 'insurance', 'bank_transfer')),
-  paid_on     date not null default current_date,
+  paid_on     date not null default public.today_ist(),
   reference   text,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
@@ -226,7 +231,7 @@ create table public.expenses (
   category      text not null check (category in ('salaries', 'supplies', 'utilities', 'equipment', 'maintenance', 'rent', 'other')),
   description   text not null,
   amount        numeric(14,2) not null check (amount >= 0),
-  expense_date  date not null default current_date,
+  expense_date  date not null default public.today_ist(),
   vendor        text,
   status        text not null default 'paid' check (status in ('paid', 'pending')),
   created_at    timestamptz not null default now(),
@@ -254,7 +259,7 @@ create table public.notices (
   body          text not null,
   audience      text not null default 'all' check (audience in ('all', 'staff', 'doctors', 'patients')),
   priority      text not null default 'normal' check (priority in ('normal', 'important', 'urgent')),
-  published_on  date not null default current_date,
+  published_on  date not null default public.today_ist(),
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -505,6 +510,31 @@ end $$;
 
 create trigger trg_patients_protect before update on public.patients
   for each row execute function public.protect_patient_fields();
+
+-- 5c-3. MRN and invoice numbers are assigned by the database, under a lock, so two desks saving at the same moment
+--       never get the same number (GST needs unique invoice serials). A number the client proposes is kept if still free.
+create or replace function public.assign_record_number()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_table_name = 'patients' then
+    perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
+    if coalesce(new.mrn, '') = '' or exists (select 1 from public.patients where mrn = new.mrn) then
+      select 'DCH-' || (coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::bigint), 100000) + 1) into new.mrn from public.patients;
+    end if;
+  else
+    perform pg_advisory_xact_lock(hashtext('dch_invoice_number'));
+    if coalesce(new.invoice_number, '') = '' or exists (select 1 from public.invoices where invoice_number = new.invoice_number) then
+      select 'INV-' || lpad((coalesce(max(nullif(regexp_replace(invoice_number, '\D', '', 'g'), '')::bigint), 10000) + 1)::text, 5, '0')
+        into new.invoice_number from public.invoices;
+    end if;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_patients_number before insert on public.patients
+  for each row execute function public.assign_record_number();
+create trigger trg_invoices_number before insert on public.invoices
+  for each row execute function public.assign_record_number();
 
 -- 5d. admissions keep bed + patient status consistent (idempotent with the client-side updates)
 create or replace function public.sync_admission()

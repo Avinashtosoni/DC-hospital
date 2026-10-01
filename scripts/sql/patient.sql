@@ -293,16 +293,27 @@ end $$;
 drop function if exists public.clear_demo_data() cascade;
 create function public.clear_demo_data()
 returns int language plpgsql volatile security definer set search_path = public as $$
-declare v_total int := 0; v_n int; t text;
+declare v_total int := 0; v_n int; t text; v_id uuid;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   perform set_config('app.actor_name', 'Go-live cleanup', true);
   foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
                            'doctor_leaves', 'site_enquiries', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
   loop
-    execute format('delete from public.%I where public.is_demo_id(id)', t);
-    get diagnostics v_n = row_count;
-    v_total := v_total + v_n;
+    begin
+      execute format('delete from public.%I where public.is_demo_id(id)', t);
+      get diagnostics v_n = row_count;
+      v_total := v_total + v_n;
+    exception when foreign_key_violation or restrict_violation then
+      -- a real record points at a demo one (e.g. a real bill for a demo patient): keep those, delete the rest
+      for v_id in execute format('select id from public.%I where public.is_demo_id(id)', t) loop
+        begin
+          execute format('delete from public.%I where id = $1', t) using v_id;
+          v_total := v_total + 1;
+        exception when foreign_key_violation or restrict_violation then null;
+        end;
+      end loop;
+    end;
   end loop;
   return v_total;
 end $$;

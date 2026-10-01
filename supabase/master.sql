@@ -46,6 +46,8 @@ drop function if exists public.my_patient_id() cascade;
 drop function if exists public.current_app_role() cascade;
 drop function if exists public.my_doctor_id() cascade;
 drop function if exists public.protect_patient_fields() cascade;
+drop function if exists public.assign_record_number() cascade;
+drop function if exists public.today_ist() cascade;
 drop type if exists public.app_role cascade;
 
 -- =====================================================================================================
@@ -56,6 +58,9 @@ create type public.app_role as enum ('owner', 'doctor', 'receptionist', 'account
 -- =====================================================================================================
 --  3. TABLES
 -- =====================================================================================================
+-- Calendar date in India. Supabase servers run on UTC, so plain current_date is still "yesterday" until 05:30 IST.
+create or replace function public.today_ist() returns date language sql stable as $$ select (now() at time zone 'Asia/Kolkata')::date $$;
+
 create table public.profiles (
   id          uuid primary key references auth.users (id) on delete cascade,
   full_name   text not null,
@@ -134,8 +139,8 @@ create table public.patients (
 
 create table public.appointments (
   id                uuid primary key default gen_random_uuid(),
-  patient_id        uuid not null references public.patients (id) on delete cascade,
-  doctor_id         uuid not null references public.doctors (id) on delete cascade,
+  patient_id        uuid not null references public.patients (id) on delete restrict,
+  doctor_id         uuid not null references public.doctors (id) on delete restrict,
   appointment_date  date not null,
   appointment_time  text not null check (appointment_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
   type              text not null default 'consultation' check (type in ('consultation', 'follow_up', 'emergency', 'checkup')),
@@ -151,21 +156,21 @@ create table public.appointments (
 
 create table public.prescriptions (
   id              uuid primary key default gen_random_uuid(),
-  patient_id      uuid not null references public.patients (id) on delete cascade,
-  doctor_id       uuid not null references public.doctors (id) on delete cascade,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  doctor_id       uuid not null references public.doctors (id) on delete restrict,
   diagnosis       text not null,
   symptoms        text,
   medications     jsonb not null default '[]'::jsonb,
   advice          text,
   follow_up_date  date,
-  prescribed_on   date not null default current_date,
+  prescribed_on   date not null default public.today_ist(),
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
 
 create table public.lab_tests (
   id            uuid primary key default gen_random_uuid(),
-  patient_id    uuid not null references public.patients (id) on delete cascade,
+  patient_id    uuid not null references public.patients (id) on delete restrict,
   doctor_id     uuid references public.doctors (id) on delete set null,
   test_name     text not null,
   category      text not null default 'Biochemistry',
@@ -173,7 +178,7 @@ create table public.lab_tests (
   status        text not null default 'requested' check (status in ('requested', 'sample_collected', 'in_progress', 'completed', 'cancelled')),
   result        text,
   price         numeric(12,2) not null default 0 check (price >= 0),
-  requested_on  date not null default current_date,
+  requested_on  date not null default public.today_ist(),
   completed_on  date,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
@@ -200,10 +205,10 @@ create table public.beds (
 
 create table public.admissions (
   id              uuid primary key default gen_random_uuid(),
-  patient_id      uuid not null references public.patients (id) on delete cascade,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
   doctor_id       uuid references public.doctors (id) on delete set null,
   bed_id          uuid references public.beds (id) on delete set null,
-  admission_date  date not null default current_date,
+  admission_date  date not null default public.today_ist(),
   discharge_date  date,
   reason          text,
   status          text not null default 'admitted' check (status in ('admitted', 'discharged')),
@@ -216,8 +221,8 @@ create table public.admissions (
 create table public.invoices (
   id              uuid primary key default gen_random_uuid(),
   invoice_number  text not null unique,
-  patient_id      uuid not null references public.patients (id) on delete cascade,
-  issue_date      date not null default current_date,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  issue_date      date not null default public.today_ist(),
   due_date        date,
   items           jsonb not null default '[]'::jsonb,
   subtotal        numeric(12,2) not null default 0,
@@ -233,11 +238,11 @@ create table public.invoices (
 
 create table public.payments (
   id          uuid primary key default gen_random_uuid(),
-  invoice_id  uuid not null references public.invoices (id) on delete cascade,
-  patient_id  uuid not null references public.patients (id) on delete cascade,
+  invoice_id  uuid not null references public.invoices (id) on delete restrict,
+  patient_id  uuid not null references public.patients (id) on delete restrict,
   amount      numeric(12,2) not null check (amount > 0),
   method      text not null default 'cash' check (method in ('cash', 'card', 'upi', 'insurance', 'bank_transfer')),
-  paid_on     date not null default current_date,
+  paid_on     date not null default public.today_ist(),
   reference   text,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
@@ -248,7 +253,7 @@ create table public.expenses (
   category      text not null check (category in ('salaries', 'supplies', 'utilities', 'equipment', 'maintenance', 'rent', 'other')),
   description   text not null,
   amount        numeric(14,2) not null check (amount >= 0),
-  expense_date  date not null default current_date,
+  expense_date  date not null default public.today_ist(),
   vendor        text,
   status        text not null default 'paid' check (status in ('paid', 'pending')),
   created_at    timestamptz not null default now(),
@@ -276,7 +281,7 @@ create table public.notices (
   body          text not null,
   audience      text not null default 'all' check (audience in ('all', 'staff', 'doctors', 'patients')),
   priority      text not null default 'normal' check (priority in ('normal', 'important', 'urgent')),
-  published_on  date not null default current_date,
+  published_on  date not null default public.today_ist(),
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -527,6 +532,31 @@ end $$;
 
 create trigger trg_patients_protect before update on public.patients
   for each row execute function public.protect_patient_fields();
+
+-- 5c-3. MRN and invoice numbers are assigned by the database, under a lock, so two desks saving at the same moment
+--       never get the same number (GST needs unique invoice serials). A number the client proposes is kept if still free.
+create or replace function public.assign_record_number()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_table_name = 'patients' then
+    perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
+    if coalesce(new.mrn, '') = '' or exists (select 1 from public.patients where mrn = new.mrn) then
+      select 'DCH-' || (coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::bigint), 100000) + 1) into new.mrn from public.patients;
+    end if;
+  else
+    perform pg_advisory_xact_lock(hashtext('dch_invoice_number'));
+    if coalesce(new.invoice_number, '') = '' or exists (select 1 from public.invoices where invoice_number = new.invoice_number) then
+      select 'INV-' || lpad((coalesce(max(nullif(regexp_replace(invoice_number, '\D', '', 'g'), '')::bigint), 10000) + 1)::text, 5, '0')
+        into new.invoice_number from public.invoices;
+    end if;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_patients_number before insert on public.patients
+  for each row execute function public.assign_record_number();
+create trigger trg_invoices_number before insert on public.invoices
+  for each row execute function public.assign_record_number();
 
 -- 5d. admissions keep bed + patient status consistent (idempotent with the client-side updates)
 create or replace function public.sync_admission()
@@ -3881,6 +3911,27 @@ drop policy if exists site_enquiries_public_insert on public.site_enquiries;
 create policy site_enquiries_public_insert on public.site_enquiries for insert to anon, authenticated
   with check (status = 'new' and notes is null and starred = false and read_at is null);
 
+-- Contact-form flood protection: 3 messages per mobile number per hour and 60 per hour for the whole site.
+-- Staff inserts are not limited.
+create or replace function public.limit_site_enquiries()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_digits text := right(regexp_replace(new.phone, '\D', '', 'g'), 10);
+begin
+  if auth.uid() is not null and public.is_staff() then return new; end if;
+  if (select count(*) from public.site_enquiries where created_at > now() - interval '1 hour'
+        and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits) >= 3 then
+    raise exception 'You have already sent us a few messages in the last hour — we will get back to you soon. For anything urgent please call us.';
+  end if;
+  if (select count(*) from public.site_enquiries where created_at > now() - interval '1 hour') >= 60 then
+    raise exception 'We are receiving a lot of messages right now. Please try again shortly or call us.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_site_enquiries_limit on public.site_enquiries;
+create trigger trg_site_enquiries_limit before insert on public.site_enquiries
+  for each row execute function public.limit_site_enquiries();
+revoke all on function public.limit_site_enquiries() from public, anon;
+
 revoke all on public.site_content, public.site_content_revisions from anon;
 grant select on public.site_content to anon;
 grant select, insert, update, delete on public.site_content to authenticated;
@@ -4054,6 +4105,11 @@ begin
   end if;
   if (select count(*) from public.booking_otps where phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
+  end if;
+  -- whole-site cap: stops bots cycling through thousands of numbers to run up the SMS bill ("SMS pumping")
+  if (select count(*) from public.booking_otps where created_at > now() - interval '1 hour')
+     >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
+    raise exception 'Online booking is very busy right now. Please try again in a few minutes or call the hospital.';
   end if;
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
@@ -4966,16 +5022,27 @@ end $$;
 drop function if exists public.clear_demo_data() cascade;
 create function public.clear_demo_data()
 returns int language plpgsql volatile security definer set search_path = public as $$
-declare v_total int := 0; v_n int; t text;
+declare v_total int := 0; v_n int; t text; v_id uuid;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   perform set_config('app.actor_name', 'Go-live cleanup', true);
   foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
                            'doctor_leaves', 'site_enquiries', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
   loop
-    execute format('delete from public.%I where public.is_demo_id(id)', t);
-    get diagnostics v_n = row_count;
-    v_total := v_total + v_n;
+    begin
+      execute format('delete from public.%I where public.is_demo_id(id)', t);
+      get diagnostics v_n = row_count;
+      v_total := v_total + v_n;
+    exception when foreign_key_violation or restrict_violation then
+      -- a real record points at a demo one (e.g. a real bill for a demo patient): keep those, delete the rest
+      for v_id in execute format('select id from public.%I where public.is_demo_id(id)', t) loop
+        begin
+          execute format('delete from public.%I where id = $1', t) using v_id;
+          v_total := v_total + 1;
+        exception when foreign_key_violation or restrict_violation then null;
+        end;
+      end loop;
+    end;
   end loop;
   return v_total;
 end $$;

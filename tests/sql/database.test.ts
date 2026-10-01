@@ -278,7 +278,10 @@ describe('go-live helpers', () => {
     expect(banned.n).toBe(5)
     const cleared = await db.one<{ n: number }>(USER.owner, 'select public.clear_demo_data() n')
     expect(cleared.n).toBeGreaterThan(500)
-    expect((await db.one<{ n: number }>(null, `select count(*)::int n from public.patients where public.is_demo_id(id)`)).n).toBe(0)
+    // demo patients are gone, except any a real (non-demo) record still points at — those are kept, not cascaded away
+    expect((await db.one<{ n: number }>(null, `select count(*)::int n from public.patients p where public.is_demo_id(p.id)
+      and not exists (select 1 from public.appointments a where a.patient_id = p.id and not public.is_demo_id(a.id))
+      and not exists (select 1 from public.invoices i where i.patient_id = p.id and not public.is_demo_id(i.id))`)).n).toBe(0)
   })
 })
 
@@ -336,5 +339,28 @@ describe('Website enquiries inbox', () => {
     expect(after.starred).toBe(true)
     expect(after.read_at).not.toBeNull()
     expect(await db.as(USER.patient, 'select id from public.site_enquiries')).toEqual([])
+  })
+})
+
+describe('record safety', () => {
+  test('patients / doctors with history cannot be deleted (no cascade); numbers never collide', async () => {
+    const pid = await myPatientId()
+    await expect(db.as(USER.owner, 'delete from public.patients where id = $1', [pid])).rejects.toThrow(/foreign key|RESTRICT/i)
+    const doc = await activeDoctor()
+    await expect(db.as(USER.owner, 'delete from public.doctors where id = $1', [doc])).rejects.toThrow(/foreign key|RESTRICT/i)
+    // two desks propose the same MRN / invoice number → the second gets the next free one
+    const [a, b] = await Promise.all([1, 2].map((i) => db.one<{ mrn: string }>(USER.receptionist,
+      `insert into public.patients (mrn, full_name, gender, phone) values ('DCH-100001', $1, 'other', '9000000000') returning mrn`, [`Dup ${i}`])))
+    expect(a.mrn).not.toBe(b.mrn)
+    expect(a.mrn).not.toBe('DCH-100001')
+    const inv = await db.one<{ invoice_number: string }>(USER.owner, `insert into public.invoices (invoice_number, patient_id, total) values ('', $1, 100) returning invoice_number`, [pid])
+    expect(inv.invoice_number).toMatch(/^INV-\d{5,}$/)
+    const today = await db.one<{ d: string; i: string }>(null, `select public.today_ist()::text d, (now() at time zone 'Asia/Kolkata')::date::text i`)
+    expect(today.d).toBe(today.i)
+  })
+  test('contact form is rate limited per number', async () => {
+    const ins = `insert into public.site_enquiries (name, phone, topic, message) values ('Flood Bot', '9811100000', 'Careers', 'spam')`
+    for (let i = 0; i < 3; i++) await db.as('anon', ins)
+    await expect(db.as('anon', ins)).rejects.toThrow(/already sent us a few messages/)
   })
 })

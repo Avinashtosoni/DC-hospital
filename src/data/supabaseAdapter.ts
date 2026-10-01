@@ -29,29 +29,50 @@ export const supabaseAdapter: DataAdapter = {
       const { data, error } = await client().from(table).select('*')
         .order(order.column, { ascending: order.ascending }).order('id', { ascending: true })
         .range(from, from + PAGE - 1)
-      if (error) throw new Error(error.message)
+      if (error) throw friendlyDbError(error)
       out.push(...(data ?? []))
       if (!data || data.length < PAGE) break
+    }
+    if (out.length >= MAX_ROWS && !warnedTruncated) {
+      warnedTruncated = true
+      console.warn(`[dc-hospital] ${table}: only the latest ${MAX_ROWS} rows are loaded in the browser`)
     }
     return out as never
   },
   async insert<T extends TableName>(table: T, row: NewRow<T>) {
     const { data, error } = await client().from(table).insert(row as never).select().single()
-    if (error) throw new Error(error.message)
+    if (error) throw friendlyDbError(error)
     return data as Row<T>
   },
   async update<T extends TableName>(table: T, id: string, patch: Partial<Row<T>>) {
     const { id: _ignore, created_at: _c, updated_at: _u, ...rest } = patch as Record<string, unknown>
     void _ignore; void _c; void _u
     const { data, error } = await client().from(table).update(rest as never).eq('id', id).select().single()
-    if (error) throw new Error(error.message)
+    if (error) throw friendlyDbError(error)
     return data as Row<T>
   },
   async remove(table, id) {
     const { error } = await client().from(table).delete().eq('id', id)
-    if (error) throw new Error(error.message)
+    if (error) throw friendlyDbError(error, 'delete')
   },
 }
+
+/** Turn Postgres / PostgREST errors into something a receptionist can act on. */
+export function friendlyDbError(error: { message: string; code?: string; details?: string | null }, action: 'save' | 'delete' = 'save'): Error {
+  const c = error.code ?? ''
+  if (c === '23503' || c === '23001') {
+    return new Error(action === 'delete'
+      ? 'This record can\'t be deleted because appointments, bills or medical records are linked to it. Mark it inactive or cancelled instead.'
+      : 'A linked record (patient, doctor or invoice) no longer exists. Refresh the page and try again.')
+  }
+  if (c === '23505') return new Error(`That value is already in use${error.details ? ` (${error.details.replace(/^Key \((.+?)\)=\((.+?)\).*$/, '$1 $2')})` : ''}. Please use a different one.`)
+  if (c === '42501' || /row-level security|permission denied/i.test(error.message)) return new Error('You don\'t have permission to do this. Ask the hospital owner if you need access.')
+  if (c === 'PGRST116') return new Error('This record was not found or you are not allowed to change it. Refresh the page and try again.')
+  if (c === '23514') return new Error(`Some values are not valid: ${error.message.replace(/^.*constraint "(.+?)".*$/, '$1').replace(/_/g, ' ')}`)
+  return new Error(error.message)
+}
+
+let warnedTruncated = false
 
 async function fetchProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await client().from('profiles').select('*').eq('id', userId).maybeSingle()
@@ -93,6 +114,24 @@ export const supabaseAuth: AuthAdapter = {
     if (check.error) throw new Error('Your current password is incorrect')
     const { error } = await client().auth.updateUser({ password: next })
     if (error) throw new Error(error.message)
+  },
+  async requestPasswordReset(email, redirectTo) {
+    const { error } = await client().auth.resetPasswordForEmail(email.trim(), { redirectTo })
+    // rate-limit errors are worth showing; "user not found" never is (Supabase doesn't reveal it anyway)
+    if (error && /rate|seconds|too many/i.test(error.message)) throw new Error('Too many reset requests. Please wait a minute and try again.')
+  },
+  async hasRecoverySession() {
+    // the client reads the tokens from the link (#access_token… or ?code=…) on load; give it a moment
+    for (let i = 0; i < 20; i++) {
+      const { data } = await client().auth.getSession()
+      if (data.session) return true
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return false
+  },
+  async setNewPassword(next) {
+    const { error } = await client().auth.updateUser({ password: next })
+    if (error) throw new Error(/different from the old/i.test(error.message) ? 'Choose a password different from your old one.' : error.message)
   },
   async signOutEverywhere() {
     await client().auth.signOut({ scope: 'global' })

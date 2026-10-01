@@ -25,6 +25,12 @@ export interface AuthAdapter {
   signOut(): Promise<void>
   /** change the signed-in user's password (current password is re-checked) */
   changePassword(current: string, next: string): Promise<void>
+  /** e-mail a password-reset link that opens `redirectTo` (always resolves, so it never reveals whether an account exists) */
+  requestPasswordReset(email: string, redirectTo: string): Promise<void>
+  /** whether this page was opened from a valid reset link (a recovery session exists) */
+  hasRecoverySession(): Promise<boolean>
+  /** set a new password inside a recovery session */
+  setNewPassword(next: string): Promise<void>
   /** end every session of this user (all devices) */
   signOutEverywhere(): Promise<void>
   /** upload a profile photo and return its public URL */

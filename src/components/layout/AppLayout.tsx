@@ -1,3 +1,4 @@
+import { ErrorBoundary } from '../ErrorBoundary'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Bell, ChevronDown, Cross, Database, EyeOff, LogOut, Megaphone, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
@@ -238,7 +239,7 @@ export function AppLayout() {
         <Topbar onMenu={() => setMobileOpen(true)} />
         <main className="w-full min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <Announcement />
-          {off ? <ModuleOff /> : <Outlet />}
+          {off ? <ModuleOff /> : <ErrorBoundary resetKey={loc.pathname}><Outlet /></ErrorBoundary>}
         </main>
       </div>
     </div>

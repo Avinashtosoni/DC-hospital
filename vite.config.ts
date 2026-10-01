@@ -29,7 +29,7 @@ export default defineConfig({
         // recharts is NOT listed: as a manual chunk it would also swallow small shared deps (clsx, react-is…)
         // and get preloaded on every page. Left alone, it only ships with the lazy Reports / dashboard charts.
         manualChunks: {
-          react: ['react', 'react-dom', 'react-router-dom'],
+          react: ['react', 'react-dom', 'react-router', 'react-router-dom'],
           data: ['@tanstack/react-query', '@supabase/supabase-js', 'date-fns'],
         },
       },

@@ -434,7 +434,7 @@ export const invoicesRes = defineResource({
       default: (_c, rows: Invoice[]) => `INV-${String(Math.max(10000, ...rows.map((i) => Number(i.invoice_number?.replace(/\D/g, '')) || 0)) + 1).padStart(5, '0')}` },
     { ...patientField(), hidden: () => false },
     { name: 'issue_date', label: 'Issue date', type: 'date', required: true, default: () => today() },
-    { name: 'due_date', label: 'Due date', type: 'date', default: () => new Date(Date.now() + 15 * 864e5).toISOString().slice(0, 10) },
+    { name: 'due_date', label: 'Due date', type: 'date', default: () => format(addDays(new Date(), 15), 'yyyy-MM-dd') },
     { name: 'items', label: 'Line items', type: 'line_items', required: true, default: () => [{ description: 'Consultation fee', quantity: 1, unit_price: 700 }] },
     { name: 'discount', label: 'Discount (₹)', type: 'currency', min: 0, default: () => 0 },
     { name: 'tax', label: 'Tax / GST (₹)', type: 'currency', min: 0, default: () => 0 },

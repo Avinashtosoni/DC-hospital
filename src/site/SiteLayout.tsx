@@ -1,3 +1,4 @@
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ArrowRight, ArrowUpRight, ChevronDown, Mail, MapPin, Menu, Phone, Siren, X } from 'lucide-react'
@@ -50,7 +51,7 @@ function Shell({ children }: { children?: ReactNode }) {
       <a href="#main" className="sr-only z-[100] rounded-full bg-peri-800 px-4 py-2 text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Skip to content</a>
       <Navbar />
       <main id="main">
-        <Suspense fallback={<PageFallback />}>{hidden ? <NotFound /> : children ?? <Outlet />}</Suspense>
+        <ErrorBoundary resetKey={pathname}><Suspense fallback={<PageFallback />}>{hidden ? <NotFound /> : children ?? <Outlet />}</Suspense></ErrorBoundary>
       </main>
       <Footer />
       <MobileCtaBar />

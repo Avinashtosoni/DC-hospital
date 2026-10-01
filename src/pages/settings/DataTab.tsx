@@ -1,3 +1,4 @@
+import { format } from 'date-fns'
 import { useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Database, Download, HardDrive, Info, KeyRound, RefreshCw, RotateCcw, Upload } from 'lucide-react'
@@ -30,7 +31,7 @@ export function DataTab({ ctx }: { ctx: TabCtx }) {
     const blob = new Blob([JSON.stringify({ kind: 'dc-hospital-settings', version: 1, exported_at: new Date().toISOString(), site_settings: ctx.site, app_settings: ctx.app }, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `hospital-settings-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = `hospital-settings-${format(new Date(), 'yyyy-MM-dd')}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 1000)
     toast.success('Settings exported', { description: 'Credentials are never included.' })

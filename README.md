@@ -112,7 +112,7 @@ The hospital **owner** can edit every public page without touching code:
   Call / WhatsApp / email reply, status and internal notes, bulk actions with Undo, CSV export and keyboard shortcuts
   (`j`/`k`, `e` resolve, `!` spam, `s` star, `/` search, `?` help). Read/star state is stored in `site_enquiries.read_at` / `starred`.
   Upgrading an existing database: `alter table public.site_enquiries add column if not exists starred boolean not null default false, add column if not exists read_at timestamptz;`
-  then re-run the `site_enquiries_public_insert` policy from `master.sql` (or simply re-run `master.sql`).
+  or simply run `supabase/upgrade-2026-10.sql`, which includes it.
 
 **Storage.** With Supabase, content lives in `site_content` (one JSONB row per section), history in `site_content_revisions`
 (written by a trigger that also stamps who published), images in the public `site-media` storage bucket and enquiries in
@@ -138,6 +138,28 @@ Demo logins use a public password (`Demo@123`), so **never run a real hospital o
 * **New project (recommended):** open `supabase/production.sql`, change the ✏️ owner e-mail, run it, then *Create account* in the app with that e-mail — you are the Owner. It has the full schema and security but **no demo accounts or data**.
 * **Already on the demo data:** **Settings → Security & access → Go-live checklist** shows what's still demo. *Lock demo accounts* bans every demo login except yours, and *Clear demo data* deletes the demo patients, visits, bills and so on (your own records stay). Both are owner-only database functions (`lock_demo_accounts()`, `clear_demo_data()`).
 * Set **Settings → General → Website address** (filled in automatically on first save) so invitation and feedback links point to your domain.
+
+### Upgrading an existing database
+
+Re-running `master.sql` / `production.sql` **recreates the tables (data is lost)**. For a database that already holds real data,
+run **`supabase/upgrade-2026-10.sql`** instead. It is safe to run twice and keeps all rows; it adds the enquiry-inbox columns,
+no-cascade record protection, collision-proof MRN / invoice numbers, IST default dates and the OTP / Contact-form rate limits.
+
+### Production checklist (per hospital install)
+
+1. **Database:** a Supabase project per hospital, `supabase/production.sql` run once. Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+   **and `REQUIRE_BACKEND=true`** on the container. With `REQUIRE_BACKEND` the app refuses to start in demo mode, so it can never quietly
+   save patient data in one browser's localStorage.
+2. **Supabase → Authentication → URL configuration:** set *Site URL* to the hospital domain and add `https://<domain>/reset-password`
+   to *Redirect URLs* (used by **Forgot password**). Configure a custom SMTP server (Supabase's built-in mailer is heavily rate limited).
+3. **Backups:** Supabase Pro daily backups / PITR, or a nightly `pg_dump`. Test a restore once.
+4. **Messaging:** connect SMS / WhatsApp before turning on online booking. The OTP is capped at 5 per number per hour and
+   200 per hour for the whole site (`booking.otpHourlyLimit` in site settings); the Contact form allows 3 per number and 60 per hour overall.
+5. **Legal:** edit the Privacy policy / Terms (Website CMS → Legal) with the hospital's legal name, grievance officer and address
+   (DPDP Act 2023). Records are never cascade-deleted: patients, doctors and invoices with history can't be deleted
+   (deactivate / cancel them instead), which keeps medical and GST records intact.
+6. **Scale:** lists load each table into the browser (up to 100,000 rows per table). That suits clinics and small or medium hospitals.
+   Very busy hospitals should archive old years or move to server-side paging.
 
 ## Patient experience
 

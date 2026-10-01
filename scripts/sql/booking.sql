@@ -133,6 +133,11 @@ begin
   if (select count(*) from public.booking_otps where phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
   end if;
+  -- whole-site cap: stops bots cycling through thousands of numbers to run up the SMS bill ("SMS pumping")
+  if (select count(*) from public.booking_otps where created_at > now() - interval '1 hour')
+     >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
+    raise exception 'Online booking is very busy right now. Please try again in a few minutes or call the hospital.';
+  end if;
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
   insert into public.booking_otps (phone, code_hash, expires_at)

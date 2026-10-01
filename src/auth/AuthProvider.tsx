@@ -6,7 +6,7 @@ import { isSupabaseConfigured } from '../lib/supabase'
 import { localAuth } from '../data/localAdapter'
 import { supabaseAuth } from '../data/supabaseAdapter'
 
-const auth: AuthAdapter = isSupabaseConfigured ? supabaseAuth : localAuth
+export const auth: AuthAdapter = isSupabaseConfigured ? supabaseAuth : localAuth
 
 interface AuthCtx {
   user: Profile | null

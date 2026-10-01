@@ -67,14 +67,16 @@ export default function Login() {
 
   const portal = useSiteSettings().portal
   const { t } = useT()
-  if (user) return <Navigate to={loc.state?.from ?? '/'} replace />
+  // only same-app paths (never //evil.com or /\\evil.com)
+  const next = typeof loc.state?.from === 'string' && /^\/(?![\/\\])/.test(loc.state.from) && !loc.state.from.includes('\\') ? loc.state.from : '/'
+  if (user) return <Navigate to={next} replace />
 
   const doLogin = async (e: string, p: string) => {
     setError('')
     try {
       const u = await signIn(e, p)
       toast.success(t('Welcome back, {name}!', { name: u.full_name.replace(/^Dr\.?\s+/i, '').split(' ')[0] }))
-      nav(loc.state?.from ?? '/', { replace: true })
+      nav(next, { replace: true })
     } catch (err) {
       setError((err as Error).message)
     }
@@ -89,7 +91,7 @@ export default function Login() {
       {portal.loginNotice.trim() && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900 ring-1 ring-brand-200">{portal.loginNotice}</p>}
       <form onSubmit={submit} className="mt-8 space-y-4">
         <Field label={t('Email')}><Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@dchospital.com" /></Field>
-        <Field label={t('Password')}><Input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></Field>
+        <Field label={t('Password')} hint={<Link to="/forgot-password" className="font-medium text-brand-700 hover:underline">{t('Forgot password?')}</Link>}><Input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></Field>
         {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-rose-200">{error}</p>}
         <Button type="submit" className="w-full" loading={loading} icon={!loading && <ArrowRight className="h-4 w-4" />}>{t('Sign in')}</Button>
       </form>

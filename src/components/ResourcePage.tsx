@@ -1,3 +1,4 @@
+import { format } from 'date-fns'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -112,7 +113,7 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
 
   const exportCsv = () => {
     if (!ctx) return
-    downloadCsv(`${def.table}-${new Date().toISOString().slice(0, 10)}.csv`, filtered.map((r: any) => {
+    downloadCsv(`${def.table}-${format(new Date(), 'yyyy-MM-dd')}.csv`, filtered.map((r: any) => {
       const { __optimistic, ...rest } = r
       void __optimistic
       return rest
