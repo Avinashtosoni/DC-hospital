@@ -266,6 +266,26 @@ export interface SiteEnquiry extends BaseRow {
   starred?: boolean
   /** when staff first opened it; null = unread */
   read_at?: string | null
+  /** the website form it came from (Settings → Forms) and a snapshot of its name */
+  form_id?: string | null
+  form_name?: string | null
+  /** every answer as submitted: label + value, so it reads right even after the form is edited */
+  data?: { id: string; label: string; type: string; value: string | number | boolean | string[] }[] | null
+}
+
+/** A website form built in Settings → Forms. Submissions land in site_enquiries. */
+export interface SiteForm extends BaseRow {
+  slug: string
+  name: string
+  description?: string | null
+  /** contact = the Contact page form (can't be deleted); review = the patient review form; custom = built by the owner */
+  kind: 'contact' | 'review' | 'custom'
+  enabled: boolean
+  /** FormField[] (src/forms/schema.ts) */
+  fields: unknown[]
+  /** FormSettings (src/forms/schema.ts) */
+  settings: Record<string, unknown>
+  sort: number
 }
 
 /** Patient rating after a completed visit (one per appointment). */
@@ -312,6 +332,7 @@ export interface DB {
   inventory: InventoryItem
   notices: Notice
   site_enquiries: SiteEnquiry
+  site_forms: SiteForm
   doctor_leaves: DoctorLeave
   holidays: Holiday
   audit_log: AuditEntry
@@ -322,6 +343,6 @@ export interface DB {
 export type TableName = keyof DB
 export const TABLES: TableName[] = [
   'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions',
-  'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries',
+  'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries', 'site_forms',
   'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites',
 ]

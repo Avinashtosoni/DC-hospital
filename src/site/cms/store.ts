@@ -1,18 +1,15 @@
 /**
- * Persistence for website content, revisions, media and contact-form enquiries.
+ * Persistence for website content, revisions and media. (Website forms are sent through src/forms/api.ts.)
  *  - Supabase mode: tables `site_content`, `site_content_revisions`, `site_enquiries` + storage bucket `site-media`
  *  - Demo mode:     browser localStorage (same API, so the CMS behaves identically)
  */
 import { isSupabaseConfigured, supabase } from '../../lib/supabase'
-import { localAdapter } from '../../data/localAdapter'
-import type { SiteEnquiry } from '../../types'
 import type { ContentKey } from './types'
 
 export interface ContentRow { key: ContentKey; data: unknown; updated_at: string; updated_by_name?: string | null }
 export interface Revision { id: string; key: ContentKey; data: unknown; created_at: string; created_by_name?: string | null }
 export interface MediaItem { name: string; url: string; size?: number; created_at?: string }
 export type ContentRows = Partial<Record<ContentKey, ContentRow>>
-export type NewEnquiry = Pick<SiteEnquiry, 'ref' | 'name' | 'phone' | 'email' | 'topic' | 'speciality' | 'message'>
 
 export const MEDIA_BUCKET = 'site-media'
 
@@ -25,7 +22,6 @@ interface CmsStore {
   listMedia(): Promise<MediaItem[]>
   upload(file: File): Promise<MediaItem>
   removeMedia(item: MediaItem): Promise<void>
-  submitEnquiry(row: NewEnquiry): Promise<void>
 }
 
 // ------------------------------------------------------------------ image helpers
@@ -91,11 +87,6 @@ const supabaseStore: CmsStore = {
     const { error } = await sb().storage.from(MEDIA_BUCKET).remove([item.name])
     if (error) throw new Error(error.message)
   },
-  async submitEnquiry(row) {
-    // insert without `.select()` — anonymous visitors may create enquiries but not read them back
-    const { error } = await sb().from('site_enquiries').insert({ ...row, status: 'new' })
-    if (error) throw new Error(error.message)
-  },
 }
 
 // ------------------------------------------------------------------ localStorage (demo mode)
@@ -147,10 +138,6 @@ const localStore: CmsStore = {
     return item
   },
   async removeMedia(item) { write(K.media, read<MediaItem[]>(K.media, []).filter((m) => m.name !== item.name)) },
-  async submitEnquiry(row) {
-    await pause(700)
-    await localAdapter.insert('site_enquiries', { ...row, status: 'new', notes: null })
-  },
 }
 
 export const cms: CmsStore = isSupabaseConfigured ? supabaseStore : localStore

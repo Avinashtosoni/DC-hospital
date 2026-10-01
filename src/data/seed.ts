@@ -6,7 +6,9 @@
 import type { SiteEnquiry, AuditEntry, VisitFeedback, DoctorLeave, Holiday,
   Admission, Appointment, Bed, DB, Department, Doctor, Expense, InventoryItem, Invoice, LabTest,
   LineItem, Medication, Notice, Patient, Payment, Prescription, Profile, Role, Staff, Ward,
+  SiteForm,
 } from '../types'
+import { CONTACT_FORM_ID, DEFAULT_FORMS, FORM_TEMPLATES, toEnquiry, type Answers } from '../forms/schema'
 
 export interface DateHelper {
   /** calendar date (yyyy-mm-dd) offset from today */
@@ -588,7 +590,34 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
     starred: i === 0 || i === 2,
     read_at: status === 'new' ? null : d.ts(day, '18:00'),
     created_at: d.ts(day, `${String(9 + i).padStart(2, '0')}:${i % 2 ? '40' : '15'}`),
+    form_id: CONTACT_FORM_ID, form_name: 'Contact form',
+    data: [
+      { id: 'name', label: 'Full name', type: 'text', value: name }, { id: 'phone', label: 'Mobile number', type: 'phone', value: phone },
+      ...(email ? [{ id: 'email', label: 'Email', type: 'email', value: email }] : []),
+      ...(speciality ? [{ id: 'speciality', label: 'Speciality', type: 'select', value: speciality }] : []),
+      { id: 'topic', label: 'How can we help?', type: 'radio', value: topic }, { id: 'message', label: 'Message', type: 'textarea', value: message },
+      { id: 'consent', label: 'I agree to be contacted about my enquiry and accept the privacy policy.', type: 'consent', value: true },
+    ],
   }))
+
+  // ---------------------------------------------------------------- website forms (Settings → Forms) + their submissions
+  const callback = FORM_TEMPLATES.find((t) => t.key === 'callback')!.make()
+  const site_forms: SiteForm[] = [
+    ...DEFAULT_FORMS.map((f) => ({ ...f, created_at: d.ts(-120), updated_at: d.ts(-120) }) as SiteForm),
+    { ...callback, id: sid(17, 1), enabled: true, sort: 2, created_at: d.ts(-30), updated_at: d.ts(-30) } as SiteForm,
+  ]
+  const review = site_forms[1], cb = site_forms[2]
+  const submission = (form: SiteForm, n: number, a: Answers, status: SiteEnquiry['status'], day: number, time: string): SiteEnquiry => ({
+    ...toEnquiry(form, a), id: sid(16, 50 + n), ref: `DCH-${String(483901 + n * 41)}`, status,
+    read_at: status === 'new' ? null : d.ts(day, '19:00'), created_at: d.ts(day, time),
+  })
+  site_enquiries.push(
+    submission(review, 1, { rating: 5, name: 'Kavita Rao', phone: '9810077001', doctor: 'Dr. Arjun Mehta, Cardiology', liked: ['Doctor consultation', 'Nursing care'], message: 'Dr. Mehta explained everything patiently and the nurses were very caring during my father\'s angiography.', publish: true }, 'new', 0, '11:20'),
+    submission(review, 2, { rating: 3, name: 'Imran Siddiqui', phone: '9810077002', liked: ['Cleanliness'], message: 'Treatment was good but I waited almost an hour at the billing counter.' }, 'in_progress', -2, '16:05'),
+    submission(review, 3, { rating: 4, name: 'Neelam Joshi', phone: '9810077003', doctor: 'Pediatrics', liked: ['Doctor consultation', 'Waiting time'], message: 'Quick appointment for my son and a very friendly doctor.', publish: true }, 'resolved', -5, '10:45'),
+    submission(cb, 4, { name: 'Harpreet Singh', phone: '9810077004', best_time: 'Evening (4–8)', message: 'Want to know the cost of a full body check-up package.' }, 'new', 0, '09:35'),
+    submission(cb, 5, { name: 'Lakshmi Menon', phone: '9810077005', best_time: 'Morning (9–12)', message: 'Second opinion for knee replacement.' }, 'resolved', -3, '12:10'),
+  )
 
   // ---------------------------------------------------------------- doctor leave & blocked time
   const docId = (name: string) => doctors.find((x) => x.full_name === name)!.id
@@ -679,7 +708,7 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
 
   return {
     profiles, departments, doctors, staff, patients, appointments, prescriptions, lab_tests, wards, beds,
-    admissions, invoices, payments, expenses, inventory, notices, site_enquiries, doctor_leaves, holidays, audit_log,
+    admissions, invoices, payments, expenses, inventory, notices, site_enquiries, site_forms, doctor_leaves, holidays, audit_log,
     visit_feedback, staff_invites: [],
   }
 

@@ -32,6 +32,8 @@ export const PERMISSIONS: Record<TableName, Matrix> = {
   inventory:     { owner: ALL, staff: RCU, doctor: R, accountant: R },
   notices:       { owner: ALL, doctor: R, receptionist: R, accountant: R, staff: R, patient: R },
   site_enquiries: { owner: ALL, receptionist: RU },
+  // website forms: the owner builds them; reception reads them for the inbox (visitors read enabled ones — scripts/sql/forms.sql)
+  site_forms:    { owner: ALL, receptionist: R },
   // doctors request their own leave (pending); owner / reception approve and manage everyone's
   doctor_leaves: { owner: ALL, receptionist: ALL, doctor: ALL, staff: R },
   holidays:      { owner: ALL, receptionist: ALL, doctor: R, staff: R, accountant: R, patient: R },

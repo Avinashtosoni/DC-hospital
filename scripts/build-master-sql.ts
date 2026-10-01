@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { PERMISSIONS, ROW_RULES, type Action } from '../src/auth/permissions'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from '../src/data/seed'
 import type { Role, TableName } from '../src/types'
+import { DEFAULT_FORMS } from '../src/forms/schema'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RAW = '__SQL__'
@@ -120,7 +121,7 @@ function seedSql(): string {
   const identities = DEMO_USERS.map((u) => `  (gen_random_uuid(), '${u.id}', '${u.id}', '${JSON.stringify({ sub: u.id, email: u.email, email_verified: true })}'::jsonb, 'email', now(), now(), now())`).join(',\n')
   const roleUpdates = DEMO_USERS.map((u) => `update public.profiles set role = '${u.role}', phone = '${u.phone}' where id = '${u.id}';`).join('\n')
 
-  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback']
+  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_forms', 'site_enquiries', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback']
   const body = order.map((t) => inserts(t, s[t] as unknown as Record<string, unknown>[])).join('\n\n')
 
   return `
@@ -179,6 +180,10 @@ const settingsSql = readFileSync(resolve(root, 'scripts/sql/settings.sql'), 'utf
 const patientSql = readFileSync(resolve(root, 'scripts/sql/patient.sql'), 'utf8')
 const scaleSql = readFileSync(resolve(root, 'scripts/sql/scale.sql'), 'utf8')
 const authSql = readFileSync(resolve(root, 'scripts/sql/auth.sql'), 'utf8')
+// built-in website forms come from src/forms/schema.ts so the app and the database never disagree
+const formRows = DEFAULT_FORMS.map((f) => `  (${[f.id, f.slug, f.name, f.description ?? null, f.kind, f.enabled, f.fields, f.settings, f.sort].map((v) => lit(v, '')).join(', ')})`).join(',\n')
+const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
+  `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
 const rls = `-- =====================================================================================================
 --  6. ROW LEVEL SECURITY (generated from src/auth/permissions.ts)
@@ -214,6 +219,8 @@ ${patientSql}
 ${scaleSql}
 
 ${authSql}
+
+${formsSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -267,6 +274,8 @@ ${scaleSql}
 
 ${authSql}
 
+${formsSql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
@@ -295,3 +304,13 @@ writeFileSync(resolve(root, 'supabase/master.sql'), sql)
 console.log(`✔ supabase/master.sql written (${(sql.length / 1024).toFixed(0)} KB)`)
 writeFileSync(resolve(root, 'supabase/production.sql'), production)
 console.log(`✔ supabase/production.sql written (${(production.length / 1024).toFixed(0)} KB)`)
+
+// the in-place upgrade carries the same forms section (between the markers) — regenerated so it never drifts
+const upgradePath = resolve(root, 'supabase/upgrade-2026-10.sql')
+const upgrade = readFileSync(upgradePath, 'utf8')
+const block = `-- >>> forms (generated from scripts/sql/forms.sql — do not edit here)\n${formsSql.trim()}\n-- <<< forms`
+const nextUpgrade = upgrade.includes('-- >>> forms')
+  ? upgrade.replace(/-- >>> forms[\s\S]*?-- <<< forms/, () => block)
+  : upgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)
+if (!nextUpgrade.includes('-- <<< forms')) throw new Error('could not place the forms section in upgrade-2026-10.sql')
+if (nextUpgrade !== upgrade) { writeFileSync(upgradePath, nextUpgrade); console.log('✔ supabase/upgrade-2026-10.sql forms section updated') }

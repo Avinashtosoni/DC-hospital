@@ -187,3 +187,13 @@ export function nextAvailable(d: SiteDoctor, from = new Date()): string {
 export const doctorsForService = (doctors: SiteDoctor[], slug: string) => doctors.filter((d) => d.service === slug)
 /** Unique department names, in list order. */
 export const departmentsOf = (doctors: SiteDoctor[]) => Array.from(new Set(doctors.map((d) => d.dept)))
+
+/** CMS lists a website form can use as its options (Contact topics, specialities) — in the site or the dashboard. */
+export function useFormLists(): { topics: string[]; services: string[] } {
+  const c = useContext(Ctx)
+  const q = useContentRows({ enabled: !c })
+  return useMemo(() => {
+    const content = c?.content ?? toPublic(mergeRows(q.data))
+    return { topics: content.contactPage.topics, services: content.services.map((s) => s.name) }
+  }, [c, q.data])
+}

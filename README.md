@@ -144,7 +144,8 @@ Demo logins use a public password (`Demo@123`), so **never run a real hospital o
 Re-running `master.sql` / `production.sql` **recreates the tables (data is lost)**. For a database that already holds real data,
 run **`supabase/upgrade-2026-10.sql`** instead. It is safe to run twice and keeps all rows; it adds the enquiry-inbox columns,
 no-cascade record protection, collision-proof MRN / invoice numbers, IST default dates, the OTP / Contact-form rate limits and
-the indexes / functions behind server-side pagination (section 15).
+the indexes / functions behind server-side pagination (section 15), "Forgot password" by mobile OTP (section 16) and
+**website forms** (section 17: `site_forms`, form answers on enquiries, `submit_site_form()`; older messages are filed under the Contact form).
 
 ### Sign-in, sign-out and "Forgot password"
 
@@ -239,6 +240,7 @@ The conversation logic is `supabase/functions/_shared/bot.ts` — plain TypeScri
 | **Dashboard** | Show or hide each stat card and panel, per role, plus the greeting header. |
 | **Notifications & APIs** | Credentials for **SMS** (MSG91, Fast2SMS, Twilio, webhook), **WhatsApp** (Meta Cloud API, Interakt, Twilio, webhook) and **Email** (Resend, SendGrid, SMTP). Each channel has setup hints and a *Send test* button. An events × channels matrix picks which messages go out (OTP, booked, reminder, rescheduled, cancelled, invoice, payment, lab report ready), with a template editor (tokens, SMS segment counter, DLT ID, WhatsApp template name and variables) and a delivery log. |
 | **Billing & booking** | GST letterhead (GSTIN/PAN validation, SAC code, rate, UPI ID, signatory, footer) and online booking rules. |
+| **Website forms** | Manage every form on the website: the **Contact form** (`/contact`), the **Patient review** form (`/forms/review`) and any **custom form** (`/forms/<link>`) started blank or from a template (callback request, job application, health-camp registration). Field builder with 11 field types (text, long text, email, mobile, number, date, dropdown, choice chips, checkboxes, star rating, agreement), required / half-width / help text / options (or the hospital's specialities), reorder, live preview, switch on/off, duplicate, delete (submissions are kept). Name and mobile are always asked so the team can reply. Every submission is validated again in the database (`submit_site_form`) and lands in **Enquiries**, which now has a *Forms* section (unread counts, filter, per-form CSV with a column per question) and shows all answers in the reading pane. |
 | **Security & access** | Idle auto sign-out, patient self-signup, demo-login buttons, sign-in notice, and a read-only permissions matrix. |
 | **Data & backup** | Export/import settings as JSON (credentials are never included), restore defaults, reset demo data, system info. |
 

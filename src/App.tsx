@@ -30,6 +30,7 @@ const PUBLIC_PAGES: [string, React.LazyExoticComponent<() => JSX.Element>][] = [
   ['/terms', lazy(() => import('./site/pages/Legal').then((m) => ({ default: m.Terms })))],
   ['/book', lazy(() => import('./site/pages/Book'))],
   ['/feedback/:id', lazy(() => import('./site/pages/Feedback'))],
+  ['/forms/:slug', lazy(() => import('./site/pages/FormPage'))],
 ]
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'))
 const PatientDetail = lazy(() => import('./pages/PatientDetail'))

@@ -6,6 +6,7 @@ import { TABLES } from '../types'
 import type { AuthAdapter, DataAdapter, InviteInfo, NewRow, Row, SignUpInput } from './adapter'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from './seed'
 import { auditSummary, diffRows, isAudited } from '../lib/audit'
+import { CONTACT_FORM_ID } from '../forms/schema'
 
 const DB_KEY = 'dch:db:v3'
 const USERS_KEY = 'dch:auth-users:v1'
@@ -36,6 +37,12 @@ function load(): Store {
       if (missing.length) {
         const fresh = buildSeed(localDates) as Store
         for (const t of missing) (cache as Record<string, unknown[]>)[t] = fresh[t] ?? []
+        persist()
+      }
+      // messages saved before Settings → Forms existed belong to the Contact form (same backfill as scripts/sql/forms.sql)
+      const legacy = (cache.site_enquiries ?? []).filter((e) => !e.form_id)
+      if (legacy.length) {
+        for (const e of legacy) { e.form_id = CONTACT_FORM_ID; e.form_name = e.form_name ?? 'Contact form' }
         persist()
       }
       return cache
@@ -133,6 +140,7 @@ export const localAdapter: DataAdapter = {
     await latency()
     const now = new Date().toISOString()
     const full = { ...row, id: row.id ?? uuid(), created_at: now, updated_at: now } as unknown as Row<T>
+    if (table === 'site_enquiries') { const e = full as unknown as DB['site_enquiries']; if (!e.form_id) { e.form_id = CONTACT_FORM_ID; e.form_name = e.form_name ?? 'Contact form' } }
     if (table === 'payments') { // trg_payments_sync_invoice also stamps the patient from the invoice
       const p = full as unknown as DB['payments']
       p.patient_id = load().invoices.find((i) => i.id === p.invoice_id)?.patient_id ?? p.patient_id

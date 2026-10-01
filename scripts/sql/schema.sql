@@ -9,7 +9,7 @@ drop trigger if exists on_auth_user_created on auth.users;
 drop table if exists
   public.visit_feedback, public.staff_invites, public.wa_sessions,
   public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
-  public.site_enquiries, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
+  public.site_enquiries, public.site_forms, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
   public.staff, public.doctors, public.departments, public.profiles
 cascade;
@@ -278,6 +278,24 @@ create table public.site_enquiries (
   notes       text,
   starred     boolean not null default false,   -- inbox: staff flag for follow-up
   read_at     timestamptz,                       -- inbox: null = unread (bold)
+  form_id     uuid,                              -- which website form (site_forms); kept when a form is deleted
+  form_name   text,                              -- the form's name when it was sent
+  data        jsonb,                             -- every answer: [{id, label, type, value}]
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+-- Website forms built in Settings → Forms (Contact form, Patient review, custom forms). Submissions → site_enquiries.
+create table public.site_forms (
+  id          uuid primary key default gen_random_uuid(),
+  slug        text not null unique check (slug ~ '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$'),
+  name        text not null check (char_length(name) between 2 and 80),
+  description text check (description is null or char_length(description) <= 500),
+  kind        text not null default 'custom' check (kind in ('contact', 'review', 'custom')),
+  enabled     boolean not null default true,
+  fields      jsonb not null default '[]'::jsonb check (jsonb_typeof(fields) = 'array'),
+  settings    jsonb not null default '{}'::jsonb check (jsonb_typeof(settings) = 'object'),
+  sort        int not null default 0,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
@@ -395,6 +413,7 @@ create index on public.payments (invoice_id);
 create index on public.payments (patient_id);
 create index on public.expenses (expense_date);
 create index on public.site_enquiries (status, created_at desc);
+create index on public.site_enquiries (form_id, created_at desc);
 create index on public.doctor_leaves (doctor_id, start_date, end_date);
 create index on public.visit_feedback (doctor_id, created_at desc);
 create index on public.visit_feedback (patient_id);
@@ -449,7 +468,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
-                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries',
+                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries','site_forms',
                            'doctor_leaves','holidays','visit_feedback','staff_invites']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);

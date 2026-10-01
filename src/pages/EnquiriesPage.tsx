@@ -1,34 +1,36 @@
 /**
- * Website enquiries — a Gmail-style inbox for messages from the public Contact page.
+ * Website enquiries — a Gmail-style inbox for everything sent from the website: the Contact page, the Patient review
+ * form and any custom form built in Settings → Forms (old and new submissions alike).
  *
- *  folders (Inbox / Starred / Unread / In progress / Resolved / Spam / All) · topic labels
+ *  folders (Inbox / Starred / Unread / In progress / Resolved / Spam / All) · forms · Contact topics
  *  list: checkbox, star, bold unread rows, label chip + snippet, smart time, hover actions
  *  reading pane (split view on wide screens): call / WhatsApp / email reply, status, internal notes, prev / next
  *  bulk actions with Undo, keyboard shortcuts (press ?), CSV export
  *
  * Read / starred state lives on the row (read_at, starred) and is not written to the audit log.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 
 import {
   AlertOctagon, ArrowLeft, Ban, CheckCheck, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Copy, Download, Inbox, Keyboard,
-  Mail, MailOpen, MessageCircle, Phone, PlayCircle, RefreshCw, Search, Star, StickyNote, Tag, Trash2, Undo2, X, Archive,
+  Mail, MailOpen, MessageCircle, Phone, PlayCircle, RefreshCw, Search, Star, StickyNote, Tag, Trash2, Undo2, X, Archive, ClipboardList, Settings2, Check as CheckIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { differenceInCalendarDays, format, isSameYear, isToday, isYesterday } from 'date-fns'
 import { Avatar, Button, ConfirmDialog, EmptyState, Modal, Skeleton, Textarea } from '../components/ui'
-import { qk, useCount, useRemove, useRow, useRows, useUpdate } from '../hooks/useData'
+import { qk, useCount, useRemove, useRow, useRows, useTable, useUpdate } from '../hooks/useData'
 import { db, queryAll } from '../data/adapter'
 import type { Filter, Query } from '../data/query'
 import { useDebounced } from '../components/ResourcePage'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
-import { useSiteSettings } from '../site/cms/content'
+import { useFormLists, useSiteSettings } from '../site/cms/content'
+import { COLOR_CLASS, CONTACT_FORM_ID, type FormColor, type FormField, type FormSettings } from '../forms/schema'
 import { ago, cn, downloadCsv } from '../lib/utils'
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges'
-import type { EnquiryStatus, SiteEnquiry } from '../types'
+import type { EnquiryStatus, SiteEnquiry, SiteForm } from '../types'
 
 // ------------------------------------------------------------------ model
 type Folder = 'inbox' | 'starred' | 'unread' | 'in_progress' | 'resolved' | 'spam' | 'all'
@@ -47,15 +49,18 @@ const FOLDERS: { id: Folder; label: string; icon: typeof Inbox; match: (r: SiteE
   { id: 'all', label: 'All enquiries', icon: Mail, match: (r) => r.status !== 'spam', empty: ['No enquiries yet', 'Messages from the website Contact page will appear here.'] },
 ]
 
-const TOPICS: { name: string; dot: string; chip: string }[] = [
-  { name: 'Book an appointment', dot: 'bg-brand-500', chip: 'bg-brand-50 text-brand-800 ring-brand-200' },
-  { name: 'Billing & insurance', dot: 'bg-amber-500', chip: 'bg-amber-50 text-amber-800 ring-amber-200' },
-  { name: 'Medical records', dot: 'bg-sky-500', chip: 'bg-sky-50 text-sky-800 ring-sky-200' },
-  { name: 'Feedback or complaint', dot: 'bg-rose-500', chip: 'bg-rose-50 text-rose-800 ring-rose-200' },
-  { name: 'Careers', dot: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
-  { name: 'Something else', dot: 'bg-slate-400', chip: 'bg-slate-100 text-slate-700 ring-slate-200' },
-]
-const topicStyle = (t: string) => TOPICS.find((x) => x.name === t) ?? TOPICS[TOPICS.length - 1]
+// ------------------------------------------------------------------ labels: Contact-form topics + one per form
+type Label = { name: string; dot: string; chip: string }
+const DEFAULT_TOPICS = ['Book an appointment', 'Billing & insurance', 'Medical records', 'Feedback or complaint', 'Careers', 'Something else']
+const PALETTE: FormColor[] = ['brand', 'amber', 'sky', 'rose', 'emerald', 'violet', 'teal']
+const SLATE: Label = { name: '', ...COLOR_CLASS.slate }
+/** the Contact form's topic chips: its own options, else Website CMS → Contact page topics. The last one is the catch-all. */
+function topicLabels(names: string[]): Label[] {
+  return names.map((name, i) => ({ name, ...(i === names.length - 1 && names.length > 1 ? COLOR_CLASS.slate : COLOR_CLASS[PALETTE[i % PALETTE.length]]) }))
+}
+const formColor = (f?: Pick<SiteForm, 'settings'>) => COLOR_CLASS[((f?.settings ?? {}) as FormSettings).color ?? 'brand'] ?? COLOR_CLASS.brand
+interface LabelLookup { style: (r: Pick<SiteEnquiry, 'topic' | 'form_id'>) => Label; forms: Map<string, SiteForm> }
+const LabelCtx = createContext<LabelLookup>({ style: () => SLATE, forms: new Map() })
 
 // the same folders / labels as database filters — only one page of messages is ever downloaded
 const FOLDER_WHERE: Record<Folder, Filter[]> = {
@@ -67,11 +72,13 @@ const FOLDER_WHERE: Record<Folder, Filter[]> = {
   spam: [['status', 'eq', 'spam']],
   all: [['status', 'neq', 'spam']],
 }
-const labelWhere = (name: string): Filter[] => {
-  const last = TOPICS[TOPICS.length - 1].name // the catch-all label also holds topics we don't know
-  return [['status', 'neq', 'spam'], name === last ? ['topic', 'nin', TOPICS.slice(0, -1).map((t) => t.name)] : ['topic', 'eq', name]]
+/** a Contact-form topic; the catch-all label also holds topics that are no longer offered */
+const labelWhere = (name: string, labels: Label[]): Filter[] => {
+  const last = labels[labels.length - 1]?.name
+  return [['status', 'neq', 'spam'], ['form_id', 'eq', CONTACT_FORM_ID],
+    name === last && labels.length > 1 ? ['topic', 'nin', labels.slice(0, -1).map((t) => t.name)] : ['topic', 'eq', name]]
 }
-const SEARCH_COLS = ['ref', 'name', 'phone', 'email', 'topic', 'speciality', 'message', 'notes']
+const SEARCH_COLS = ['ref', 'name', 'phone', 'email', 'topic', 'speciality', 'message', 'notes', 'form_name']
 
 const STATUS: Record<EnquiryStatus, { label: string; cls: string; icon: typeof Inbox }> = {
   new: { label: 'New', cls: 'bg-sky-50 text-sky-700 ring-sky-200', icon: Mail },
@@ -125,10 +132,16 @@ function StarBtn({ on, onClick, size = 'h-[18px] w-[18px]' }: { on: boolean; onC
     </IconBtn>
   )
 }
-function TopicChip({ topic, className }: { topic: string; className?: string }) {
-  const t = topicStyle(topic)
-  return <span className={cn('inline-flex max-w-[11rem] shrink-0 items-center truncate rounded px-1.5 py-px text-[11px] font-medium ring-1 ring-inset', t.chip, className)}>{topic}</span>
+function TopicChip({ r, className }: { r: Pick<SiteEnquiry, 'topic' | 'form_id'>; className?: string }) {
+  const t = useContext(LabelCtx).style(r)
+  return <span className={cn('inline-flex max-w-[11rem] shrink-0 items-center truncate rounded px-1.5 py-px text-[11px] font-medium ring-1 ring-inset', t.chip, className)}>{r.topic}</span>
 }
+/** the rating answer of a review-type submission, if any */
+const ratingOf = (r: SiteEnquiry) => { const a = r.data?.find((x) => x.type === 'rating'); return a ? Number(a.value) || 0 : 0 }
+function RatingPill({ n, className }: { n: number; className?: string }) {
+  return <span className={cn('inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-50 px-1.5 py-px text-[11px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-200', className)} aria-label={`${n} out of 5 stars`}><Star className="h-3 w-3 fill-amber-400 text-amber-400" />{n}</span>
+}
+const answerText = (v: unknown) => (Array.isArray(v) ? v.join(', ') : v === true ? 'Yes' : String(v ?? ''))
 function StatusChip({ s, className }: { s: EnquiryStatus; className?: string }) {
   const m = STATUS[s]
   return <span className={cn('inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-px text-[11px] font-semibold ring-1 ring-inset', m.cls, className)}><m.icon className="h-3 w-3" />{m.label}</span>
@@ -144,8 +157,10 @@ export default function EnquiriesPage() {
   const canDelete = can(user?.role, 'site_enquiries', 'delete')
 
   const [params, setParams] = useSearchParams()
-  const folder = (FOLDERS.some((f) => f.id === params.get('folder')) ? params.get('folder') : 'inbox') as Folder
+  // a form's submissions open on "All" (its whole history); otherwise the Inbox
+  const folder = (FOLDERS.some((f) => f.id === params.get('folder')) ? params.get('folder') : params.get('form') ? 'all' : 'inbox') as Folder
   const label = params.get('label')
+  const formId = params.get('form')
   const openId = params.get('id')
   const setParam = useCallback((patch: Record<string, string | null>, replace = false) => {
     setParams((p) => { const n = new URLSearchParams(p); Object.entries(patch).forEach(([k, v]) => (v ? n.set(k, v) : n.delete(k))); return n }, { replace })
@@ -163,13 +178,33 @@ export default function EnquiriesPage() {
   // refresh every 30 s so new website messages show up without a reload
   useEffect(() => { const t = setInterval(() => qc.invalidateQueries({ queryKey: qk('site_enquiries') }), 30_000); return () => clearInterval(t) }, [qc])
 
+  // forms (Settings → Forms) and the Contact form's topics
+  const formsQ = useTable('site_forms')
+  const forms = useMemo(() => [...(formsQ.data ?? [])].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)), [formsQ.data])
+  const formMap = useMemo(() => new Map(forms.map((f) => [f.id, f])), [forms])
+  const lists = useFormLists()
+  const labels = useMemo(() => {
+    const topicField = (formMap.get(CONTACT_FORM_ID)?.fields as FormField[] | undefined)?.find((f) => f.role === 'topic')
+    const own = (topicField?.options ?? []).filter((o) => o.trim())
+    return topicLabels(own.length ? own : lists.topics.length ? lists.topics : DEFAULT_TOPICS)
+  }, [formMap, lists.topics])
+  const lookup = useMemo<LabelLookup>(() => ({
+    forms: formMap,
+    style: (r) => {
+      if (r.form_id && r.form_id !== CONTACT_FORM_ID) return { name: r.topic, ...formColor(formMap.get(r.form_id)) }
+      return labels.find((l) => l.name === r.topic) ?? labels[labels.length - 1] ?? SLATE
+    },
+  }), [formMap, labels])
+  const currentForm = formId ? formMap.get(formId) : undefined
+  const formWhere = useMemo<Filter[]>(() => (formId ? [['form_id', 'eq', formId]] : []), [formId])
+
   const term = useDebounced(q.trim(), 250)
   const baseQuery = useMemo<Query>(() => ({
-    where: label ? labelWhere(label) : FOLDER_WHERE[folder],
+    where: [...(label ? labelWhere(label, labels) : FOLDER_WHERE[folder]), ...formWhere],
     search: term ? { term, columns: SEARCH_COLS } : undefined,
     order: [{ column: 'created_at', asc: false }],
-  }), [folder, label, term])
-  useEffect(() => { setPage(0); setSelected(new Set()); setCursor(0) }, [folder, label, term])
+  }), [folder, label, labels, formWhere, term])
+  useEffect(() => { setPage(0); setSelected(new Set()); setCursor(0) }, [folder, label, formId, term])
   const list = useRows('site_enquiries', { ...baseQuery, range: [page * PAGE, page * PAGE + PAGE - 1], count: true }, { keepPrevious: true })
   const pageRows = useMemo(() => list.data?.rows ?? [], [list.data])
   const total = list.data?.count ?? pageRows.length
@@ -177,13 +212,16 @@ export default function EnquiriesPage() {
   useEffect(() => { if (page > 0 && page >= pages) setPage(pages - 1) }, [page, pages])
 
   // sidebar counters — cheap head-only counts
-  const cInbox = useCount('site_enquiries', [...FOLDER_WHERE.inbox, ['read_at', 'is_null']])
-  const cUnread = useCount('site_enquiries', FOLDER_WHERE.unread)
-  const cProgress = useCount('site_enquiries', FOLDER_WHERE.in_progress)
+  const cInbox = useCount('site_enquiries', [...FOLDER_WHERE.inbox, ['read_at', 'is_null'], ...formWhere])
+  const cUnread = useCount('site_enquiries', [...FOLDER_WHERE.unread, ...formWhere])
+  const cProgress = useCount('site_enquiries', [...FOLDER_WHERE.in_progress, ...formWhere])
   const inboxUnread = cInbox.count ?? 0
   const counts = { inbox: inboxUnread, unread: cUnread.count ?? 0, in_progress: cProgress.count ?? 0 } as Record<Folder, number>
-  const labelQs = useQueries({ queries: TOPICS.map((t) => ({ queryKey: [...qk('site_enquiries'), 'count', 'label', t.name], queryFn: () => db.query('site_enquiries', { where: labelWhere(t.name), head: true, count: true }).then((r) => r.count ?? 0) })) })
-  const labelCounts = Object.fromEntries(TOPICS.map((t, i) => [t.name, labelQs[i].data ?? 0])) as Record<string, number>
+  const labelQs = useQueries({ queries: labels.map((t) => ({ queryKey: [...qk('site_enquiries'), 'count', 'label', t.name, labels.length], queryFn: () => db.query('site_enquiries', { where: labelWhere(t.name, labels), head: true, count: true }).then((r) => r.count ?? 0) })) })
+  const labelCounts = Object.fromEntries(labels.map((t, i) => [t.name, labelQs[i]?.data ?? 0])) as Record<string, number>
+  // unread per form, like Gmail labels
+  const formQs = useQueries({ queries: forms.map((f) => ({ queryKey: [...qk('site_enquiries'), 'count', 'form-unread', f.id], queryFn: () => db.query('site_enquiries', { where: [...FOLDER_WHERE.unread, ['form_id', 'eq', f.id]], head: true, count: true }).then((r) => r.count ?? 0) })) })
+  const formUnread = Object.fromEntries(forms.map((f, i) => [f.id, formQs[i]?.data ?? 0])) as Record<string, number>
 
   // the open message may sit on another page (deep link) — fetch it on its own then
   const inPage = openId ? pageRows.find((r) => r.id === openId) : undefined
@@ -279,26 +317,38 @@ export default function EnquiriesPage() {
     setExporting(true)
     try {
       const all = await queryAll('site_enquiries', baseQuery, 20000)
-      downloadCsv(`enquiries-${format(new Date(), 'yyyy-MM-dd')}.csv`, all.map((r) => ({
-        Ref: r.ref, Received: r.created_at ? format(new Date(r.created_at), 'yyyy-MM-dd HH:mm') : '', Name: r.name, Mobile: r.phone, Email: r.email ?? '',
-        Topic: r.topic, Speciality: r.speciality ?? '', Message: r.message, Status: STATUS[r.status].label, Starred: r.starred ? 'yes' : '', Notes: r.notes ?? '',
-      })))
+      const base = (r: SiteEnquiry) => ({ Ref: r.ref, Received: r.created_at ? format(new Date(r.created_at), 'yyyy-MM-dd HH:mm') : '', Form: r.form_name ?? '' })
+      const tail = (r: SiteEnquiry) => ({ Status: STATUS[r.status].label, Starred: r.starred ? 'yes' : '', Notes: r.notes ?? '' })
+      const fields = (currentForm?.fields as FormField[] | undefined) ?? []
+      const name = currentForm ? `${currentForm.slug}-submissions` : 'enquiries'
+      downloadCsv(`${name}-${format(new Date(), 'yyyy-MM-dd')}.csv`, all.map((r) => currentForm
+        // one form: a column per question (answers as they were sent; older messages fall back to the inbox columns)
+        ? { ...base(r), ...Object.fromEntries(fields.map((f) => {
+            const a = r.data?.find((x) => x.id === f.id)
+            const legacy = f.role ? (r as unknown as Record<string, unknown>)[f.role] : undefined
+            return [f.label, a ? answerText(a.value) : legacy != null ? String(legacy) : '']
+          })), ...tail(r) }
+        : { ...base(r), Name: r.name, Mobile: r.phone, Email: r.email ?? '', Topic: r.topic, Speciality: r.speciality ?? '', Message: r.message,
+            Answers: (r.data ?? []).filter((a) => a.type !== 'consent').map((a) => `${a.label}: ${answerText(a.value)}`).join(' | '), ...tail(r) }))
     } catch (e) { toast.error('Export failed', { description: (e as Error).message }) } finally { setExporting(false) }
   }
 
-  const title = label ?? FOLDERS.find((f) => f.id === folder)!.label
+  const folderLabel = FOLDERS.find((f) => f.id === folder)!.label
+  const title = label ?? (formId ? `${currentForm?.name ?? 'Form'} · ${folderLabel}` : folderLabel)
   const split = !!open
   const narrow = useNarrow()
 
   // ---------------------------------------------------------------- render
+  const isOwner = user?.role === 'owner'
   return (
+    <LabelCtx.Provider value={lookup}>
     <div className="-mx-1 sm:mx-0">
       {/* header: title + Gmail-style search */}
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="flex items-start justify-between gap-3 lg:contents">
         <div className="min-w-0 lg:w-60 lg:shrink-0">
           <h1 className="font-display text-xl font-bold tracking-tight text-brand-950 sm:text-2xl">Enquiries</h1>
-          <p className="text-xs text-slate-500">Messages from the website Contact page</p>
+          <p className="text-xs text-slate-500">Messages from your website forms{isOwner && <> · <Link to="/settings?tab=forms" className="font-medium text-brand-700 hover:underline">Manage forms</Link></>}</p>
         </div>
         <div className="flex gap-1 lg:order-last lg:shrink-0">
           <Button variant="outline" size="sm" icon={<Download className="h-4 w-4" />} onClick={exportCsv} loading={exporting} disabled={!total}>Export</Button>
@@ -324,7 +374,7 @@ export default function EnquiriesPage() {
               const n = f.id === 'inbox' ? inboxUnread : f.id === 'starred' || f.id === 'spam' || f.id === 'all' || f.id === 'resolved' ? 0 : counts[f.id]
               return (
                 <li key={f.id} className="shrink-0">
-                  <button type="button" onClick={() => { setParam({ folder: f.id === 'inbox' ? null : f.id, label: null, id: null }) }} aria-current={active ? 'page' : undefined}
+                  <button type="button" onClick={() => { setParam({ folder: f.id === 'inbox' && !formId ? null : f.id, label: null, id: null }) }} aria-current={active ? 'page' : undefined}
                     className={cn('flex w-full items-center gap-3 whitespace-nowrap rounded-full py-1.5 pl-4 pr-4 text-sm transition lg:rounded-l-none lg:rounded-r-full lg:pl-5',
                       active ? 'bg-brand-200/70 font-bold text-brand-950' : 'text-slate-700 hover:bg-slate-200/60')}>
                     <f.icon className={cn('h-[18px] w-[18px] shrink-0', active ? 'text-brand-800' : 'text-slate-500', f.id === 'starred' && active && 'fill-brand-800')} />
@@ -335,14 +385,48 @@ export default function EnquiriesPage() {
               )
             })}
           </ul>
+          {/* forms — on phones a compact picker, on desktop Gmail-style labels */}
+          {forms.length > 1 && (
+            <label className="mt-2 block lg:hidden">
+              <span className="sr-only">Form</span>
+              <select value={formId ?? ''} onChange={(e) => setParam({ form: e.target.value || null, label: null, id: null, folder: null })}
+                className="h-9 w-full rounded-full border border-slate-200 bg-white px-4 text-sm text-slate-700">
+                <option value="">All forms</option>
+                {forms.map((f) => <option key={f.id} value={f.id}>{f.name}{formUnread[f.id] ? ` (${formUnread[f.id]})` : ''}</option>)}
+              </select>
+            </label>
+          )}
+          {forms.length > 0 && (
+            <div className="mt-5 hidden lg:block">
+              <p className="mb-1 flex items-center gap-2 pl-5 pr-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <ClipboardList className="h-3.5 w-3.5" /><span className="flex-1">Forms</span>
+                {isOwner && <Link to="/settings?tab=forms" title="Manage forms" aria-label="Manage forms" className="grid h-6 w-6 place-items-center rounded-full normal-case text-slate-400 hover:bg-slate-200/70 hover:text-slate-700"><Settings2 className="h-3.5 w-3.5" /></Link>}
+              </p>
+              <ul>
+                {forms.map((f) => {
+                  const active = formId === f.id
+                  return (
+                    <li key={f.id}>
+                      <button type="button" onClick={() => setParam({ form: active ? null : f.id, label: null, id: null, folder: null })} aria-current={active ? 'page' : undefined}
+                        className={cn('flex w-full items-center gap-3 rounded-r-full py-1.5 pl-5 pr-4 text-sm transition', active ? 'bg-brand-200/70 font-bold text-brand-950' : 'text-slate-700 hover:bg-slate-200/60')}>
+                        <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', formColor(f).dot, !f.enabled && 'opacity-40')} />
+                        <span className={cn('flex-1 truncate text-left', !f.enabled && 'text-slate-400')} title={f.enabled ? undefined : 'Switched off — older submissions are kept'}>{f.name}</span>
+                        {formUnread[f.id] > 0 && <span className="text-xs font-bold tabular-nums text-brand-900">{formUnread[f.id]}</span>}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
           <div className="mt-5 hidden lg:block">
-            <p className="mb-1 flex items-center gap-2 pl-5 text-xs font-semibold uppercase tracking-wider text-slate-400"><Tag className="h-3.5 w-3.5" />Topics</p>
+            <p className="mb-1 flex items-center gap-2 pl-5 text-xs font-semibold uppercase tracking-wider text-slate-400"><Tag className="h-3.5 w-3.5" />Contact topics</p>
             <ul>
-              {TOPICS.map((t) => {
+              {labels.map((t) => {
                 const active = label === t.name
                 return (
                   <li key={t.name}>
-                    <button type="button" onClick={() => setParam({ label: active ? null : t.name, id: null })} aria-current={active ? 'page' : undefined}
+                    <button type="button" onClick={() => setParam({ label: active ? null : t.name, form: null, id: null })} aria-current={active ? 'page' : undefined}
                       className={cn('flex w-full items-center gap-3 rounded-r-full py-1.5 pl-5 pr-4 text-sm transition', active ? 'bg-brand-200/70 font-bold text-brand-950' : 'text-slate-700 hover:bg-slate-200/60')}>
                       <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', t.dot)} />
                       <span className="flex-1 truncate text-left">{t.name}</span>
@@ -383,6 +467,7 @@ export default function EnquiriesPage() {
                     <IconBtn label="Mark all as read" onClick={() => setRead(rows.filter(isUnread).map((r) => r.id), true)}><CheckCheck className="h-[18px] w-[18px]" /></IconBtn>
                   )}
                   <span className="ml-2 hidden truncate text-sm font-semibold text-slate-700 sm:inline">{title}{q && <span className="font-normal text-slate-500"> · “{q}”</span>}</span>
+                  {formId && <button type="button" onClick={() => setParam({ form: null, folder: null, id: null })} title="Show every form" className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-800 hover:bg-brand-100"><X className="h-3 w-3" />All forms</button>}
                 </>
               )}
               <div className="ml-auto flex items-center gap-0.5 pl-2 text-xs text-slate-500">
@@ -400,12 +485,12 @@ export default function EnquiriesPage() {
                 <p className="m-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{(list.error as Error).message}</p>
               ) : !rows.length ? (
                 <EmptyState className="py-20" icon={q ? <Search className="h-6 w-6" /> : folder === 'inbox' && !label ? <CheckCircle2 className="h-6 w-6" /> : <Inbox className="h-6 w-6" />}
-                  title={q ? 'No matching enquiries' : label ? `No “${label}” enquiries` : FOLDERS.find((f) => f.id === folder)!.empty[0]}
-                  description={q ? 'Try a name, mobile number or reference like DCH-482138.' : label ? 'Enquiries with this topic will appear here.' : FOLDERS.find((f) => f.id === folder)!.empty[1]}
+                  title={q ? 'No matching enquiries' : label ? `No “${label}” enquiries` : formId && folder === 'all' ? `No ${currentForm?.name ?? 'form'} submissions yet` : FOLDERS.find((f) => f.id === folder)!.empty[0]}
+                  description={q ? 'Try a name, mobile number or reference like DCH-482138.' : label ? 'Enquiries with this topic will appear here.' : formId && folder === 'all' ? (currentForm && !currentForm.enabled ? 'This form is switched off in Settings → Forms.' : 'Submissions from this form will appear here.') : FOLDERS.find((f) => f.id === folder)!.empty[1]}
                   action={q ? <Button variant="outline" size="sm" onClick={() => setQ('')}>Clear search</Button> : undefined} />
               ) : pageRows.map((r, i) => (
                 <Row key={r.id} r={r} index={i} compact={split || narrow} active={open?.id === r.id} focused={!open && cursor === i} selected={selected.has(r.id)}
-                  showStatus={folder === 'inbox' || folder === 'starred' || folder === 'unread' || folder === 'all' || !!label} canDelete={canDelete}
+                  showStatus={folder === 'inbox' || folder === 'starred' || folder === 'unread' || folder === 'all' || !!label} showForm={!formId} canDelete={canDelete}
                   onOpen={() => { setCursor(i); openRow(r) }} onSelect={() => toggleSel(r.id)} onStar={() => toggleStar(r)}
                   onResolve={() => setStatus([r.id], 'resolved')} onSpam={() => setStatus([r.id], r.status === 'spam' ? 'new' : 'spam')}
                   onRead={() => setRead([r.id], isUnread(r))} onDelete={() => setConfirmDelete([r.id])} />
@@ -429,15 +514,20 @@ export default function EnquiriesPage() {
         description="This permanently removes the message and its notes. Mark it as spam or resolved instead if you may need it later." />
       <ShortcutsHelp open={help} onClose={() => setHelp(false)} canDelete={canDelete} />
     </div>
+    </LabelCtx.Provider>
   )
 }
 
 // ------------------------------------------------------------------ list row
-function Row({ r, index, compact, active, focused, selected, showStatus, canDelete, onOpen, onSelect, onStar, onResolve, onSpam, onRead, onDelete }: {
-  r: SiteEnquiry; index: number; compact: boolean; active: boolean; focused: boolean; selected: boolean; showStatus: boolean; canDelete: boolean
+function Row({ r, index, compact, active, focused, selected, showStatus, showForm, canDelete, onOpen, onSelect, onStar, onResolve, onSpam, onRead, onDelete }: {
+  r: SiteEnquiry; index: number; compact: boolean; active: boolean; focused: boolean; selected: boolean; showStatus: boolean; showForm: boolean; canDelete: boolean
   onOpen: () => void; onSelect: () => void; onStar: () => void; onResolve: () => void; onSpam: () => void; onRead: () => void; onDelete: () => void
 }) {
   const unread = isUnread(r)
+  const stars = ratingOf(r)
+  // a form whose topic is a question (not its own name) also shows which form it came from
+  const formBadge = showForm && r.form_id && r.form_id !== CONTACT_FORM_ID && r.form_name && r.form_name !== r.topic
+    ? <span className="hidden shrink-0 items-center gap-1 truncate rounded bg-slate-100 px-1.5 py-px text-[11px] text-slate-600 lg:inline-flex"><ClipboardList className="h-3 w-3" />{r.form_name}</span> : null
   const hover = (
     <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
       {r.status !== 'resolved' && r.status !== 'spam' && <IconBtn label="Mark resolved" onClick={onResolve}><Archive className="h-[17px] w-[17px]" /></IconBtn>}
@@ -465,7 +555,8 @@ function Row({ r, index, compact, active, focused, selected, showStatus, canDele
             <span className={cn('shrink-0 text-xs tabular-nums', unread ? 'font-bold text-slate-900' : 'text-slate-500')}>{shortTime(r.created_at)}</span>
           </div>
           <div className="mt-0.5 flex items-center gap-1.5">
-            <TopicChip topic={r.topic} />
+            <TopicChip r={r} />
+            {stars > 0 && <RatingPill n={stars} />}
             {showStatus && r.status !== 'new' && <StatusChip s={r.status} />}
           </div>
           <p className={cn('mt-0.5 line-clamp-1 text-[13px]', unread ? 'text-slate-700' : 'text-slate-500')}>{r.message}</p>
@@ -474,7 +565,9 @@ function Row({ r, index, compact, active, focused, selected, showStatus, canDele
         <>
           <span className={cn('w-36 shrink-0 truncate pl-1 text-sm sm:w-44', unread ? 'font-bold text-slate-900' : 'text-slate-700')}>{r.name}</span>
           <div className="flex min-w-0 flex-1 items-center gap-2 py-3 text-sm">
-            <TopicChip topic={r.topic} className="hidden sm:inline-flex" />
+            <TopicChip r={r} className="hidden sm:inline-flex" />
+            {formBadge}
+            {stars > 0 && <RatingPill n={stars} />}
             {showStatus && r.status !== 'new' && <StatusChip s={r.status} className="hidden md:inline-flex" />}
             <span className="min-w-0 truncate">
               {r.speciality && <span className={cn(unread ? 'font-bold text-slate-900' : 'text-slate-700')}>{r.speciality} enquiry — </span>}
@@ -543,7 +636,7 @@ function Reader({ r, pos, total, canDelete, hospital, onClose, onPrev, onNext, o
           <div className="min-w-0 flex-1">
             <h2 className="font-display text-lg font-semibold sm:text-xl leading-snug text-slate-900">{r.speciality ? `${r.topic} — ${r.speciality}` : r.topic}</h2>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <StatusChip s={r.status} /><TopicChip topic={r.topic} />
+              <StatusChip s={r.status} /><TopicChip r={r} />{ratingOf(r) > 0 && <RatingPill n={ratingOf(r)} />}
               <button type="button" onClick={() => copy(r.ref, 'Reference')} title="Copy reference" className="rounded px-1.5 py-px font-mono text-[11px] text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50">{r.ref}</button>
               {waiting && <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200"><Clock3 className="h-3 w-3" />Waiting {days} days</span>}
             </div>
@@ -557,7 +650,7 @@ function Reader({ r, pos, total, canDelete, hospital, onClose, onPrev, onNext, o
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className="font-semibold text-slate-900">{r.name}</span>
-              <span className="hidden text-xs text-slate-500 sm:inline">via website contact form</span>
+              <span className="hidden text-xs text-slate-500 sm:inline">via {r.form_name ? r.form_name.toLowerCase().includes('form') ? r.form_name : `${r.form_name} form` : 'website contact form'}</span>
               {r.created_at && <span className="text-xs text-slate-500 sm:hidden">{shortTime(r.created_at)} · {agoPast(r.created_at)}</span>}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-slate-600">
@@ -572,6 +665,9 @@ function Reader({ r, pos, total, canDelete, hospital, onClose, onPrev, onNext, o
 
         {/* body */}
         <div className="whitespace-pre-wrap break-words px-4 pb-2 sm:pl-[4.75rem] sm:pr-6 text-[15px] leading-relaxed text-slate-800">{r.message}</div>
+
+        {/* every answer as it was sent (forms other than the Contact form) */}
+        {r.form_id && r.form_id !== CONTACT_FORM_ID && !!r.data?.length && <Answers r={r} />}
 
         {/* reply actions */}
         <div className="flex flex-wrap gap-2 px-4 pb-6 pt-4 sm:pl-[4.75rem] sm:pr-6">
@@ -611,6 +707,38 @@ function Reader({ r, pos, total, canDelete, hospital, onClose, onPrev, onNext, o
       </div>
       {prompt}
     </article>
+  )
+}
+
+// ------------------------------------------------------------------ form answers
+function Answers({ r }: { r: SiteEnquiry }) {
+  // name / mobile / email and the message are already shown above
+  const shown = new Set([r.name, r.phone, r.email].filter(Boolean).map(String))
+  const items = (r.data ?? []).filter((a) => !(typeof a.value === 'string' && ((shown.has(a.value) && ['text', 'phone', 'email'].includes(a.type)) || (a.type === 'textarea' && a.value.trim() === r.message.trim()))))
+  if (!items.length) return null
+  return (
+    <section aria-label="Form answers" className="mx-4 mt-4 rounded-2xl border border-slate-200 sm:ml-[4.75rem] sm:mr-6">
+      <h3 className="flex items-center gap-1.5 border-b border-slate-100 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-slate-500"><ClipboardList className="h-3.5 w-3.5" />{r.form_name ?? 'Form'} answers</h3>
+      <dl className="divide-y divide-slate-100">
+        {items.map((a) => (
+          <div key={a.id} className="grid gap-1 px-4 py-2.5 sm:grid-cols-[minmax(0,14rem)_1fr] sm:gap-4">
+            <dt className="text-[13px] text-slate-500">{a.label}</dt>
+            <dd className="min-w-0 whitespace-pre-wrap break-words text-sm text-slate-800">
+              {a.type === 'rating' ? (
+                <span className="inline-flex items-center gap-0.5" aria-label={`${a.value} out of 5`}>
+                  {[1, 2, 3, 4, 5].map((i) => <Star key={i} className={cn('h-4 w-4', i <= Number(a.value) ? 'fill-amber-400 text-amber-400' : 'text-slate-200')} />)}
+                  <span className="ml-1.5 text-xs font-semibold text-slate-600">{String(a.value)}/5</span>
+                </span>
+              ) : Array.isArray(a.value) ? (
+                <span className="flex flex-wrap gap-1">{a.value.map((v) => <span key={v} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{v}</span>)}</span>
+              ) : a.type === 'consent' ? (
+                <span className="inline-flex items-center gap-1 text-emerald-700"><CheckIcon className="h-4 w-4" />Agreed</span>
+              ) : answerText(a.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   )
 }
 

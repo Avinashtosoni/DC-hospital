@@ -298,7 +298,7 @@ begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   perform set_config('app.actor_name', 'Go-live cleanup', true);
   foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
-                           'doctor_leaves', 'site_enquiries', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
+                           'doctor_leaves', 'site_enquiries', 'site_forms', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
   loop
     begin
       execute format('delete from public.%I where public.is_demo_id(id)', t);

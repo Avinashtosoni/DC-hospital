@@ -2,7 +2,7 @@ import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BellRing, Building2, CircleUserRound, Database, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2 } from 'lucide-react'
+import { BellRing, Building2, ClipboardList, CircleUserRound, Database, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
 import { Button, PageHeader, Skeleton } from '../../components/ui'
@@ -17,18 +17,20 @@ import { AppearanceTab, LOCKED_MODULES } from './AppearanceTab'
 import { BillingTab } from './BillingTab'
 import { DashboardTab } from './DashboardTab'
 import { DataTab } from './DataTab'
+import { FormsTab } from './FormsTab'
 import { GeneralTab } from './GeneralTab'
 import { NotificationsTab } from './NotificationsTab'
 import { SecurityTab } from './SecurityTab'
 import type { TabCtx } from './shared'
 
-type TabId = 'general' | 'appearance' | 'dashboard' | 'notifications' | 'billing' | 'security' | 'data' | 'account'
+type TabId = 'general' | 'appearance' | 'dashboard' | 'notifications' | 'billing' | 'forms' | 'security' | 'data' | 'account'
 const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ className?: string }>; ownerOnly: boolean }[] = [
   { id: 'general', label: 'General & brand', hint: 'Logo, name, contacts, formats', icon: Building2, ownerOnly: true },
   { id: 'appearance', label: 'Appearance', hint: 'Theme, layout, modules, banner', icon: Palette, ownerOnly: true },
   { id: 'dashboard', label: 'Dashboard', hint: 'Widgets for each role', icon: LayoutDashboard, ownerOnly: true },
   { id: 'notifications', label: 'Notifications & APIs', hint: 'SMS, WhatsApp, email', icon: BellRing, ownerOnly: true },
   { id: 'billing', label: 'Billing & booking', hint: 'GST letterhead, online booking', icon: Receipt, ownerOnly: true },
+  { id: 'forms', label: 'Website forms', hint: 'Contact, reviews, custom forms', icon: ClipboardList, ownerOnly: true },
   { id: 'security', label: 'Security & access', hint: 'Timeout, sign-in, roles', icon: ShieldCheck, ownerOnly: true },
   { id: 'data', label: 'Data & backup', hint: 'Export, import, system', icon: Database, ownerOnly: true },
   { id: 'account', label: 'My account', hint: 'Profile and your access', icon: CircleUserRound, ownerOnly: false },
@@ -113,7 +115,13 @@ export default function SettingsPage() {
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [dirty, save])
-  const leavePrompt = useUnsavedChanges(dirty, { onSave: () => save.mutateAsync(), saving: save.isPending, what: 'settings' })
+  // the form editor (Forms tab) saves on its own; it only reports unsaved edits here so leaving the page asks first
+  const [formsDirty, setFormsDirty] = useState(false)
+  const leavePrompt = useUnsavedChanges(dirty || formsDirty, { onSave: dirty && !formsDirty ? () => save.mutateAsync() : undefined, saving: save.isPending, what: formsDirty ? 'this form' : 'settings' })
+  const goTab = (id: TabId) => {
+    if (formsDirty && tab === 'forms' && id !== 'forms' && !window.confirm('Discard your unsaved changes to this form?')) return
+    setParams(id === tabs[0].id ? {} : { tab: id }, { replace: true })
+  }
 
   // ---------------------------------------------------------------- render
   if (!isOwner) {
@@ -135,7 +143,7 @@ export default function SettingsPage() {
       <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">
         <nav aria-label="Settings sections" className="scrollbar-thin -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 lg:sticky lg:top-4 lg:mx-0 lg:flex-col lg:self-start lg:overflow-visible lg:px-0">
           {tabs.map((t) => (
-            <button key={t.id} type="button" onClick={() => setParams(t.id === tabs[0].id ? {} : { tab: t.id }, { replace: true })} aria-current={tab === t.id ? 'page' : undefined} ref={tab === t.id ? activeTab : undefined}
+            <button key={t.id} type="button" onClick={() => goTab(t.id)} aria-current={tab === t.id ? 'page' : undefined} ref={tab === t.id ? activeTab : undefined}
               className={cn('group flex shrink-0 items-center gap-3 rounded-xl px-3 py-2 text-left transition lg:py-2.5',
                 tab === t.id ? 'bg-white text-brand-900 shadow-sm ring-1 ring-brand-100' : 'text-slate-600 hover:bg-white/70 hover:text-brand-900')}>
               <span className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-lg transition', tab === t.id ? 'bg-brand-900 text-white' : 'bg-brand-50 text-brand-700 group-hover:bg-brand-100')}><t.icon className="h-4 w-4" /></span>
@@ -149,7 +157,7 @@ export default function SettingsPage() {
 
         <div className="min-w-0 pb-24">
           <h2 className="sr-only">{current.label}</h2>
-          {!ctx && tab !== 'account' ? (
+          {tab === 'forms' ? <FormsTab onDirty={setFormsDirty} /> : !ctx && tab !== 'account' ? (
             <div className="space-y-4" aria-busy="true"><Skeleton className="h-56 rounded-2xl" /><Skeleton className="h-40 rounded-2xl" /></div>
           ) : (
             <>
