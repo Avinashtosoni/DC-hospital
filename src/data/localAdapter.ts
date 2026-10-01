@@ -7,6 +7,7 @@ import type { AuthAdapter, DataAdapter, InviteInfo, NewRow, Row, SignUpInput } f
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from './seed'
 import { auditSummary, diffRows, isAudited } from '../lib/audit'
 import { CONTACT_FORM_ID } from '../forms/schema'
+import { nextRun } from '../settings/schedule'
 
 const DB_KEY = 'dch:db:v3'
 const USERS_KEY = 'dch:auth-users:v1'
@@ -109,6 +110,20 @@ function patientApptGuard(a: DB['appointments'], patch: Partial<DB['appointments
   patch.status = 'scheduled'
 }
 
+/** Demo-mode mirror of the stamp triggers in scripts/sql/messaging.sql (notice author, template next run / author). */
+function stampMessaging(table: TableName, row: Record<string, unknown>, isNew: boolean, before?: Record<string, unknown>) {
+  const me = load().profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+  if (table === 'notices' && isNew && !row.author_name) row.author_name = me?.full_name ?? null
+  if (table === 'notification_templates') {
+    const t = row as unknown as DB['notification_templates']
+    if (isNew) t.created_by_name = t.created_by_name ?? me?.full_name ?? null
+    if (t.audience === 'roles' && !t.roles?.length) throw new Error('Pick at least one role to send to.')
+    if (t.schedule === 'once' && t.enabled && !t.send_at) throw new Error('Pick when to send it.')
+    const keys = ['enabled', 'schedule', 'send_at', 'time_of_day', 'weekday', 'month_day'] as const
+    if (isNew || keys.some((k) => before?.[k] !== (t as unknown as Record<string, unknown>)[k])) t.next_run_at = nextRun(t)?.toISOString() ?? null
+  }
+}
+
 /** Demo-mode mirror of trg_payments_sync_invoice (scripts/sql/scale.sql): an invoice's amount_paid is always the
  *  sum of its payments and its status follows from it. */
 function syncInvoiceFromPayments(invoiceId: string | undefined) {
@@ -140,6 +155,7 @@ export const localAdapter: DataAdapter = {
     await latency()
     const now = new Date().toISOString()
     const full = { ...row, id: row.id ?? uuid(), created_at: now, updated_at: now } as unknown as Row<T>
+    stampMessaging(table, full as unknown as Record<string, unknown>, true)
     if (table === 'site_enquiries') { const e = full as unknown as DB['site_enquiries']; if (!e.form_id) { e.form_id = CONTACT_FORM_ID; e.form_name = e.form_name ?? 'Contact form' } }
     if (table === 'payments') { // trg_payments_sync_invoice also stamps the patient from the invoice
       const p = full as unknown as DB['payments']
@@ -158,7 +174,9 @@ export const localAdapter: DataAdapter = {
     if (idx < 0) throw new Error('Record not found')
     const before = rows[idx]
     if (table === 'appointments') patientApptGuard(before as unknown as DB['appointments'], patch as Partial<DB['appointments']>)
-    rows[idx] = { ...rows[idx], ...patch, id, updated_at: new Date().toISOString() }
+    const next = { ...rows[idx], ...patch, id, updated_at: new Date().toISOString() }
+    stampMessaging(table, next as unknown as Record<string, unknown>, false, before as unknown as Record<string, unknown>)
+    rows[idx] = next
     if (table === 'payments') { const p = rows[idx] as unknown as DB['payments']; p.patient_id = load().invoices.find((i) => i.id === p.invoice_id)?.patient_id ?? p.patient_id }
     audit(table, 'update', before as unknown as Record<string, unknown>, rows[idx] as unknown as Record<string, unknown>)
     if (table === 'payments') { syncInvoiceFromPayments((before as unknown as DB['payments']).invoice_id); syncInvoiceFromPayments((rows[idx] as unknown as DB['payments']).invoice_id) }
@@ -185,7 +203,7 @@ export const localAdapter: DataAdapter = {
 }
 
 // ------------------------------------------------------------------ local auth
-interface LocalUser { email: string; password: string; profile_id: string }
+interface LocalUser { email: string; password: string; profile_id: string; disabled?: boolean; last_sign_in_at?: string }
 function users(): LocalUser[] {
   const raw = localStorage.getItem(USERS_KEY)
   if (raw) return JSON.parse(raw)
@@ -226,6 +244,9 @@ export const localAuth: AuthAdapter = {
     await latency()
     const u = users().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
     if (!u || u.password !== password) throw new Error('Invalid email or password')
+    if (u.disabled) throw new Error('This account has been disabled. Please contact the hospital.')
+    u.last_sign_in_at = new Date().toISOString()
+    localStorage.setItem(USERS_KEY, JSON.stringify(users().map((x) => (x.profile_id === u.profile_id ? u : x))))
     const profile = load().profiles.find((p) => p.id === u.profile_id)
     if (!profile) throw new Error('Profile not found for this account')
     localStorage.setItem(SESSION_KEY, profile.id)
@@ -337,4 +358,113 @@ export async function localSubmitFeedback(apptId: string, input: { rating: numbe
     appointment_id: a.id, patient_id: a.patient_id, doctor_id: a.doctor_id, rating: input.rating,
     comment: input.comment?.trim() || null, tags: input.tags ?? [], would_recommend: input.would_recommend ?? null, source,
   } as never)
+}
+
+// ------------------------------------------------------------------ user administration (demo twins of admin_* in messaging.sql)
+const ROLES = ['owner', 'doctor', 'receptionist', 'accountant', 'staff', 'patient']
+function adminGuard() {
+  const me = load().profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+  if (me?.role !== 'owner') throw new Error('Only the hospital owner can manage user accounts')
+  return me
+}
+const owners = () => load().profiles.filter((p) => p.role === 'owner').length
+export const localAdmin = {
+  async create(input: { email: string; full_name: string; role: Profile['role']; phone?: string | null; password?: string | null }): Promise<string> {
+    await latency(); adminGuard()
+    const email = input.email.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid e-mail address')
+    if (input.full_name.trim().length < 2) throw new Error('Enter the full name')
+    if (!ROLES.includes(input.role)) throw new Error('Choose a role')
+    if (input.password && input.password.length < 8) throw new Error('Use at least 8 characters for the password')
+    const list = users()
+    if (list.some((x) => x.email.toLowerCase() === email)) throw new Error('An account with this e-mail already exists')
+    const store = load(), now = new Date().toISOString()
+    const profile: Profile = { id: uuid(), full_name: input.full_name.trim(), email, role: input.role, phone: input.phone?.trim() || null, created_at: now, updated_at: now }
+    store.profiles.unshift(profile)
+    audit('profiles', 'insert', null, profile as unknown as Record<string, unknown>)
+    if (input.role === 'patient') {
+      const nextMrn = Math.max(100000, ...store.patients.map((p) => Number(p.mrn.replace(/\D/g, '')) || 0)) + 1
+      store.patients.unshift({ id: uuid(), profile_id: profile.id, mrn: `DCH-${nextMrn}`, full_name: profile.full_name, email, phone: profile.phone, gender: 'other', status: 'outpatient', created_at: now, updated_at: now })
+    } else {
+      const linked = (input.role === 'doctor' ? store.doctors : store.staff) as { email?: string | null; profile_id?: string | null }[]
+      const match = linked.find((r) => r.email?.toLowerCase() === email && !r.profile_id)
+      if (match) match.profile_id = profile.id
+    }
+    persist()
+    list.push({ email, password: input.password || crypto.randomUUID(), profile_id: profile.id })
+    localStorage.setItem(USERS_KEY, JSON.stringify(list))
+    return profile.id
+  },
+  async update(id: string, input: { full_name: string; role: Profile['role']; phone?: string | null; email?: string | null }) {
+    await latency(); const me = adminGuard()
+    const store = load()
+    const p = store.profiles.find((x) => x.id === id)
+    if (!p) throw new Error('User not found')
+    if (input.full_name.trim().length < 2) throw new Error('Enter the full name')
+    if (p.role === 'owner' && input.role !== 'owner' && (id === me.id || owners() <= 1)) throw new Error("You can't remove your own owner access or the last owner")
+    const email = (input.email ?? '').trim().toLowerCase()
+    const list = users()
+    if (email && email !== p.email.toLowerCase()) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid e-mail address')
+      if (list.some((x) => x.email.toLowerCase() === email && x.profile_id !== id)) throw new Error('Another account already uses this e-mail')
+      const u = list.find((x) => x.profile_id === id); if (u) u.email = email
+      localStorage.setItem(USERS_KEY, JSON.stringify(list))
+    }
+    const before = { ...p }
+    Object.assign(p, { full_name: input.full_name.trim(), role: input.role, phone: input.phone?.trim() || null, email: email || p.email, updated_at: new Date().toISOString() })
+    audit('profiles', 'update', before as unknown as Record<string, unknown>, p as unknown as Record<string, unknown>)
+    persist()
+  },
+  async setPassword(id: string, password: string) {
+    await latency(); adminGuard()
+    if (password.length < 8) throw new Error('Use at least 8 characters')
+    localSetPassword(id, password)
+  },
+  async setActive(id: string, active: boolean) {
+    await latency(); const me = adminGuard()
+    if (id === me.id) throw new Error("You can't disable your own account")
+    const list = users(); const u = list.find((x) => x.profile_id === id)
+    if (!u) throw new Error('No login found for this account')
+    u.disabled = !active
+    localStorage.setItem(USERS_KEY, JSON.stringify(list))
+  },
+  async status(ids: string[]): Promise<{ id: string; disabled: boolean; last_sign_in_at: string | null }[]> {
+    const list = users()
+    return ids.map((id) => { const u = list.find((x) => x.profile_id === id); return { id, disabled: !!u?.disabled, last_sign_in_at: u?.last_sign_in_at ?? null } })
+  },
+  async remove(id: string) {
+    await latency(); const me = adminGuard()
+    if (id === me.id) throw new Error("You can't delete your own account")
+    const store = load()
+    const p = store.profiles.find((x) => x.id === id)
+    if (p?.role === 'owner' && owners() <= 1) throw new Error("You can't delete the last owner")
+    store.profiles = store.profiles.filter((x) => x.id !== id)
+    for (const t of ['patients', 'doctors', 'staff'] as const) for (const r of store[t] as { profile_id?: string | null }[]) if (r.profile_id === id) r.profile_id = null
+    if (p) audit('profiles', 'delete', p as unknown as Record<string, unknown>, null)
+    persist()
+    localStorage.setItem(USERS_KEY, JSON.stringify(users().filter((x) => x.profile_id !== id)))
+  },
+}
+
+/** Demo stand-in for notify_template_recipients(): who a custom message would reach. */
+export function localTemplateRecipients(t: DB['notification_templates']): { profile_id: string | null; full_name: string; phone: string | null; email: string | null }[] {
+  const store = load()
+  const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(5, 10)
+  const out: { profile_id: string | null; full_name: string; phone: string | null; email: string | null }[] = []
+  const patientsToo = t.schedule === 'birthday' || t.audience === 'patients' || t.audience === 'everyone' || (t.audience === 'roles' && t.roles.includes('patient'))
+  if (patientsToo) for (const p of store.patients) {
+    if (t.schedule === 'birthday' && (p.date_of_birth ?? '').slice(5, 10) !== today) continue
+    out.push({ profile_id: p.profile_id ?? null, full_name: p.full_name, phone: p.phone ?? null, email: p.email ?? null })
+  }
+  if (t.schedule !== 'birthday') for (const p of store.profiles) {
+    if (p.role === 'patient') continue
+    if (!(t.audience === 'staff' || t.audience === 'everyone' || (t.audience === 'roles' && t.roles.includes(p.role)))) continue
+    out.push({ profile_id: p.id, full_name: p.full_name, phone: p.phone ?? null, email: p.email })
+  }
+  const seen = new Set<string>()
+  return out.filter((r) => { const k = (r.phone ?? '').replace(/\D/g, '').slice(-10) || r.email?.toLowerCase() || r.profile_id || ''; if (seen.has(k)) return false; seen.add(k); return true }).slice(0, 5000)
+}
+export function localMarkTemplateRun(id: string, count: number) {
+  const t = load().notification_templates.find((x) => x.id === id)
+  if (t) { t.last_run_at = new Date().toISOString(); t.last_run_count = count; persist() }
 }

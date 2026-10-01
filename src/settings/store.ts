@@ -11,7 +11,7 @@ import { SECRET_FIELDS } from './types'
 export interface SettingsRow { data: Partial<AppSettings> | null; updated_at?: string | null; updated_by_name?: string | null }
 export interface SecretStatus { key: string; hint: string; updated_at: string; updated_by_name: string | null }
 export interface OutboxRow {
-  id: string; event: NotifyEvent | 'test'; channel: Channel; recipient: string; status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'simulated'
+  id: string; event: NotifyEvent | 'test' | `tpl:${string}`; channel: Channel; recipient: string; status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'simulated'
   error: string | null; attempts: number; provider_ref: string | null; created_at: string; sent_at: string | null
 }
 export interface SendResult { ok: boolean; message: string; provider_ref?: string | null }
@@ -116,6 +116,10 @@ const local = {
     write(K.secrets, all)
   },
   async log(): Promise<OutboxRow[]> { return read<OutboxRow[]>(K.log, []) },
+  async testPush(): Promise<SendResult> {
+    await pause(500)
+    return { ok: false, message: 'Demo mode — push notifications need Supabase, a Firebase project and the notify function. The setup checklist on the left shows what is still missing.' }
+  },
   async test(channel: Channel, to: string, settings?: AppSettings): Promise<SendResult> {
     await pause(700)
     const issues = settings ? channelIssues(channel, settings, await local.secrets()) : []
@@ -136,6 +140,7 @@ const local = {
 
 // ------------------------------------------------------------------ validation shared by both modes
 export function recipientProblem(channel: Channel, to: string): string | null {
+  if (channel === 'push') return null
   if (channel === 'email') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to.trim()) ? null : 'Enter a valid email address'
   return /^[6-9]\d{9}$/.test(to.replace(/\D/g, '').slice(-10)) && to.replace(/\D/g, '').length >= 10 ? null : 'Enter a valid 10-digit Indian mobile number'
 }
@@ -172,8 +177,25 @@ export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretS
     if (w.provider === 'interakt' && !has('interakt_api_key')) out.push('Interakt API key is not saved')
     if (w.provider === 'webhook' && !/^https:\/\//.test(w.webhookUrl)) out.push('Webhook URL must start with https://')
   }
+  if (channel === 'push') {
+    const f = n.push ?? ({} as AppSettings['notifications']['push'])
+    if (!f.projectId) out.push('Firebase project ID is required')
+    if (!f.apiKey) out.push('Firebase web API key is required')
+    if (!f.messagingSenderId) out.push('Messaging sender ID is required')
+    if (!f.appId) out.push('Firebase app ID is required')
+    if (!f.vapidKey) out.push('Web push certificate (VAPID key) is required')
+    if (!has('fcm_service_account')) out.push('Firebase service-account JSON is not saved')
+  }
   return out
 }
+
+/** demo mode: record simulated sends (custom messages) in the delivery log */
+export function appendLocalLog(rows: Omit<OutboxRow, 'id' | 'created_at' | 'attempts' | 'provider_ref' | 'sent_at' | 'error'>[]) {
+  const now = new Date().toISOString()
+  const full: OutboxRow[] = rows.map((r) => ({ ...r, id: crypto.randomUUID(), created_at: now, attempts: 1, provider_ref: 'DEMO-SIMULATED', sent_at: now, error: null }))
+  write(K.log, [...full, ...read<OutboxRow[]>(K.log, [])].slice(0, 300))
+}
+export const readLocalLog = () => read<OutboxRow[]>(K.log, [])
 
 const impl = isSupabaseConfigured ? remote : local
 export const settingsStore = {
@@ -183,7 +205,7 @@ export const settingsStore = {
   secrets: impl.secrets,
   setSecret: impl.setSecret,
   log: impl.log,
-  test: (channel: Channel, to: string, settings: AppSettings) => (isSupabaseConfigured ? remote.test(channel, to) : local.test(channel, to, settings)),
+  test: (channel: Channel, to: string, settings: AppSettings) => (isSupabaseConfigured ? remote.test(channel, to) : channel === 'push' ? local.testPush() : local.test(channel, to, settings)),
   flush: () => impl.flush(),
   ping: impl.ping,
   queueReminders: impl.queueReminders,

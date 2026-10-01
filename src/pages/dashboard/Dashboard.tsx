@@ -9,6 +9,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
 import { useSiteSettings } from '../../site/cms/content'
 import { Widget, WidgetScope } from '../../settings/widgetScope'
+import { UsageMini } from '../../components/usage/UsageMini'
 import { useByIds, useCount, useLookup, useTable, useUpdate, useWindow } from '../../hooks/useData'
 import { useMe } from '../../hooks/useScope'
 import { Avatar, Badge, Button, Card, CardHeader, StatCard, StatusBadge } from '../../components/ui'
@@ -173,7 +174,7 @@ function OwnerDashboard() {
         </div>
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-6 grid gap-6 lg:grid-cols-2 2xl:grid-cols-3">
         <ListCard title="Current admissions" icon={<ClipboardList className="h-4 w-4" />} link="/admissions?status=admitted" loading={admissions.isLoading} empty={!admissions.data?.some((a) => a.status === 'admitted')}>
           {(admissions.data ?? []).filter((a) => a.status === 'admitted').slice(0, 5).map((a) => (
             <ListRow key={a.id} to={`/patients/${a.patient_id}`} left={<div className="flex items-center gap-3"><Avatar name={pLk.get(a.patient_id)?.full_name} size="sm" /><div><div className="text-sm font-medium text-slate-800">{pLk.get(a.patient_id)?.full_name}</div><div className="text-xs text-slate-500">{a.reason}</div></div></div>} right={<span className="text-xs text-slate-500">since {fmtDate(a.admission_date, 'dd MMM')}</span>} />
@@ -184,6 +185,7 @@ function OwnerDashboard() {
             <ListRow key={i.id} to={`/invoices/${i.id}`} left={<div><div className="text-sm font-medium text-slate-800">{i.invoice_number} · {pLk.get(i.patient_id)?.full_name}</div><div className="text-xs text-slate-500">Due {fmtDate(i.due_date)}</div></div>} right={<div className="flex items-center gap-2"><span className="text-sm font-semibold text-rose-600">{money(invoiceBalance(i))}</span><StatusBadge value={i.status} /></div>} />
           ))}
         </ListCard>
+        <Widget id="Messaging usage"><UsageMini className="lg:col-span-2 2xl:col-span-1" /></Widget>
       </div>
     </div>
   )
@@ -323,13 +325,14 @@ function AccountantDashboard() {
         <Widget id="Cash flow"><Card className="xl:col-span-2"><CardHeader title="Cash flow" subtitle="Last 6 months" icon={<TrendingUp className="h-4 w-4" />} /><RevenueChart data={fin.series} loading={fin.loading} /></Card></Widget>
         <Widget id="Collections by method"><Card><CardHeader title="Collections by method" subtitle="Last 6 months" icon={<CreditCard className="h-4 w-4" />} /><Donut data={fin.methods} loading={fin.loading} formatter={money} height={290} /></Card></Widget>
       </div>
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-6 grid gap-6 lg:grid-cols-2 2xl:grid-cols-3">
         <ListCard title="Overdue invoices" icon={<AlertTriangle className="h-4 w-4" />} link="/invoices?status=overdue" loading={fin.loading} empty={!overdue.length} emptyText="No overdue invoices 🎉">
           {overdue.slice(0, 6).map((i) => <ListRow key={i.id} to={`/invoices/${i.id}`} left={<div><div className="text-sm font-medium text-slate-800">{i.invoice_number} · {pLk.get(i.patient_id)?.full_name}</div><div className="text-xs text-slate-500">Due {fmtDate(i.due_date)} · {ago(i.due_date)}</div></div>} right={<span className="text-sm font-semibold text-rose-600">{money(invoiceBalance(i))}</span>} />)}
         </ListCard>
         <ListCard title="Recent payments" icon={<CreditCard className="h-4 w-4" />} link="/payments" loading={fin.loading} empty={!recent.length}>
           {recent.map((p) => <ListRow key={p.id} to={`/invoices/${p.invoice_id}`} left={<div className="flex items-center gap-3"><Avatar name={pLk.get(p.patient_id)?.full_name} size="sm" /><div><div className="text-sm font-medium text-slate-800">{pLk.get(p.patient_id)?.full_name}</div><div className="text-xs text-slate-500">{fmtDate(p.paid_on)} · {p.method === 'upi' ? 'UPI' : titleCase(p.method)}</div></div></div>} right={<span className="text-sm font-semibold text-emerald-700">+{moneyCompact(p.amount)}</span>} />)}
         </ListCard>
+        <Widget id="Messaging usage"><UsageMini className="lg:col-span-2 2xl:col-span-1" /></Widget>
       </div>
     </div>
   )

@@ -8,6 +8,7 @@ import type { SiteEnquiry, AuditEntry, VisitFeedback, DoctorLeave, Holiday,
   LineItem, Medication, Notice, Patient, Payment, Prescription, Profile, Role, Staff, Ward,
   SiteForm,
 } from '../types'
+import type { NotificationTemplate } from '../types'
 import { CONTACT_FORM_ID, DEFAULT_FORMS, FORM_TEMPLATES, toEnquiry, type Answers } from '../forms/schema'
 
 export interface DateHelper {
@@ -567,12 +568,23 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
 
   // ---------------------------------------------------------------- notices
   const notices: Notice[] = [
-    { id: sid(15, 1), title: 'Free cardiac screening camp this Sunday', body: 'DC Hospital is organising a free ECG and BP screening camp from 9 AM to 2 PM at the main lobby. Please inform your patients.', audience: 'all', priority: 'important', published_on: d.date(-1), created_at: d.ts(-1, '09:00') },
-    { id: sid(15, 2), title: 'NABH audit preparation', body: 'All departments must update SOP documentation and infection control logs before the audit next week.', audience: 'staff', priority: 'urgent', published_on: d.date(-2), created_at: d.ts(-2, '10:00') },
+    { id: sid(15, 1), title: 'Free cardiac screening camp this Sunday', body: 'DC Hospital is organising a free ECG and BP screening camp from 9 AM to 2 PM at the main lobby. Please inform your patients.', audience: 'all', priority: 'important', published_on: d.date(-1), expires_on: d.date(5), pinned: true, author_name: 'Avinash Tosoni', created_at: d.ts(-1, '09:00') },
+    { id: sid(15, 2), title: 'NABH audit preparation', body: 'All departments must update SOP documentation and infection control logs before the audit next week.', audience: 'staff', priority: 'urgent', published_on: d.date(-2), author_name: 'Avinash Tosoni', created_at: d.ts(-2, '10:00') },
     { id: sid(15, 3), title: 'New MRI 3T machine operational', body: 'Radiology has commissioned a new 3 Tesla MRI. Slots can now be booked through the front desk.', audience: 'all', priority: 'normal', published_on: d.date(-6), created_at: d.ts(-6, '12:00') },
-    { id: sid(15, 4), title: 'CME: Updates in diabetes management', body: 'Continuing medical education session by Dr. Pooja Bansal on Friday, 4 PM, Conference Hall B.', audience: 'doctors', priority: 'normal', published_on: d.date(-4), created_at: d.ts(-4, '15:00') },
+    { id: sid(15, 4), title: 'CME: Updates in diabetes management', body: 'Continuing medical education session by Dr. Pooja Bansal on Friday, 4 PM, Conference Hall B.', audience: 'doctors', priority: 'normal', published_on: d.date(-4), author_name: 'Neha Kapoor', created_at: d.ts(-4, '15:00') },
     { id: sid(15, 5), title: 'Online reports now available', body: 'Patients can now view their lab results, prescriptions and invoices directly from the patient portal.', audience: 'patients', priority: 'normal', published_on: d.date(-8), created_at: d.ts(-8, '11:00') },
     { id: sid(15, 6), title: 'Night shift roster updated', body: 'The revised night shift roster for nursing staff is available with the Head Nurse.', audience: 'staff', priority: 'normal', published_on: d.date(-10), created_at: d.ts(-10, '17:00') },
+  ]
+
+  // ---------------------------------------------------------------- custom messages (Settings → Notifications), switched off
+  const notification_templates: NotificationTemplate[] = [
+    { id: sid(21, 1), name: 'Birthday wishes', description: 'Sent to patients on their birthday', channels: ['sms', 'whatsapp'], subject: 'Happy birthday from {hospital}',
+      text: 'Happy birthday {name}! Wishing you good health from all of us at {hospital}. Enjoy 10% off any health check-up this month.',
+      wa_text: '🎂 *Happy birthday, {name}!*\n\nWishing you good health from all of us at {hospital}.\nEnjoy *10% off* any health check-up this month.',
+      audience: 'patients', roles: [], schedule: 'birthday', time_of_day: '09:00', enabled: false, created_by_name: 'Avinash Tosoni', created_at: d.ts(-12, '10:00') },
+    { id: sid(21, 2), name: 'Monday staff briefing', description: 'Weekly reminder for the whole team', channels: ['push', 'email'], subject: 'Staff briefing at 9:30 AM',
+      text: 'Good morning {name}, the weekly staff briefing is at 9:30 AM in Conference Hall B. — {hospital}',
+      audience: 'staff', roles: [], schedule: 'weekly', weekday: 1, time_of_day: '08:30', enabled: false, created_by_name: 'Avinash Tosoni', created_at: d.ts(-9, '16:00') },
   ]
 
   // ---------------------------------------------------------------- website enquiries (Contact form)
@@ -709,7 +721,7 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
   return {
     profiles, departments, doctors, staff, patients, appointments, prescriptions, lab_tests, wards, beds,
     admissions, invoices, payments, expenses, inventory, notices, site_enquiries, site_forms, doctor_leaves, holidays, audit_log,
-    visit_feedback, staff_invites: [],
+    visit_feedback, staff_invites: [], notification_templates,
   }
 
 }

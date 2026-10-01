@@ -5,11 +5,21 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { qk } from '../hooks/useData'
 import { fetchReport, shapeReport } from '../lib/reports'
-import { Button, Card, CardHeader, PageHeader, Select, Skeleton, StatCard } from '../components/ui'
+import { Button, Card, CardHeader, PageHeader, Select, Skeleton, StatCard, Tabs } from '../components/ui'
+import { useSearchParams } from 'react-router-dom'
+import { UsageReport } from '../components/usage/UsageReport'
 import { Donut } from './dashboard/widgets'
 import { downloadCsv, money, moneyCompact } from '../lib/utils'
 
 export default function Reports() {
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'messaging' ? 'messaging' : 'financial'
+  const tabs = <div className="mb-6"><Tabs value={tab} onChange={(v) => setParams(v === 'financial' ? {} : { tab: v }, { replace: true })} tabs={[{ value: 'financial', label: 'Financial' }, { value: 'messaging', label: 'Messaging usage' }]} /></div>
+  if (tab === 'messaging') return <div><PageHeader title="Reports" description="Messaging usage — SMS, WhatsApp, e-mail and push." />{tabs}<UsageReport /></div>
+  return <FinancialReport tabs={tabs} />
+}
+
+function FinancialReport({ tabs }: { tabs: React.ReactNode }) {
   const [months, setMonths] = useState(6)
   // totals come from the database (financial_report) — the browser never downloads every invoice
   const q = useQuery({ queryKey: [...qk('invoices'), 'report', months], queryFn: () => fetchReport(months), staleTime: 60_000, placeholderData: keepPreviousData })
@@ -25,6 +35,7 @@ export default function Reports() {
           </Select>
           <Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={() => downloadCsv(`pnl-${months}m.csv`, r.monthly)}>Export</Button>
         </>} />
+      {tabs}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Billed" value={money(r.billed)} icon={<Receipt className="h-5 w-5" />} tone="blue" loading={loading} />
         <StatCard label="Collected" value={money(r.collected)} icon={<IndianRupee className="h-5 w-5" />} loading={loading} hint={<span className="inline-flex items-center gap-1"><Percent className="h-3 w-3" />{r.billed ? Math.round((r.collected / r.billed) * 100) : 0}% collection rate</span>} />

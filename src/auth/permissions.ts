@@ -42,6 +42,8 @@ export const PERMISSIONS: Record<TableName, Matrix> = {
   // patients rate their own completed visits once; doctors read their own ratings (see ROW_RULES)
   visit_feedback: { owner: ALL, receptionist: R, doctor: R, patient: RC },
   staff_invites: { owner: ALL },
+  // custom / scheduled messages (Settings → Notifications); sent by Supabase cron
+  notification_templates: { owner: ALL },
 }
 
 /**

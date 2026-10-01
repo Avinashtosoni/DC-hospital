@@ -12,6 +12,7 @@ const S: Role[] = ['owner', 'doctor', 'receptionist', 'accountant', 'staff']
 export const NAV: NavSection[] = [
   { title: 'Overview', items: [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard, roles: [...S, 'patient'] },
+    { label: 'Notice Board', path: '/notices', icon: Megaphone, roles: [...S, 'patient'] },
     { label: 'My Health Record', path: '/me', icon: HeartPulse, roles: ['patient'] },
   ] },
   { title: 'Clinical', items: [
@@ -33,7 +34,7 @@ export const NAV: NavSection[] = [
     { label: (r) => (r === 'patient' ? 'My Bills' : 'Invoices'), path: '/invoices', icon: Receipt, roles: ['owner', 'accountant', 'receptionist', 'patient'] },
     { label: (r) => (r === 'patient' ? 'My Payments' : 'Payments'), path: '/payments', icon: CreditCard, roles: ['owner', 'accountant', 'receptionist', 'patient'] },
     { label: 'Expenses', path: '/expenses', icon: Wallet, roles: ['owner', 'accountant'] },
-    { label: 'Financial Reports', path: '/reports', icon: BarChart3, roles: ['owner', 'accountant'] },
+    { label: 'Reports', path: '/reports', icon: BarChart3, roles: ['owner', 'accountant'] },
   ] },
   { title: 'Website', items: [
     { label: 'Website CMS', path: '/cms', icon: Globe, roles: ['owner'] },
@@ -41,7 +42,6 @@ export const NAV: NavSection[] = [
   ] },
   { title: 'Operations', items: [
     { label: 'Pharmacy & Inventory', path: '/inventory', icon: Package, roles: ['owner', 'staff', 'doctor', 'accountant'] },
-    { label: 'Notice Board', path: '/notices', icon: Megaphone, roles: [...S, 'patient'] },
     { label: 'Users & Roles', path: '/users', icon: ShieldCheck, roles: ['owner'] },
     { label: 'Audit Log', path: '/audit', icon: History, roles: ['owner'] },
     { label: 'My Profile', path: '/profile', icon: CircleUserRound, roles: [...S, 'patient'] },

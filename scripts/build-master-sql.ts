@@ -16,6 +16,7 @@ import { PERMISSIONS, ROW_RULES, type Action } from '../src/auth/permissions'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from '../src/data/seed'
 import type { Role, TableName } from '../src/types'
 import { DEFAULT_FORMS } from '../src/forms/schema'
+import { DEFAULT_APP_SETTINGS, type NotifyEvent } from '../src/settings/types'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RAW = '__SQL__'
@@ -89,7 +90,7 @@ const sqlDates = {
   date: (o: number) => `${RAW}(current_date + ${o})`,
   ts: (o: number, t = '09:00') => `${RAW}((current_date + ${o}) + time '${t}')`,
 }
-const TEXT_ARRAY_COLS = new Set(['available_days', 'tags'])
+const TEXT_ARRAY_COLS = new Set(['available_days', 'tags', 'channels', 'roles'])
 
 function lit(v: unknown, col: string): string {
   if (v === undefined) return 'default'
@@ -121,7 +122,7 @@ function seedSql(): string {
   const identities = DEMO_USERS.map((u) => `  (gen_random_uuid(), '${u.id}', '${u.id}', '${JSON.stringify({ sub: u.id, email: u.email, email_verified: true })}'::jsonb, 'email', now(), now(), now())`).join(',\n')
   const roleUpdates = DEMO_USERS.map((u) => `update public.profiles set role = '${u.role}', phone = '${u.phone}' where id = '${u.id}';`).join('\n')
 
-  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_forms', 'site_enquiries', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback']
+  const order: TableName[] = ['departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_forms', 'site_enquiries', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'notification_templates']
   const body = order.map((t) => inserts(t, s[t] as unknown as Record<string, unknown>[])).join('\n\n')
 
   return `
@@ -185,6 +186,25 @@ const formRows = DEFAULT_FORMS.map((f) => `  (${[f.id, f.slug, f.name, f.descrip
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
+// default wording for the messaging events added in section 18 — merged into a saved Settings row (saved values win)
+const NEW_EVENTS: NotifyEvent[] = ['account_created', 'account_updated', 'account_deleted', 'password_changed', 'notice_published']
+const nd = DEFAULT_APP_SETTINGS.notifications
+const notifyDefaults = JSON.stringify({
+  events: Object.fromEntries(NEW_EVENTS.map((e) => [e, nd.events[e]])),
+  templates: Object.fromEntries(NEW_EVENTS.map((e) => [e, nd.templates[e]])),
+  push: nd.push, rates: nd.rates,
+})
+if (notifyDefaults.includes('$json$')) throw new Error('notification defaults contain $json$')
+const messagingSql = readFileSync(resolve(root, 'scripts/sql/messaging.sql'), 'utf8').replace('-- @@NOTIFY_DEFAULTS@@', `with d as (select $json$${notifyDefaults}$json$::jsonb as j)
+update public.app_settings a set data = jsonb_set(a.data, '{notifications}', coalesce(a.data -> 'notifications', '{}'::jsonb) || jsonb_build_object(
+    'events', (d.j -> 'events') || coalesce(a.data -> 'notifications' -> 'events', '{}'::jsonb),
+    'templates', (d.j -> 'templates') || coalesce(a.data -> 'notifications' -> 'templates', '{}'::jsonb),
+    'push', (d.j -> 'push') || coalesce(a.data -> 'notifications' -> 'push', '{}'::jsonb),
+    'rates', (d.j -> 'rates') || coalesce(a.data -> 'notifications' -> 'rates', '{}'::jsonb)))
+  from d
+ where a.key = 'app' and jsonb_typeof(a.data -> 'notifications') = 'object';`)
+if (messagingSql.includes('@@NOTIFY_DEFAULTS@@')) throw new Error('messaging defaults placeholder missing')
+
 const rls = `-- =====================================================================================================
 --  6. ROW LEVEL SECURITY (generated from src/auth/permissions.ts)
 -- =====================================================================================================
@@ -221,6 +241,8 @@ ${scaleSql}
 ${authSql}
 
 ${formsSql}
+
+${messagingSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -276,6 +298,8 @@ ${authSql}
 
 ${formsSql}
 
+${messagingSql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
@@ -305,12 +329,14 @@ console.log(`✔ supabase/master.sql written (${(sql.length / 1024).toFixed(0)} 
 writeFileSync(resolve(root, 'supabase/production.sql'), production)
 console.log(`✔ supabase/production.sql written (${(production.length / 1024).toFixed(0)} KB)`)
 
-// the in-place upgrade carries the same forms section (between the markers) — regenerated so it never drifts
+// the in-place upgrade carries the same forms / messaging sections (between markers) — regenerated so they never drift
 const upgradePath = resolve(root, 'supabase/upgrade-2026-10.sql')
 const upgrade = readFileSync(upgradePath, 'utf8')
-const block = `-- >>> forms (generated from scripts/sql/forms.sql — do not edit here)\n${formsSql.trim()}\n-- <<< forms`
-const nextUpgrade = upgrade.includes('-- >>> forms')
-  ? upgrade.replace(/-- >>> forms[\s\S]*?-- <<< forms/, () => block)
-  : upgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)
-if (!nextUpgrade.includes('-- <<< forms')) throw new Error('could not place the forms section in upgrade-2026-10.sql')
-if (nextUpgrade !== upgrade) { writeFileSync(upgradePath, nextUpgrade); console.log('✔ supabase/upgrade-2026-10.sql forms section updated') }
+let nextUpgrade = upgrade
+for (const [name, file, body] of [['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql]] as const) {
+  const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
+  const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
+  nextUpgrade = re.test(nextUpgrade) ? nextUpgrade.replace(re, () => block) : nextUpgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)
+  if (!nextUpgrade.includes(`-- <<< ${name}`)) throw new Error(`could not place the ${name} section in upgrade-2026-10.sql`)
+}
+if (nextUpgrade !== upgrade) { writeFileSync(upgradePath, nextUpgrade); console.log('✔ supabase/upgrade-2026-10.sql generated sections updated') }

@@ -2,10 +2,13 @@ import type { Role } from '../types'
 import { THEME_PALETTES, type ThemeId } from './palettes'
 
 // ------------------------------------------------------------------ notifications
-export type Channel = 'sms' | 'whatsapp' | 'email'
+export type Channel = 'sms' | 'whatsapp' | 'email' | 'push'
+export const CHANNELS: Channel[] = ['sms', 'whatsapp', 'email', 'push']
+export const CHANNEL_LABEL: Record<Channel, string> = { sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', push: 'Push (FCM)' }
 export type NotifyEvent =
   | 'otp' | 'password_otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
   | 'invoice_created' | 'payment_received' | 'lab_report_ready' | 'feedback_request' | 'staff_invite'
+  | 'account_created' | 'account_updated' | 'account_deleted' | 'password_changed' | 'notice_published'
 
 export interface EventTemplate {
   /** SMS / WhatsApp text (and email body). Tokens like {name} are replaced. */
@@ -20,6 +23,8 @@ export interface EventTemplate {
   waParams: string
   /** DLT template ID (India) — used by MSG91 flows and Fast2SMS DLT route. */
   smsTemplateId: string
+  /** Short push-notification body (title = subject). Empty = `text`. */
+  pushText?: string
 }
 
 export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: Channel[]; tokens: string[] }[] = [
@@ -34,7 +39,15 @@ export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: C
   { id: 'lab_report_ready', label: 'Lab report ready', hint: 'Lab test marked completed', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'test', 'hospital', 'hospital_phone'] },
   { id: 'feedback_request', label: 'Feedback request', hint: 'After a visit is marked completed (needs the website address)', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'link', 'hospital'] },
   { id: 'staff_invite', label: 'Staff invitation', hint: 'Owner invites a team member from Users & Roles', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'role', 'link', 'hospital'] },
+  { id: 'account_created', label: 'Account created', hint: 'Welcome message when an account is created (sign-up, invitation or Settings → Users)', channels: ['sms', 'whatsapp', 'email', 'push'], tokens: ['name', 'role', 'email', 'link', 'hospital'] },
+  { id: 'account_updated', label: 'Account updated', hint: 'Role, e-mail or mobile number changed', channels: ['sms', 'whatsapp', 'email', 'push'], tokens: ['name', 'role', 'changes', 'link', 'hospital'] },
+  { id: 'account_deleted', label: 'Account deleted', hint: 'Sign-in removed by the owner (records are kept)', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'role', 'email', 'hospital', 'hospital_phone'] },
+  { id: 'password_changed', label: 'Password changed', hint: 'Security alert after any password change', channels: ['sms', 'whatsapp', 'email', 'push'], tokens: ['name', 'time', 'link', 'hospital', 'hospital_phone'] },
+  { id: 'notice_published', label: 'New notice', hint: 'A notice is posted on the Notice Board (sent to its audience)', channels: ['sms', 'whatsapp', 'email', 'push'], tokens: ['name', 'title', 'notice', 'priority', 'link', 'hospital'] },
 ]
+
+/** Events that only make sense on some channels (others are greyed out in the matrix). */
+export const eventChannels = (id: NotifyEvent): Channel[] => EVENTS.find((e) => e.id === id)?.channels ?? []
 
 const T = (text: string, subject: string, waTemplate = '', waParams = '', waText = ''): EventTemplate => ({ text, subject, waTemplate, waParams, smsTemplateId: '', waText })
 export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
@@ -55,6 +68,15 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
   lab_report_ready: T('Hi {name}, your {test} report is ready. View it in the patient portal or collect it from the lab. {hospital} {hospital_phone}', 'Your {test} report is ready', '', 'name,test'),
   feedback_request: T('Hi {name}, thank you for visiting {doctor} at {hospital}. How was your experience? Rate us in 10 seconds: {link}', 'How was your visit to {hospital}?', '', 'name,doctor,link'),
   staff_invite: T('Hi {name}, you are invited to join {hospital} as {role}. Create your account here: {link} (valid 14 days)', 'You are invited to join {hospital}', '', 'name,role,link'),
+  account_created: { ...T('Welcome to {hospital}, {name}! Your {role} account is ready. Sign in at {link} with {email}.', 'Welcome to {hospital}', '', 'name,role,link',
+    '👋 *Welcome to {hospital}*\n\nHi {name}, your *{role}* account is ready.\nSign in: {link}\nE-mail: {email}'), pushText: 'Your {role} account is ready. Welcome aboard!' },
+  account_updated: { ...T('Hi {name}, your {hospital} account was updated ({changes}). If this was not you, call {hospital_phone}.', 'Your {hospital} account was updated', '', 'name,changes'),
+    pushText: 'Your account was updated: {changes}' },
+  account_deleted: T('Hi {name}, your {hospital} sign-in ({email}) has been removed. Your medical records are kept safely. Questions? Call {hospital_phone}.', 'Your {hospital} account was removed', '', 'name,email'),
+  password_changed: { ...T('Hi {name}, your {hospital} password was changed on {time}. Not you? Reset it now: {link} or call {hospital_phone}.', 'Your password was changed', '', 'name,time,link'),
+    pushText: 'Your password was changed on {time}. Not you? Reset it right away.' },
+  notice_published: { ...T('{hospital} notice: {title}. {notice} — {link}', '📌 {title}', '', 'title,notice', '📌 *{title}*\n\n{notice}\n\nRead on the notice board: {link}\n— {hospital}'),
+    pushText: '{notice}' },
 }
 
 export type EmailProvider = 'resend' | 'sendgrid' | 'smtp'
@@ -72,6 +94,10 @@ export interface NotificationSettings {
     chatIdFormat: string
     /** answer incoming chats with the booking bot (supabase/functions/whatsapp-bot) */
     botEnabled: boolean }
+  /** Firebase Cloud Messaging: the web-app config (public) — the service-account JSON is a write-only secret */
+  push: { enabled: boolean; apiKey: string; authDomain: string; projectId: string; messagingSenderId: string; appId: string; vapidKey: string }
+  /** ₹ per message, only used to estimate the messaging bill in the usage report */
+  rates: Record<Channel, number>
   events: Record<NotifyEvent, Partial<Record<Channel, boolean>>>
   templates: Record<NotifyEvent, EventTemplate>
 }
@@ -92,14 +118,16 @@ export const SECRET_FIELDS: Record<string, { label: string; placeholder: string 
   meta_app_secret: { label: 'Meta app secret (signs incoming webhooks)', placeholder: 'App settings → Basic → App secret' },
   openwa_api_key: { label: 'WA CRM / OpenWA API key', placeholder: 'owa_k1_…  (operator role is enough)' },
   openwa_webhook_secret: { label: 'OpenWA webhook secret (signs incoming messages)', placeholder: 'Same secret you set on the OpenWA webhook' },
+  fcm_service_account: { label: 'Firebase service-account JSON', placeholder: 'Paste the whole JSON (Project settings → Service accounts → Generate new private key)' },
+  service_role_key: { label: 'Supabase service-role key (for the scheduler)', placeholder: 'eyJhbGci…  (Project settings → API → service_role)' },
 }
 
 // ------------------------------------------------------------------ dashboard
 export const DASHBOARD_WIDGETS: Partial<Record<Role, string[]>> = {
-  owner: ['Revenue (this month)', 'Total patients', "Today's appointments", 'Bed occupancy', 'Revenue vs expenses', 'Appointments by department', "Today's appointments list", 'Patient flow', 'Low stock alerts', 'Current admissions', 'Outstanding invoices'],
+  owner: ['Revenue (this month)', 'Total patients', "Today's appointments", 'Bed occupancy', 'Revenue vs expenses', 'Appointments by department', "Today's appointments list", 'Patient flow', 'Low stock alerts', 'Current admissions', 'Outstanding invoices', 'Messaging usage'],
   doctor: ["Today's patients", 'In waiting room', 'Completed (7 days)', 'Pending lab results', "Today's queue", 'My in-patients', 'Upcoming appointments', 'Pending lab results list', 'Follow-ups due'],
   receptionist: ["Today's appointments", 'Checked in', 'New patients (7d)', 'Available beds', "Today's schedule", 'Bed availability'],
-  accountant: ['Collected (month)', 'Outstanding', 'Expenses (month)', 'Net (month)', 'Cash flow', 'Collections by method', 'Overdue invoices', 'Recent payments'],
+  accountant: ['Collected (month)', 'Outstanding', 'Expenses (month)', 'Net (month)', 'Cash flow', 'Collections by method', 'Overdue invoices', 'Recent payments', 'Messaging usage'],
   staff: ['Admitted patients', 'Pending lab tests', 'Low stock items', 'Beds available', 'Lab work queue', 'Low stock', 'Ward patients'],
   patient: ['Upcoming visits', 'Prescriptions', 'Lab reports', 'Amount due', 'Recent prescriptions', 'Lab reports list', 'Hospital notices'],
 }
@@ -137,6 +165,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     email: { enabled: false, provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
     sms: { enabled: false, provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
     whatsapp: { enabled: false, provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', botEnabled: false },
+    push: { enabled: false, apiKey: '', authDomain: '', projectId: '', messagingSenderId: '', appId: '', vapidKey: '' },
+    rates: { sms: 0.25, whatsapp: 0.8, email: 0.05, push: 0 },
     events: {
       otp: { sms: true, whatsapp: true },
       password_otp: { sms: true, whatsapp: true },
@@ -149,6 +179,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
       lab_report_ready: { sms: true, whatsapp: true, email: false },
       feedback_request: { sms: true, whatsapp: true, email: true },
       staff_invite: { sms: false, whatsapp: true, email: true },
+      account_created: { sms: false, whatsapp: true, email: true, push: false },
+      account_updated: { sms: false, whatsapp: false, email: true, push: true },
+      account_deleted: { sms: false, whatsapp: false, email: true },
+      password_changed: { sms: true, whatsapp: false, email: true, push: true },
+      notice_published: { sms: false, whatsapp: false, email: false, push: true },
     },
     templates: DEFAULT_TEMPLATES,
   },

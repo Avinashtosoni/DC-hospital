@@ -13,6 +13,8 @@ import { isSupabaseConfigured } from '../../lib/supabase'
 import { useTable } from '../../hooks/useData'
 import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
+import { isFresh, noticeState, sortNotices, useNoticeReads, visibleTo } from '../../notices/board'
+import { PushForeground, PushToggle } from '../PushToggle'
 
 /** Patients get the portal in their language; staff screens stay English. */
 function usePortalT() {
@@ -45,10 +47,19 @@ export function Logo({ light }: { light?: boolean }) {
   )
 }
 
+/** live, fresh notices this person hasn't opened yet (shared by the sidebar and the bell) */
+function useUnreadNotices() {
+  const { user } = useAuth()
+  const notices = useTable('notices', { enabled: !!user })
+  const reads = useNoticeReads(user?.id)
+  return (notices.data ?? []).filter((n) => visibleTo(n, user?.role) && noticeState(n) === 'live' && isFresh(n) && !reads.isRead(n.id)).length
+}
+
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user } = useAuth()
   const { settings } = useAppSettings()
   const tr = usePortalT()
+  const unread = useUnreadNotices()
   if (!user) return null
   const style = settings.appearance.sidebar
   const light = style === 'light'
@@ -80,6 +91,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       {isActive && <span aria-hidden="true" className={cn('absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full', light ? 'bg-brand-600' : 'bg-brand-300 shadow-[0_0_12px_rgba(255,255,255,.5)]')} />}
                       <item.icon className={cn('h-[18px] w-[18px] transition', light ? (isActive ? 'text-brand-700' : 'text-slate-400 group-hover:text-brand-700') : (isActive ? 'text-brand-300' : 'text-brand-400 group-hover:text-brand-200'))} />
                       <span className="flex-1 truncate">{tr(navLabel(item, user.role))}</span>
+                      {item.path === '/notices' && unread > 0 && <span className={cn('rounded-full px-1.5 text-[10px] font-bold leading-4', light ? 'bg-rose-500 text-white' : 'bg-rose-500/90 text-white')} aria-label={`${unread} unread notices`}>{unread > 9 ? '9+' : unread}</span>}
                       {hidden.has(item.path) && <EyeOff className="h-3.5 w-3.5" aria-label="Hidden for other users" />}
                     </>}
                   </NavLink>
@@ -143,9 +155,10 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
   const [bell, setBell] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const notices = useTable('notices')
-  const visible = useMemo(() => (notices.data ?? []).filter((n) =>
-    user?.role === 'owner' || n.audience === 'all' || (user?.role === 'patient' ? n.audience === 'patients' : n.audience === 'staff' || (user?.role === 'doctor' && n.audience === 'doctors')),
-  ).sort((a, b) => b.published_on.localeCompare(a.published_on)).slice(0, 5), [notices.data, user])
+  const reads = useNoticeReads(user?.id)
+  const live = useMemo(() => (notices.data ?? []).filter((n) => visibleTo(n, user?.role) && noticeState(n) === 'live').sort(sortNotices), [notices.data, user])
+  const unread = live.filter((n) => isFresh(n) && !reads.isRead(n.id))
+  const visible = (unread.length ? unread : live).slice(0, 5)
   const canSearchPatients = user && user.role !== 'patient'
   const tr = usePortalT()
   // sign out → public website home (the guard also sends any app page there)
@@ -179,23 +192,24 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
         <div className="relative">
           <button onClick={() => setBell((b) => !b)} className="relative grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Notifications">
             <Bell className="h-5 w-5" />
-            {visible.length > 0 && <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white" />}
+            {unread.length > 0 && <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white" aria-label={`${unread.length} unread`}>{unread.length > 9 ? '9+' : unread.length}</span>}
           </button>
           {bell && <>
             <div className="fixed inset-0 z-40" onClick={() => setBell(false)} />
             <div className="absolute right-0 z-50 mt-2 w-80 animate-pop-in rounded-xl border border-slate-200 bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><span className="text-sm font-semibold">{tr('Notices')}</span><Link to="/notices" onClick={() => setBell(false)} className="text-xs font-medium text-brand-700">{tr('View all')}</Link></div>
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><span className="text-sm font-semibold">{tr('Notices')}{unread.length > 0 && <span className="ml-1.5 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-600">{unread.length} new</span>}</span><Link to="/notices" onClick={() => setBell(false)} className="text-xs font-medium text-brand-700">{tr('View all')}</Link></div>
               <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
                 {visible.length === 0 && <p className="px-4 py-8 text-center text-sm text-slate-400">{tr("You're all caught up")}</p>}
                 {visible.map((n) => (
-                  <div key={n.id} className="px-4 py-3">
+                  <button type="button" key={n.id} onClick={() => { setBell(false); navigate(`/notices?open=${n.id}`) }} className="block w-full px-4 py-3 text-left hover:bg-brand-50/50">
                     <div className="flex items-center gap-2">
+                      {!reads.isRead(n.id) && isFresh(n) && <span className="h-2 w-2 shrink-0 rounded-full bg-brand-600" aria-label="unread" />}
                       {n.priority !== 'normal' && <span className={cn('h-1.5 w-1.5 rounded-full', n.priority === 'urgent' ? 'bg-rose-500' : 'bg-amber-500')} />}
                       <span className="text-sm font-medium text-slate-800">{n.title}</span>
                     </div>
                     <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{n.body}</p>
                     <p className="mt-1 text-[11px] text-slate-400">{ago(n.published_on)}</p>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -216,6 +230,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
               <div className="border-b border-slate-100 px-3 py-2.5"><div className="truncate text-sm font-medium">{user?.full_name}</div><div className="truncate text-xs text-slate-500">{user?.email}</div></div>
               <button onClick={() => { setMenu(false); navigate('/profile') }} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><CircleUserRound className="h-4 w-4" />{tr('My profile')}</button>
               <button onClick={() => { setMenu(false); navigate('/settings') }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><Settings className="h-4 w-4" />{tr('Settings')}</button>
+              <PushToggle onDone={() => setMenu(false)} />
               <button onClick={doSignOut} disabled={leaving} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50"><LogOut className="h-4 w-4" />{tr('Sign out')}</button>
             </div>
           </>}
@@ -241,6 +256,7 @@ export function AppLayout() {
   useEffect(() => { setMobileOpen(false); window.scrollTo({ top: 0 }) }, [loc.pathname])
   return (
     <div className="app-canvas min-h-screen">
+      <PushForeground />
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 lg:block"><Sidebar /></aside>
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">

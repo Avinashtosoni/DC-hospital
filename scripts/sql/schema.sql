@@ -9,7 +9,7 @@ drop trigger if exists on_auth_user_created on auth.users;
 drop table if exists
   public.visit_feedback, public.staff_invites, public.wa_sessions,
   public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
-  public.site_enquiries, public.site_forms, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
+  public.site_enquiries, public.site_forms, public.notification_templates, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
   public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
   public.staff, public.doctors, public.departments, public.profiles
 cascade;
@@ -260,8 +260,40 @@ create table public.notices (
   audience      text not null default 'all' check (audience in ('all', 'staff', 'doctors', 'patients')),
   priority      text not null default 'normal' check (priority in ('normal', 'important', 'urgent')),
   published_on  date not null default public.today_ist(),
+  pinned        boolean not null default false,          -- stays at the top of the board
+  expires_on    date,                                    -- hidden after this day (null = never)
+  author_name   text,                                    -- stamped from the signed-in user
   created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
+  updated_at    timestamptz not null default now(),
+  check (expires_on is null or expires_on >= published_on)
+);
+
+-- Custom / scheduled messages written in Settings → Notifications (sent by Supabase cron — scripts/sql/messaging.sql)
+create table public.notification_templates (
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null check (char_length(name) between 2 and 80),
+  description     text,
+  channels        text[] not null default array['sms']::text[] check (channels <@ array['sms', 'whatsapp', 'email', 'push']::text[] and cardinality(channels) > 0),
+  subject         text check (subject is null or char_length(subject) <= 200),
+  text            text not null check (char_length(text) between 1 and 2000),
+  wa_text         text check (wa_text is null or char_length(wa_text) <= 2000),
+  wa_template     text,
+  wa_params       text,
+  sms_template_id text,
+  audience        text not null default 'patients' check (audience in ('patients', 'staff', 'everyone', 'roles')),
+  roles           text[] not null default '{}'::text[],
+  schedule        text not null default 'manual' check (schedule in ('manual', 'once', 'daily', 'weekly', 'monthly', 'birthday')),
+  send_at         timestamptz,
+  time_of_day     text not null default '10:00' check (time_of_day ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  weekday         int check (weekday between 0 and 6),
+  month_day       int check (month_day between 1 and 28),
+  enabled         boolean not null default false,
+  last_run_at     timestamptz,
+  last_run_count  int,
+  next_run_at     timestamptz,
+  created_by_name text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
 );
 
 -- Messages sent from the public website's Contact form (anyone may insert; owner/receptionist manage them)
@@ -468,7 +500,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
-                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries','site_forms',
+                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries','site_forms','notification_templates',
                            'doctor_leaves','holidays','visit_feedback','staff_invites']
   loop
     execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);

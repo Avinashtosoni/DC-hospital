@@ -248,6 +248,44 @@ export interface Notice extends BaseRow {
   audience: 'all' | 'staff' | 'doctors' | 'patients'
   priority: 'normal' | 'important' | 'urgent'
   published_on: string
+  /** stays at the top of the board */
+  pinned?: boolean
+  /** hidden from the board after this day (null = never) */
+  expires_on?: string | null
+  /** who posted it (stamped by the database) */
+  author_name?: string | null
+}
+
+export type MessageChannel = 'sms' | 'whatsapp' | 'email' | 'push'
+export type TemplateAudience = 'patients' | 'staff' | 'everyone' | 'roles'
+export type TemplateSchedule = 'manual' | 'once' | 'daily' | 'weekly' | 'monthly' | 'birthday'
+/** A message the owner writes in Settings → Notifications → Custom messages; sent now or on a schedule by Supabase cron. */
+export interface NotificationTemplate extends BaseRow {
+  name: string
+  description?: string | null
+  channels: MessageChannel[]
+  subject?: string | null
+  text: string
+  wa_text?: string | null
+  wa_template?: string | null
+  wa_params?: string | null
+  sms_template_id?: string | null
+  audience: TemplateAudience
+  roles: Role[]
+  schedule: TemplateSchedule
+  /** 'once': when to send */
+  send_at?: string | null
+  /** daily / weekly / monthly / birthday: HH:MM (India time) */
+  time_of_day: string
+  /** weekly: 0 = Sunday … 6 = Saturday */
+  weekday?: number | null
+  /** monthly: 1–28 */
+  month_day?: number | null
+  enabled: boolean
+  last_run_at?: string | null
+  last_run_count?: number | null
+  next_run_at?: string | null
+  created_by_name?: string | null
 }
 
 export type EnquiryStatus = 'new' | 'in_progress' | 'resolved' | 'spam'
@@ -333,6 +371,7 @@ export interface DB {
   notices: Notice
   site_enquiries: SiteEnquiry
   site_forms: SiteForm
+  notification_templates: NotificationTemplate
   doctor_leaves: DoctorLeave
   holidays: Holiday
   audit_log: AuditEntry
@@ -343,6 +382,6 @@ export interface DB {
 export type TableName = keyof DB
 export const TABLES: TableName[] = [
   'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions',
-  'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries', 'site_forms',
+  'lab_tests', 'wards', 'beds', 'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'site_enquiries', 'site_forms', 'notification_templates',
   'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites',
 ]

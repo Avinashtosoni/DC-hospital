@@ -1,4 +1,4 @@
-// Supabase Edge Function: delivers SMS / WhatsApp / email for DC Hospital.
+// Supabase Edge Function: delivers SMS / WhatsApp / email / push (Firebase Cloud Messaging) for DC Hospital.
 //
 //   supabase functions deploy notify
 //
@@ -6,7 +6,9 @@
 //   { "flush": true }                              deliver the queue — service-role key (pg_cron) or a signed-in staff member
 //   { "flush": true, "ids": ["…"] }                deliver just these fresh messages (by outbox id or related record id);
 //                                                  allowed for anyone, e.g. the OTP a website visitor just requested
-//   { "test": { "channel": "sms", "to": "98…" } }  send a test message (hospital owner only)
+//   { "test": { "channel": "sms", "to": "98…" } }  send a test message (hospital owner only; push → the owner's own devices)
+//   Custom messages (Settings → Notifications → Custom messages) arrive as event "tpl:<id>"; their WhatsApp template /
+//   DLT ID are read from public.notification_templates.
 //   { "ping": true }                               health check
 //
 // Settings come from public.app_settings (Settings → Notifications) and credentials from public.app_secrets,
@@ -25,29 +27,46 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const admin = createClient(Deno.env.get('SUPABASE_URL')!, SERVICE_KEY, { auth: { persistSession: false } })
 
-async function loadCtx(): Promise<Ctx> {
-  const [{ data: s }, { data: sec }, { data: site }] = await Promise.all([
+async function loadCtx(events: string[] = []): Promise<Ctx> {
+  const tplIds = [...new Set(events.filter((e) => e.startsWith('tpl:')).map((e) => e.slice(4)))]
+  const [{ data: s }, { data: sec }, { data: site }, { data: tpls }] = await Promise.all([
     admin.from('app_settings').select('data').eq('key', 'app').maybeSingle(),
     admin.from('app_secrets').select('key, value'),
     admin.from('site_content').select('data').eq('key', 'settings').maybeSingle(),
+    tplIds.length ? admin.from('notification_templates').select('id, wa_template, wa_params, sms_template_id').in('id', tplIds) : Promise.resolve({ data: [] as any[] }),
   ])
+  const n = (s?.data as any)?.notifications ?? {}
+  // custom messages look like built-in events to the providers (approved WhatsApp template, DLT ID)
+  n.templates = { ...(n.templates ?? {}) }
+  for (const t of (tpls ?? []) as any[]) n.templates[`tpl:${t.id}`] = { waTemplate: t.wa_template ?? '', waParams: t.wa_params ?? '', smsTemplateId: t.sms_template_id ?? '' }
+  const siteUrl = String((site?.data as any)?.siteUrl ?? '')
   return {
-    n: (s?.data as any)?.notifications ?? {},
+    n,
     secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])),
     hospital: (site?.data as any)?.name || 'DC Hospital',
+    devices: {
+      siteUrl: /^https:\/\//.test(siteUrl) ? siteUrl : undefined,
+      icon: /^https:\/\//.test(siteUrl) ? `${siteUrl.replace(/\/$/, '')}/favicon.svg` : undefined,
+      tokens: async (profileId) => {
+        const { data } = await admin.from('push_tokens').select('token').eq('profile_id', profileId).order('last_seen_at', { ascending: false }).limit(10)
+        return (data ?? []).map((r: any) => r.token)
+      },
+      forget: async (tokens) => { await admin.from('push_tokens').delete().in('token', tokens) },
+    },
   }
 }
 
 /** 'service' for the service-role key, otherwise the caller's role (or null for anonymous / invalid). */
-async function callerRole(req: Request): Promise<string | null> {
+async function caller(req: Request): Promise<{ role: string | null; id?: string }> {
   const jwt = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
-  if (!jwt) return null
-  if (jwt === SERVICE_KEY) return 'service'
+  if (!jwt) return { role: null }
+  if (jwt === SERVICE_KEY) return { role: 'service' }
   const { data: { user } } = await admin.auth.getUser(jwt)
-  if (!user) return null
+  if (!user) return { role: null }
   const { data: prof } = await admin.from('profiles').select('role').eq('id', user.id).maybeSingle()
-  return prof?.role ?? null
+  return { role: prof?.role ?? null, id: user.id }
 }
+const callerRole = async (req: Request) => (await caller(req)).role
 
 // ------------------------------------------------------------------ handler
 Deno.serve(async (req) => {
@@ -59,12 +78,14 @@ Deno.serve(async (req) => {
 
   if (body.test) {
     // owner only
-    if (await callerRole(req) !== 'owner') return json({ ok: false, message: 'Only the hospital owner can send test messages' }, 403)
+    const who = await caller(req)
+    if (who.role !== 'owner') return json({ ok: false, message: 'Only the hospital owner can send test messages' }, 403)
     const channel = body.test.channel as Channel
-    const to = String(body.test.to ?? '').trim()
-    if (!['sms', 'whatsapp', 'email'].includes(channel) || !to) return json({ ok: false, message: 'channel and to are required' }, 400)
+    const to = channel === 'push' ? who.id! : String(body.test.to ?? '').trim()
+    if (!['sms', 'whatsapp', 'email', 'push'].includes(channel) || !to) return json({ ok: false, message: 'channel and to are required' }, 400)
     const c = await loadCtx()
-    const m: Msg = { event: 'test', channel, recipient: channel === 'email' ? to : to.replace(/\D/g, '').slice(-10), subject: `Test email from ${c.hospital}`,
+    const m: Msg = { event: 'test', channel, recipient: channel === 'email' || channel === 'push' ? to : to.replace(/\D/g, '').slice(-10),
+      subject: channel === 'push' ? `Test notification from ${c.hospital}` : `Test email from ${c.hospital}`,
       body: `This is a test message from ${c.hospital}. If you received it, ${channel.toUpperCase()} notifications are working.`, vars: { hospital: c.hospital } }
     // OpenWA: check the WhatsApp session first so a disconnected phone gives a clear answer
     let st: Awaited<ReturnType<typeof openwaStatus>> | null = null
@@ -75,7 +96,7 @@ Deno.serve(async (req) => {
     const r = await deliver(m, c)
     if (r.ok && st?.phone) r.ref = `${r.ref} · from ${st.phone}`
     await admin.from('notification_outbox').insert({ event: 'test', channel, recipient: m.recipient, subject: m.subject, body: m.body, status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null })
-    return json({ ok: r.ok, message: r.ok ? `Sent via ${c.n[channel]?.provider}${r.ref ? ` · ${r.ref}` : ''}` : r.error, provider_ref: r.ref ?? null })
+    return json({ ok: r.ok, message: r.ok ? `Sent via ${c.n[channel]?.provider ?? 'Firebase'}${r.ref ? ` · ${r.ref}` : ''}` : r.error, provider_ref: r.ref ?? null })
   }
 
   if (body.flush) {
@@ -91,7 +112,7 @@ Deno.serve(async (req) => {
     const { data: rows, error } = claim
     if (error) return json({ error: error.message }, 500)
     if (!rows?.length) return json({ processed: 0, sent: 0, failed: 0 })
-    const c = await loadCtx()
+    const c = await loadCtx((rows as any[]).map((r) => r.event))
     let sent = 0, failed = 0
     for (const row of rows as any[]) {
       const r = await deliver({ id: row.id, event: row.event, channel: row.channel, recipient: row.recipient, subject: row.subject, body: row.body, vars: row.vars ?? {} }, c)

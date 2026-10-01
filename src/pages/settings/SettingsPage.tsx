@@ -2,7 +2,7 @@ import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BellRing, Building2, ClipboardList, CircleUserRound, Database, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2 } from 'lucide-react'
+import { BellRing, Building2, ClipboardList, CircleUserRound, Database, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2, UserCog } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
 import { Button, PageHeader, Skeleton } from '../../components/ui'
@@ -21,14 +21,16 @@ import { FormsTab } from './FormsTab'
 import { GeneralTab } from './GeneralTab'
 import { NotificationsTab } from './NotificationsTab'
 import { SecurityTab } from './SecurityTab'
+import { UsersTab } from './UsersTab'
 import type { TabCtx } from './shared'
 
-type TabId = 'general' | 'appearance' | 'dashboard' | 'notifications' | 'billing' | 'forms' | 'security' | 'data' | 'account'
+type TabId = 'general' | 'appearance' | 'dashboard' | 'users' | 'notifications' | 'billing' | 'forms' | 'security' | 'data' | 'account'
 const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ className?: string }>; ownerOnly: boolean }[] = [
   { id: 'general', label: 'General & brand', hint: 'Logo, name, contacts, formats', icon: Building2, ownerOnly: true },
   { id: 'appearance', label: 'Appearance', hint: 'Theme, layout, modules, banner', icon: Palette, ownerOnly: true },
   { id: 'dashboard', label: 'Dashboard', hint: 'Widgets for each role', icon: LayoutDashboard, ownerOnly: true },
-  { id: 'notifications', label: 'Notifications & APIs', hint: 'SMS, WhatsApp, email', icon: BellRing, ownerOnly: true },
+  { id: 'users', label: 'Users & accounts', hint: 'Create, edit, disable sign-ins', icon: UserCog, ownerOnly: true },
+  { id: 'notifications', label: 'Notifications & APIs', hint: 'SMS, WhatsApp, email, push, cron', icon: BellRing, ownerOnly: true },
   { id: 'billing', label: 'Billing & booking', hint: 'GST letterhead, online booking', icon: Receipt, ownerOnly: true },
   { id: 'forms', label: 'Website forms', hint: 'Contact, reviews, custom forms', icon: ClipboardList, ownerOnly: true },
   { id: 'security', label: 'Security & access', hint: 'Timeout, sign-in, roles', icon: ShieldCheck, ownerOnly: true },
@@ -157,7 +159,7 @@ export default function SettingsPage() {
 
         <div className="min-w-0 pb-24">
           <h2 className="sr-only">{current.label}</h2>
-          {tab === 'forms' ? <FormsTab onDirty={setFormsDirty} /> : !ctx && tab !== 'account' ? (
+          {tab === 'forms' ? <FormsTab onDirty={setFormsDirty} /> : tab === 'users' ? <UsersTab /> : !ctx && tab !== 'account' ? (
             <div className="space-y-4" aria-busy="true"><Skeleton className="h-56 rounded-2xl" /><Skeleton className="h-40 rounded-2xl" /></div>
           ) : (
             <>

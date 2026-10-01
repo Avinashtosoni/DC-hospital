@@ -2,14 +2,19 @@
 // and unit-tested with a mocked fetch in tests/notify/providers.test.ts (request shapes follow each
 // provider's public API docs), so a typo in a URL or payload is caught before it reaches production.
 // deno-lint-ignore-file no-explicit-any
+import { parseServiceAccount, sendPush } from './fcm.ts'
 
-export type Channel = 'sms' | 'whatsapp' | 'email'
+export type Channel = 'sms' | 'whatsapp' | 'email' | 'push'
 export interface Msg { id?: string; event: string; channel: Channel; recipient: string; subject?: string | null; body: string; vars: Record<string, string> }
-export interface Ctx { n: any; secrets: Record<string, string>; hospital: string }
+export interface Ctx {
+  n: any; secrets: Record<string, string>; hospital: string
+  /** push: the person's registered devices, and a way to forget the ones Firebase says are gone */
+  devices?: { tokens(profileId: string): Promise<string[]>; forget(tokens: string[]): Promise<void>; siteUrl?: string; icon?: string }
+}
 export interface Result { ok: boolean; ref?: string; error?: string }
 
 /** Errors that will not fix themselves on retry (bad config) → mark failed immediately. */
-export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the API key|session was not found|Chat ID format/i.test(error)
+export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the API key|session was not found|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
 /** Wait before retry n (1-based): 2, 4, 8 … minutes. */
 export const retryDelayMs = (attempts: number) => 2 ** Math.max(1, attempts) * 60_000
 
@@ -243,10 +248,22 @@ async function webhook(url: string, secret: string | undefined, m: Msg): Promise
   return { ok: true, ref: r.headers.get('x-request-id') ?? `HTTP ${r.status}` }
 }
 
+// ------------------------------------------------------------------ push (FCM HTTP v1). recipient = profile id
+async function push(m: Msg, c: Ctx): Promise<Result> {
+  const sa = parseServiceAccount(c.secrets.fcm_service_account)
+  if (!c.devices) throw new Error('Push devices are not configured')
+  const tokens = await c.devices.tokens(m.recipient)
+  const link = m.vars?.link?.startsWith('https://') ? m.vars.link : c.devices.siteUrl ? `${c.devices.siteUrl.replace(/\/$/, '')}/` : undefined
+  const r = await sendPush(sa, tokens, { title: m.subject || c.hospital, body: m.body, link, icon: c.devices.icon, tag: m.event,
+    data: { event: m.event, ...(m.id ? { id: m.id } : {}) } })
+  if (r.invalid.length) await c.devices.forget(r.invalid).catch(() => { /* best effort */ })
+  return r.ok ? { ok: true, ref: r.ref } : { ok: false, error: r.error }
+}
+
 export async function deliver(m: Msg, c: Ctx): Promise<Result> {
   if (!c.n[m.channel]?.enabled && m.event !== 'test') return { ok: false, error: `${m.channel} channel is switched off` }
   try {
-    return await (m.channel === 'sms' ? sms(m, c) : m.channel === 'whatsapp' ? whatsapp(m, c) : email(m, c))
+    return await (m.channel === 'sms' ? sms(m, c) : m.channel === 'whatsapp' ? whatsapp(m, c) : m.channel === 'push' ? push(m, c) : email(m, c))
   } catch (e) {
     return { ok: false, error: (e as Error).message?.slice(0, 500) || 'Unknown error' }
   }

@@ -47,6 +47,7 @@ const AuditPage = lazy(() => import('./pages/AuditPage'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const RatingsPage = lazy(() => import('./pages/RatingsPage'))
 const EnquiriesPage = lazy(() => import('./pages/EnquiriesPage'))
+const NoticeBoard = lazy(() => import('./pages/NoticeBoard'))
 
 const RESOURCES = [
   R.patientsRes, R.appointmentsRes, R.prescriptionsRes, R.labTestsRes, R.admissionsRes, R.doctorsRes, R.staffRes,
@@ -80,9 +81,10 @@ export default function App() {
         }>
           <Route index element={<Suspense fallback={<PageLoader />}><Dashboard /></Suspense>} />
           <Route path="/appointments" element={<RequireNav path="/appointments"><Suspense fallback={<PageLoader />}><AppointmentsPage /></Suspense></RequireNav>} />
-          {RESOURCES.filter((def) => def !== R.appointmentsRes).map((def) => (
+          {RESOURCES.filter((def) => def !== R.appointmentsRes && def !== R.noticesRes).map((def) => (
             <Route key={def.path} path={def.path} element={<RequireNav path={def.path}><ResourcePage key={def.path} def={def} headerExtra={def === R.usersRes ? <InviteStaff /> : undefined} /></RequireNav>} />
           ))}
+          <Route path="/notices" element={<RequireNav path="/notices"><Suspense fallback={<PageLoader />}><NoticeBoard /></Suspense></RequireNav>} />
           <Route path="/me" element={<RequireNav path="/me"><Suspense fallback={<PageLoader />}><MyRecord /></Suspense></RequireNav>} />
           <Route path="/patients/:id" element={<Suspense fallback={<PageLoader />}><PatientDetail /></Suspense>} />
           <Route path="/invoices/:id" element={<Suspense fallback={<PageLoader />}><InvoiceDetail /></Suspense>} />

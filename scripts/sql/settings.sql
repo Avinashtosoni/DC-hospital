@@ -156,6 +156,7 @@ create policy notification_outbox_owner_read on public.notification_outbox for s
 -- roll back the booking / invoice that triggered it).
 drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid) cascade;
 drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid, text[]) cascade;
+drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid, text[], uuid) cascade;  -- section 18 version (re-run safety)
 -- p_only: restrict to these channels (e.g. the booking OTP channel the visitor picked); null = every enabled channel
 create function public.notify_enqueue(p_event text, p_phone text, p_email text, p_vars jsonb, p_related_table text default null, p_related_id uuid default null, p_only text[] default null)
 returns int language plpgsql volatile security definer set search_path = public as $$

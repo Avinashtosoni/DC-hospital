@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlarmClock, BellRing, CheckCircle2, CircleAlert, ExternalLink, FileText, History, Mail, MessageCircle, MessageSquareText,
-  PlugZap, RefreshCw, RotateCcw, Send, ServerCog, Smartphone, Bot, Copy,
+  AlarmClock, BellRing, CheckCircle2, CircleAlert, ExternalLink, FileText, History, MessageCircle, MessageSquareText,
+  PlugZap, RefreshCw, RotateCcw, Send, ServerCog, Bot, Copy,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
@@ -13,14 +13,15 @@ import { DEFAULT_TEMPLATES, EVENTS, type AppSettings, type Channel, type NotifyE
 import { useAuth } from '../../auth/AuthProvider'
 import { Issues, SECRETS_QK, SecretInput, Section, Segmented, type TabCtx } from './shared'
 import { BotSimulator } from './BotSimulator'
+import { PushForm } from './messaging/PushForm'
+import { CHANNEL_META } from './messaging/channelMeta'
+import { CustomMessages } from './messaging/CustomMessages'
+import { CronCard } from './messaging/CronCard'
+import { UsageCard } from './messaging/UsageCard'
 import { supabaseUrl } from '../../lib/supabase'
 
 const LOG_QK = ['notify-log'] as const
-const CH: Record<Channel, { label: string; icon: ReactNode; to: string; toLabel: string }> = {
-  sms: { label: 'SMS', icon: <Smartphone className="h-4 w-4" />, to: 'phone', toLabel: 'Mobile number' },
-  whatsapp: { label: 'WhatsApp', icon: <MessageCircle className="h-4 w-4" />, to: 'phone', toLabel: 'WhatsApp number' },
-  email: { label: 'Email', icon: <Mail className="h-4 w-4" />, to: 'email', toLabel: 'Email address' },
-}
+const CH = CHANNEL_META
 const STATUS_TONE: Record<OutboxRow['status'], Tone> = { pending: 'amber', sending: 'blue', sent: 'green', simulated: 'violet', failed: 'red', skipped: 'slate' }
 
 // sample values used by template previews
@@ -192,7 +193,7 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
   const blockTest = ctx.dirty && settingsStore.mode === 'supabase'
   return (
     <Section title={<span className="flex items-center gap-2">{meta.label}<Badge tone={status.tone} dot>{status.label}</Badge></span>} icon={meta.icon}
-      description={channel === 'sms' ? 'OTP, confirmations and reminders by text message.' : channel === 'whatsapp' ? 'Rich confirmations and reminders on WhatsApp.' : 'Confirmations, invoices and receipts by email.'}
+      description={channel === 'sms' ? 'OTP, confirmations and reminders by text message.' : channel === 'whatsapp' ? 'Rich confirmations and reminders on WhatsApp.' : channel === 'push' ? 'Free pop-up notifications in the browser / installed app through Firebase Cloud Messaging.' : 'Confirmations, invoices and receipts by email.'}
       action={<label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600"><span className="hidden sm:inline">Enabled</span>
         <button type="button" role="switch" aria-checked={cfg.enabled} aria-label={`Enable ${meta.label}`} onClick={() => edit(ctx, (n) => { n[channel].enabled = !cfg.enabled })}
           className={cn('relative h-6 w-11 rounded-full transition', cfg.enabled ? 'bg-brand-600' : 'bg-slate-300')}>
@@ -203,23 +204,30 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
           {channel === 'sms' && <SmsForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.sms} />}
           {channel === 'whatsapp' && <WhatsappForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.whatsapp} />}
           {channel === 'email' && <EmailForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.email} />}
+          {channel === 'push' && <PushForm ctx={ctx} secrets={secrets} />}
         </div>
         <div className="space-y-3 rounded-xl bg-slate-50 p-4">
           <p className="flex items-center gap-2 text-sm font-semibold text-slate-700"><Send className="h-4 w-4 text-brand-600" />Send a test</p>
           <Issues items={issues} />
-          <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); if (!toProblem && to.trim()) test.mutate() }}>
+          {channel === 'push' ? (
+            <div className="space-y-2">
+              <p className="text-xs text-slate-500">Sends a test notification to every device where <b>you</b> turned on “Notifications here” (profile menu, top right).</p>
+              <Button size="sm" className="w-full" loading={test.isPending} disabled={blockTest} icon={<Send className="h-3.5 w-3.5" />} onClick={() => test.mutate()}>Send test to my devices</Button>
+              {blockTest && <p className="text-[11px] text-amber-700">Save your changes first — the test uses the saved settings.</p>}
+            </div>
+          ) : <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); if (!toProblem && to.trim()) test.mutate() }}>
             <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder={channel === 'email' ? 'you@example.com' : '98765 43210'} type={channel === 'email' ? 'email' : 'tel'} aria-label={meta.toLabel} />
             {toProblem && <p className="text-xs text-rose-600">{toProblem}</p>}
             <Button type="submit" size="sm" className="w-full" loading={test.isPending} disabled={!to.trim() || !!toProblem || blockTest} icon={<Send className="h-3.5 w-3.5" />}>Send test {meta.label}</Button>
             {blockTest && <p className="text-[11px] text-amber-700">Save your changes first — the test uses the saved settings.</p>}
-          </form>
+          </form>}
           {result && (
             <div role="status" className={cn('flex gap-2 rounded-lg border px-3 py-2 text-xs', result.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-700')}>
               {result.ok ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <CircleAlert className="h-4 w-4 shrink-0" />}
               <span className="min-w-0 break-words">{result.message}{result.provider_ref && <span className="mt-0.5 block font-mono text-[10px] opacity-70">ref {result.provider_ref}</span>}</span>
             </div>
           )}
-          <p className="text-[11px] text-slate-400">{channel === 'whatsapp' && cfg.provider === 'meta' ? 'Meta sends its approved “hello_world” template for tests.' : channel === 'whatsapp' && cfg.provider === 'openwa' ? 'Checks that the WhatsApp session is connected, then sends a test chat.' : 'Credentials are stored server-side and are never shown again after saving.'}</p>
+          <p className="text-[11px] text-slate-400">{channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'meta' ? 'Meta sends its approved “hello_world” template for tests.' : channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'openwa' ? 'Checks that the WhatsApp session is connected, then sends a test chat.' : 'Credentials are stored server-side and are never shown again after saving.'}</p>
         </div>
       </div>
     </Section>
@@ -266,7 +274,12 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
             <p className="mt-1 text-xs text-slate-400">WhatsApp formatting works: <code>*bold*</code>, <code>_italic_</code>, emoji and line breaks. Sent as-is by WA CRM / OpenWA, Twilio and webhook; Meta / Interakt use it only when no approved template name is set.</p>
           </div>
         )}
-        {def.channels.includes('email') && <Field label="Email subject"><Input value={t.subject} onChange={(e) => set((x) => { x.subject = e.target.value })} /></Field>}
+        {(def.channels.includes('email') || def.channels.includes('push')) && <Field label={def.channels.includes('push') ? (def.channels.includes('email') ? 'Email subject / push title' : 'Push title') : 'Email subject'}><Input value={t.subject} onChange={(e) => set((x) => { x.subject = e.target.value })} /></Field>}
+        {def.channels.includes('push') && (
+          <Field label="Push notification text (optional)" hint="Short line shown in the pop-up. Empty = the message text above.">
+            <Textarea rows={2} value={t.pushText ?? ''} onChange={(e) => set((x) => { x.pushText = e.target.value })} placeholder={t.text} maxLength={400} />
+          </Field>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="DLT / MSG91 template ID" hint="Required for MSG91; Fast2SMS DLT message ID"><Input value={t.smsTemplateId} onChange={(e) => set((x) => { x.smsTemplateId = e.target.value.trim() })} className="font-mono text-xs" placeholder="e.g. 65f1c2…" /></Field>
           <Field label="WhatsApp template name" hint="Approved template (Meta / Interakt). Empty = free text"><Input value={t.waTemplate} onChange={(e) => set((x) => { x.waTemplate = e.target.value.trim() })} className="font-mono text-xs" placeholder="appointment_confirmed" /></Field>
@@ -280,6 +293,10 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
             <div className="max-w-sm rounded-2xl rounded-tl-sm bg-white px-3.5 py-2.5 text-sm text-slate-700 shadow-sm ring-1 ring-slate-100"><span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">SMS / email</span>{fill(t.text, vars)}</div>
             {def.channels.includes('whatsapp') && (
               <div className="max-w-sm rounded-2xl rounded-tl-sm bg-[#dcf8c6] px-3.5 py-2.5 text-sm text-slate-800 shadow-sm"><span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">WhatsApp</span><WaText text={fill(t.waText || t.text, vars)} /></div>
+            )}
+            {def.channels.includes('push') && (
+              <div className="flex max-w-sm gap-3 rounded-2xl bg-white/90 p-3 shadow-sm ring-1 ring-slate-200"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-900 text-white"><BellRing className="h-4 w-4" /></span>
+                <span className="min-w-0 text-sm"><span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Push</span><b className="block truncate text-slate-900">{fill(t.subject || '{hospital}', vars)}</b><span className="line-clamp-2 text-slate-600">{fill(t.pushText || t.text, vars)}</span></span></div>
             )}
             {def.channels.includes('email') && <p className="text-xs text-slate-500"><b>Subject:</b> {fill(t.subject, vars)}</p>}
             {t.waParams && <p className="text-xs text-slate-500"><b>Variables:</b> {t.waParams.split(',').filter(Boolean).map((k, i) => <span key={i} className="mr-2 font-mono">{`{{${i + 1}}}`}={vars[k] ?? k}</span>)}</p>}
@@ -300,7 +317,7 @@ function WaText({ text }: { text: string }) {
 function EventsMatrix({ ctx }: { ctx: TabCtx }) {
   const [open, setOpen] = useState<NotifyEvent | null>(null)
   const n = ctx.app.notifications
-  const channels: Channel[] = ['sms', 'whatsapp', 'email']
+  const channels: Channel[] = ['sms', 'whatsapp', 'email', 'push']
   return (
     <Section title="Messages & templates" description="Choose which events send a message on which channel, and edit the wording." icon={<MessageSquareText className="h-4 w-4" />}>
       <div className="-mx-5 overflow-x-auto">
@@ -382,9 +399,9 @@ function DeliveryLog() {
                     {rows.map((r) => (
                       <tr key={r.id} className="border-b border-slate-50 align-top last:border-0">
                         <td className="whitespace-nowrap px-5 py-2.5 text-xs text-slate-500">{fmtDate(r.created_at)}<br />{fmtTime(format(new Date(r.created_at), 'HH:mm'))}</td>
-                        <td className="px-3 py-2.5 text-slate-700">{r.event === 'test' ? 'Test message' : EVENTS.find((e) => e.id === r.event)?.label ?? r.event}</td>
+                        <td className="px-3 py-2.5 text-slate-700">{r.event === 'test' ? 'Test message' : r.event.startsWith('tpl:') ? <span className="inline-flex items-center gap-1">Custom message<Badge tone="violet">custom</Badge></span> : EVENTS.find((e) => e.id === r.event)?.label ?? r.event}</td>
                         <td className="px-3 py-2.5"><span className="inline-flex items-center gap-1.5 text-slate-600">{CH[r.channel]?.icon}{CH[r.channel]?.label ?? r.channel}</span></td>
-                        <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{r.recipient}</td>
+                        <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{r.channel === 'push' ? <span className="font-sans">a person’s devices</span> : r.recipient}</td>
                         <td className="px-5 py-2.5"><Badge tone={STATUS_TONE[r.status] ?? 'slate'}>{r.status}</Badge>{r.attempts > 1 && <span className="ml-1 text-[11px] text-slate-400">×{r.attempts}</span>}
                           {r.error && <p className="mt-1 max-w-xs break-words text-xs text-rose-600">{r.error}</p>}</td>
                       </tr>
@@ -414,9 +431,12 @@ export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
         {ping.data && <span className={cn('basis-full text-xs', ping.data.ok ? 'text-emerald-700' : 'text-rose-700')}>{ping.data.ok ? '✓ ' : '✕ '}{ping.data.message}</span>}
       </div>
       {secrets.isError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">Could not load saved credentials: {(secrets.error as Error).message}</p>}
-      {(['sms', 'whatsapp', 'email'] as Channel[]).map((c) => <ChannelCard key={c} channel={c} ctx={ctx} secrets={secrets.data} />)}
+      <UsageCard ctx={ctx} />
+      {(['sms', 'whatsapp', 'email', 'push'] as Channel[]).map((c) => <ChannelCard key={c} channel={c} ctx={ctx} secrets={secrets.data} />)}
       <ChatbotCard ctx={ctx} secrets={secrets.data} />
       <EventsMatrix ctx={ctx} />
+      <CustomMessages ctx={ctx} />
+      <CronCard ctx={ctx} secrets={secrets.data} />
       <DeliveryLog />
     </div>
   )
