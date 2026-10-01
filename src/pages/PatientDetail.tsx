@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, CalendarPlus, Droplet, FlaskConical, Mail, MapPin, Pencil, Phone, Pill, Receipt, ShieldCheck, UserRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
-import { useLookup, useTable, useUpdate } from '../hooks/useData'
+import { useLookup, useRow, useUpdate, useWindow } from '../hooks/useData'
 import { useMe } from '../hooks/useScope'
 import { RecordHistory } from '../components/RecordHistory'
 import { useResourceCtx } from '../resources/useResourceCtx'
@@ -28,21 +28,23 @@ export default function PatientDetail() {
   const { id } = useParams()
   const { user } = useAuth()
   const nav = useNavigate()
-  const patients = useTable('patients')
-  const appts = useTable('appointments')
-  const rx = useTable('prescriptions')
-  const labs = useTable('lab_tests')
-  const adm = useTable('admissions')
-  const inv = useTable('invoices')
+  // one patient's chart: the record by id and their history by patient_id (indexed) — no whole-table reads
+  const patient = useRow('patients', id)
+  const mine = { where: [['patient_id', 'eq', id ?? '']] as const }
+  const appts = useWindow('appointments', mine, { enabled: !!id })
+  const rx = useWindow('prescriptions', mine, { enabled: !!id })
+  const labs = useWindow('lab_tests', mine, { enabled: !!id })
+  const adm = useWindow('admissions', mine, { enabled: !!id })
+  const inv = useWindow('invoices', mine, { enabled: !!id })
   const dLk = useLookup('doctors')
   const bLk = useLookup('beds')
   const wLk = useLookup('wards')
   const upd = useUpdate('patients', { label: 'Patient' })
-  const { ctx } = useResourceCtx(['patients'])
+  const { ctx } = useResourceCtx([])
   const [tab, setTab] = useState<Tab>('overview')
   const [editOpen, setEditOpen] = useState(false)
 
-  const p = patients.data?.find((x) => x.id === id)
+  const p = patient.data ?? undefined
   const role = user!.role
   const data = useMemo(() => ({
     appts: (appts.data ?? []).filter((a) => a.patient_id === id).sort((a, b) => (b.appointment_date + b.appointment_time).localeCompare(a.appointment_date + a.appointment_time)),
@@ -52,7 +54,7 @@ export default function PatientDetail() {
     inv: (inv.data ?? []).filter((i) => i.patient_id === id).sort((a, b) => b.issue_date.localeCompare(a.issue_date)),
   }), [appts.data, rx.data, labs.data, adm.data, inv.data, id])
 
-  if (patients.isLoading) return <DetailSkeleton />
+  if (patient.isLoading) return <DetailSkeleton />
   if (!p) return <EmptyState className="py-24" icon={<UserRound className="h-6 w-6" />} title="Patient not found" description="The record may have been removed." action={<Link to="/patients"><Button variant="outline">Back to patients</Button></Link>} />
   if (role === 'patient' && p.profile_id !== user!.id) return <Forbidden />
 
@@ -179,7 +181,7 @@ export default function PatientDetail() {
             ids={[p.id, ...data.appts.map((x) => x.id), ...data.rx.map((x) => x.id), ...data.labs.map((x) => x.id), ...data.adm.map((x) => x.id), ...data.inv.map((x) => x.id)]} /></div>
         )}
       {ctx && (
-        <ResourceFormDrawer def={patientsRes} ctx={ctx} open={editOpen} onClose={() => setEditOpen(false)} initial={p} rows={patients.data ?? []}
+        <ResourceFormDrawer def={patientsRes} ctx={ctx} open={editOpen} onClose={() => setEditOpen(false)} initial={p} rows={[p]}
           onSubmit={(v) => { setEditOpen(false); upd.mutate({ id: p.id, patch: v }) }} />
       )}
     </div>

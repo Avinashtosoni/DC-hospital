@@ -5,7 +5,8 @@ import { downloadInvoice } from '../lib/pdf'
 import { useSiteSettings } from '../site/cms/content'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
-import { useCreate, useLookup, useTable, useUpdate } from '../hooks/useData'
+import { useQueryClient } from '@tanstack/react-query'
+import { qk, useCreate, useLookup, useRow, useRows, useUpdate, useWindow } from '../hooks/useData'
 import { Button, EmptyState, Field, Input, Modal, Select, Skeleton } from '../components/ui'
 import { InvoiceDocument, printInvoice } from '../components/InvoiceDocument'
 import { RecordHistory } from '../components/RecordHistory'
@@ -19,11 +20,11 @@ export default function InvoiceDetail() {
   const { user } = useAuth()
   const nav = useNavigate()
   const [params, setParams] = useSearchParams()
-  const invoices = useTable('invoices')
-  const payments = useTable('payments')
-  const pLk = useLookup('patients')
+  // this invoice, its payments, its patient and (for website bookings) the linked appointment — fetched by key
+  const invoice = useRow('invoices', id)
+  const payments = useWindow('payments', { where: [['invoice_id', 'eq', id ?? '']], order: [{ column: 'paid_on', asc: false }] }, { enabled: !!id })
   const dLk = useLookup('doctors')
-  const appts = useTable('appointments')
+  const qc = useQueryClient()
   const updInv = useUpdate('invoices', { label: 'Invoice', silent: true })
   const createPay = useCreate('payments', { label: 'Payment', silent: true })
   const [payOpen, setPayOpen] = useState(false)
@@ -31,7 +32,10 @@ export default function InvoiceDetail() {
   const [err, setErr] = useState('')
   const site = useSiteSettings()
 
-  const inv = invoices.data?.find((i) => i.id === id)
+  const inv = invoice.data ?? undefined
+  const patientQ = useRow('patients', inv?.patient_id)
+  const bookingRef = /DCB-[A-F0-9]+/i.exec(inv?.notes ?? '')?.[0]
+  const apptQ = useRows('appointments', { where: [['booking_ref', 'eq', bookingRef ?? '']], range: [0, 0] }, { enabled: !!bookingRef })
   const role = user!.role
   const canPay = can(role, 'payments', 'create') && role !== 'patient'
   const balance = inv ? invoiceBalance(inv) : 0
@@ -43,12 +47,12 @@ export default function InvoiceDetail() {
     }
   }, [params, inv, canPay, balance, setParams])
 
-  if (invoices.isLoading) return <div className="mx-auto max-w-4xl space-y-4"><Skeleton className="h-10 w-60" /><Skeleton className="h-[560px]" /></div>
+  if (invoice.isLoading) return <div className="mx-auto max-w-4xl space-y-4"><Skeleton className="h-10 w-60" /><Skeleton className="h-[560px]" /></div>
   if (!inv) return <EmptyState className="py-24" icon={<Receipt className="h-6 w-6" />} title="Invoice not found" action={<Link to="/invoices"><Button variant="outline">Back to invoices</Button></Link>} />
-  const patient = pLk.get(inv.patient_id)
+  const patient = patientQ.data ?? undefined
+  if (role === 'patient' && patientQ.isLoading) return <div className="mx-auto max-w-4xl space-y-4"><Skeleton className="h-10 w-60" /><Skeleton className="h-[560px]" /></div>
   if (role === 'patient' && patient?.profile_id !== user!.id) return <Forbidden />
-  const ref = /DCB-[A-F0-9]+/i.exec(inv.notes ?? '')?.[0]
-  const appt = ref ? appts.data?.find((a) => a.booking_ref === ref) : undefined
+  const appt = bookingRef ? apptQ.data?.rows[0] : undefined
   const history = (payments.data ?? []).filter((p) => p.invoice_id === inv.id).sort((a, b) => b.paid_on.localeCompare(a.paid_on))
 
   const submitPayment = () => {
@@ -57,11 +61,15 @@ export default function InvoiceDetail() {
     if (amount > balance + 0.01) return setErr(`Amount cannot exceed the balance of ${money(balance)}`)
     setErr('')
     setPayOpen(false)
-    const amount_paid = inv.amount_paid + amount
-    // optimistic: both the payment row and the invoice totals update instantly
-    createPay.mutate({ invoice_id: inv.id, patient_id: inv.patient_id, amount, method: form.method, paid_on: form.paid_on, reference: form.reference || null } as never)
-    updInv.mutate({ id: inv.id, patch: { amount_paid, status: deriveInvoiceStatus({ ...inv, amount_paid }) } }, {
+    const amount_paid = Number(inv.amount_paid) + amount
+    // optimistic: the totals update instantly; the database recalculates them from the payments (trg_payments_sync_invoice)
+    const rowKey = [...qk('invoices'), 'row', inv.id]
+    const before = qc.getQueryData(rowKey)
+    qc.setQueryData(rowKey, { ...inv, amount_paid, status: deriveInvoiceStatus({ ...inv, amount_paid }) })
+    createPay.mutate({ invoice_id: inv.id, patient_id: inv.patient_id, amount, method: form.method, paid_on: form.paid_on, reference: form.reference || null } as never, {
       onSuccess: () => import('sonner').then(({ toast }) => toast.success(`Payment of ${money(amount)} recorded`)),
+      onError: () => qc.setQueryData(rowKey, before),
+      onSettled: () => qc.invalidateQueries({ queryKey: qk('invoices') }),
     })
   }
 

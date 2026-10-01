@@ -1,7 +1,7 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Pill, Printer } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
-import { useLookup, useTable } from '../hooks/useData'
+import { useLookup, useRow } from '../hooks/useData'
 import { Button, Card, EmptyState, Skeleton } from '../components/ui'
 import { Forbidden } from '../components/layout/Guards'
 import { Logo } from '../components/layout/AppLayout'
@@ -13,14 +13,14 @@ export default function PrescriptionView() {
   const { user } = useAuth()
   const site = useSiteSettings()
   const nav = useNavigate()
-  const rx = useTable('prescriptions')
-  const pLk = useLookup('patients')
+  const rx = useRow('prescriptions', id)
+  const r = rx.data ?? undefined
+  const patient = useRow('patients', r?.patient_id)
   const dLk = useLookup('doctors')
   const deptLk = useLookup('departments')
-  const r = rx.data?.find((x) => x.id === id)
-  if (rx.isLoading) return <div className="mx-auto max-w-3xl"><Skeleton className="h-[600px]" /></div>
+  if (rx.isLoading || (r && patient.isLoading)) return <div className="mx-auto max-w-3xl"><Skeleton className="h-[600px]" /></div>
   if (!r) return <EmptyState className="py-24" icon={<Pill className="h-6 w-6" />} title="Prescription not found" action={<Link to="/prescriptions"><Button variant="outline">Back</Button></Link>} />
-  const p = pLk.get(r.patient_id)
+  const p = patient.data ?? undefined
   const d = dLk.get(r.doctor_id)
   if (user!.role === 'patient' && p?.profile_id !== user!.id) return <Forbidden />
   return (

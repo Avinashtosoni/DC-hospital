@@ -22,7 +22,7 @@ const EXPORT_CAP = 20_000
 const hideCls = { sm: 'hidden sm:table-cell', md: 'hidden md:table-cell', lg: 'hidden lg:table-cell', xl: 'hidden xl:table-cell' }
 
 /** Debounced copy of a value (search box → server query). */
-function useDebounced<T>(value: T, ms = 300) {
+export function useDebounced<T>(value: T, ms = 300) {
   const [v, setV] = useState(value)
   useEffect(() => { const id = setTimeout(() => setV(value), ms); return () => clearTimeout(id) }, [value, ms])
   return v

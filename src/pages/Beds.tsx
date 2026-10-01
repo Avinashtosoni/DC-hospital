@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { BedDouble, Pencil, Plus, Trash2, UserPlus, Wrench } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
-import { useCreate, useRemove, useTable, useUpdate } from '../hooks/useData'
+import { useByIds, useCreate, useRemove, useTable, useUpdate, useWindow } from '../hooks/useData'
 import { useResourceCtx } from '../resources/useResourceCtx'
 import { defineResource } from '../resources/types'
 import { ResourceFormDrawer } from '../components/ResourceForm'
@@ -41,8 +41,9 @@ export default function BedsPage() {
   const role = user!.role
   const wards = useTable('wards')
   const beds = useTable('beds')
-  const admissions = useTable('admissions')
-  const patients = useTable('patients')
+  // only current in-patients (bounded by the number of beds) and their names
+  const admissions = useWindow('admissions', { where: [['status', 'eq', 'admitted']] })
+  const patients = useByIds('patients', (admissions.data ?? []).map((a) => a.patient_id))
   const { ctx } = useResourceCtx(['wards'])
   const updBed = useUpdate('beds', { label: 'Bed' })
   const createBed = useCreate('beds', { label: 'Bed' })
@@ -60,10 +61,10 @@ export default function BedsPage() {
   const occupantOf = useMemo(() => {
     const m = new Map<string, { patientId: string; name: string; since: string; reason?: string | null }>()
     ;(admissions.data ?? []).filter((a) => a.status === 'admitted' && a.bed_id).forEach((a) => {
-      m.set(a.bed_id!, { patientId: a.patient_id, name: patients.data?.find((p) => p.id === a.patient_id)?.full_name ?? 'Patient', since: a.admission_date, reason: a.reason })
+      m.set(a.bed_id!, { patientId: a.patient_id, name: patients.get(a.patient_id)?.full_name ?? 'Patient', since: a.admission_date, reason: a.reason })
     })
     return m
-  }, [admissions.data, patients.data])
+  }, [admissions.data, patients])
 
   const all = beds.data ?? []
   const count = (s: Bed['status']) => all.filter((b) => b.status === s).length

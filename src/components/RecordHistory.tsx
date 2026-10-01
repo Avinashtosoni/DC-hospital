@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronDown, FilePlus2, FileX2, History, PencilLine } from 'lucide-react'
-import { useLookup, useTable } from '../hooks/useData'
+import { useQuery } from '@tanstack/react-query'
+import { qk, useByIds, useLookup } from '../hooks/useData'
+import { queryAll } from '../data/adapter'
 import { AUDIT_TABLE_LABEL, formatAuditValue } from '../lib/audit'
 import { cn, fmtDate, fmtTime, titleCase } from '../lib/utils'
 import type { AuditEntry } from '../types'
@@ -23,8 +25,14 @@ const FIELD_LABEL: Record<string, string> = {
 export const fieldLabel = (k: string) => FIELD_LABEL[k] ?? titleCase(k)
 
 /** Turns ids into names (patients / doctors / departments) so a diff reads like English. */
-export function useAuditResolver() {
-  const patients = useLookup('patients'), doctors = useLookup('doctors'), departments = useLookup('departments')
+export function useAuditResolver(entries: AuditEntry[] = []) {
+  // patient names only for the entries on screen (the patients table is never downloaded whole)
+  const patientIds = useMemo(() => entries.flatMap((e) => {
+    const c = (e.changes ?? {}) as Record<string, { from?: unknown; to?: unknown }>
+    return [c.patient_id?.from, c.patient_id?.to].filter((x): x is string => typeof x === 'string')
+  }), [entries])
+  const patients = useByIds('patients', patientIds)
+  const doctors = useLookup('doctors'), departments = useLookup('departments')
   return useMemo(() => (key: string, v: unknown): string => {
     if (typeof v === 'string') {
       if (key === 'patient_id') return patients.get(v)?.full_name ?? 'Patient'
@@ -100,11 +108,21 @@ export function AuditItem({ e, resolve, showTable = true, defaultOpen = false }:
 
 /** Timeline of every change to the given records (owner only — others can't read other people's audit rows). */
 export function RecordHistory({ ids, title = 'Change history', table }: { ids: string[]; title?: string; table?: string }) {
-  const q = useTable('audit_log')
-  const resolve = useAuditResolver()
+  const key = useMemo(() => [...new Set(ids)].sort(), [ids])
+  // only the audit rows for these records (indexed on table_name, record_id)
+  const q = useQuery({
+    queryKey: [...qk('audit_log'), 'records', key.join(',')],
+    queryFn: async () => {
+      const out: AuditEntry[] = []
+      for (let i = 0; i < Math.min(key.length, 600); i += 150) out.push(...await queryAll('audit_log', { where: [['record_id', 'in', key.slice(i, i + 150)]] }, 2000))
+      return out
+    },
+    enabled: key.length > 0,
+    staleTime: 30_000,
+  })
   const [all, setAll] = useState(false)
-  const set = useMemo(() => new Set(ids), [ids])
-  const rows = useMemo(() => (q.data ?? []).filter((e) => e.record_id && set.has(e.record_id)).sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')), [q.data, set])
+  const rows = useMemo(() => [...(q.data ?? [])].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')), [q.data])
+  const resolve = useAuditResolver(all ? rows : rows.slice(0, 8))
   const shown = all ? rows : rows.slice(0, 8)
   return (
     <section className="card p-4 sm:p-5" aria-label={title}>
@@ -112,7 +130,7 @@ export function RecordHistory({ ids, title = 'Change history', table }: { ids: s
         <h3 className="flex items-center gap-2 font-display text-base font-semibold text-brand-950"><History className="h-4 w-4 text-brand-600" />{title}</h3>
         <span className="text-xs text-slate-500">{rows.length} change{rows.length === 1 ? '' : 's'}</span>
       </div>
-      {q.isPending ? <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 rounded-xl" />)}</div>
+      {q.isLoading ? <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 rounded-xl" />)}</div>
         : rows.length === 0 ? <EmptyState icon={<History className="h-5 w-5" />} title="No changes recorded yet" description="Every create, edit and delete from now on appears here with who did it and when." />
           : <>
             <ul className="-mx-2 divide-y divide-[#f2f2fa]">{shown.map((e) => <AuditItem key={e.id} e={e} resolve={resolve} showTable={table !== e.table_name} />)}</ul>

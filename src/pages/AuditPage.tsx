@@ -3,7 +3,10 @@ import { format, parseISO, subDays } from 'date-fns'
 import { Download, FilePlus2, FileX2, History, PencilLine, Search, Users } from 'lucide-react'
 import { Button, EmptyState, PageHeader, Select, Skeleton } from '../components/ui'
 import { AuditItem, fieldLabel, useAuditResolver } from '../components/RecordHistory'
-import { useTable } from '../hooks/useData'
+import { useCount, useRows, useTable } from '../hooks/useData'
+import { queryAll } from '../data/adapter'
+import type { Filter } from '../data/query'
+import { useDebounced } from '../components/ResourcePage'
 import { AUDIT_TABLE_LABEL, AUDITED_TABLES } from '../lib/audit'
 import { cn, downloadCsv, num, today } from '../lib/utils'
 import type { AuditEntry } from '../types'
@@ -12,25 +15,37 @@ const PAGE = 60
 const RANGES = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['all', 'All time']] as const
 
 export default function AuditPage() {
-  const q = useTable('audit_log')
-  const resolve = useAuditResolver()
   const [search, setSearch] = useState('')
   const [table, setTable] = useState('')
   const [action, setAction] = useState('')
   const [actor, setActor] = useState('')
   const [range, setRange] = useState<(typeof RANGES)[number][0]>('30')
   const [limit, setLimit] = useState(PAGE)
+  const term = useDebounced(search)
+  const profiles = useTable('profiles')
 
-  const rows = useMemo(() => [...(q.data ?? [])].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')), [q.data])
-  const actors = useMemo(() => [...new Map(rows.map((r) => [r.actor_name ?? 'System', r.actor_role])).entries()].sort((a, b) => a[0].localeCompare(b[0])), [rows])
+  // filters run in the database; "Show more" asks for the next block of rows
+  const since = useMemo(() => (range === 'all' ? '' : new Date(Math.floor(Date.now() / 3_600_000 - Number(range) * 24) * 3_600_000).toISOString()), [range])
+  const base = useMemo<Filter[]>(() => [
+    ...(table ? [['table_name', 'eq', table] as Filter] : []),
+    ...(actor ? [actor === 'System' ? ['actor_name', 'is_null'] as Filter : ['actor_name', 'eq', actor] as Filter] : []),
+    ...(since ? [['created_at', 'gte', since] as Filter] : []),
+  ], [table, actor, since])
+  const where = useMemo<Filter[]>(() => [...base, ...(action ? [['action', 'eq', action] as Filter] : [])], [base, action])
+  const search_ = term ? { term, columns: ['actor_name', 'summary', 'table_name'] } : undefined
+  const q = useRows('audit_log', { where, search: search_, order: [{ column: 'created_at', asc: false }], range: [0, limit - 1], count: true }, { keepPrevious: true })
+  const filtered = useMemo(() => q.data?.rows ?? [], [q.data])
+  const total = q.data?.count ?? 0
+  const startOfToday = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString() }, [])
+  const todayCount = useCount('audit_log', [['created_at', 'gte', startOfToday]])
+  const created = useRows('audit_log', { where: [...base, ['action', 'eq', 'insert']], search: search_, head: true })
+  const edited = useRows('audit_log', { where: [...base, ['action', 'eq', 'update']], search: search_, head: true })
+  const deleted = useRows('audit_log', { where: [...base, ['action', 'eq', 'delete']], search: search_, head: true })
+  const anyRows = useCount('audit_log')
+  const resolve = useAuditResolver(filtered)
 
-  const filtered = useMemo(() => {
-    const s = search.trim().toLowerCase()
-    const since = range === 'all' ? '' : subDays(new Date(), Number(range)).toISOString()
-    return rows.filter((r) => (!table || r.table_name === table) && (!action || r.action === action) && (!actor || (r.actor_name ?? 'System') === actor)
-      && (!since || (r.created_at ?? '') >= since)
-      && (!s || `${r.actor_name} ${r.summary} ${AUDIT_TABLE_LABEL[r.table_name] ?? r.table_name} ${Object.keys(r.changes ?? {}).join(' ')}`.toLowerCase().includes(s)))
-  }, [rows, search, table, action, actor, range])
+  const actors = useMemo(() => [...(profiles.data ?? []).filter((p) => p.role !== 'patient').map((p) => p.full_name), 'System']
+    .filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a.localeCompare(b)), [profiles.data])
 
   const groups = useMemo(() => {
     const m = new Map<string, AuditEntry[]>()
@@ -40,25 +55,33 @@ export default function AuditPage() {
 
   const t = today()
   const stats = [
-    { label: 'Changes today', value: rows.filter((r) => r.created_at && format(parseISO(r.created_at), 'yyyy-MM-dd') === t).length, icon: History, tone: 'bg-brand-50 text-brand-700' },
-    { label: 'Created', value: filtered.filter((r) => r.action === 'insert').length, icon: FilePlus2, tone: 'bg-emerald-50 text-emerald-600' },
-    { label: 'Edited', value: filtered.filter((r) => r.action === 'update').length, icon: PencilLine, tone: 'bg-brand-900 text-white' },
-    { label: 'Deleted', value: filtered.filter((r) => r.action === 'delete').length, icon: FileX2, tone: 'bg-rose-50 text-rose-600' },
+    { label: 'Changes today', value: todayCount.count ?? 0, icon: History, tone: 'bg-brand-50 text-brand-700' },
+    { label: 'Created', value: created.data?.count ?? 0, icon: FilePlus2, tone: 'bg-emerald-50 text-emerald-600' },
+    { label: 'Edited', value: edited.data?.count ?? 0, icon: PencilLine, tone: 'bg-brand-900 text-white' },
+    { label: 'Deleted', value: deleted.data?.count ?? 0, icon: FileX2, tone: 'bg-rose-50 text-rose-600' },
   ]
 
-  const exportCsv = () => downloadCsv(`audit-log-${t}.csv`, filtered.map((r) => ({
-    when: r.created_at ? format(parseISO(r.created_at), 'yyyy-MM-dd HH:mm:ss') : '',
-    user: r.actor_name ?? 'System', role: r.actor_role ?? '', action: r.action, record_type: AUDIT_TABLE_LABEL[r.table_name] ?? r.table_name,
-    record: r.summary ?? '', record_id: r.record_id ?? '',
-    changes: Object.entries(r.changes ?? {}).map(([k, v]) => `${fieldLabel(k)}: ${'from' in v ? `${resolve(k, v.from)} → ` : ''}${'to' in v ? resolve(k, v.to) : ''}`).join(' | '),
-  })))
+  const [exporting, setExporting] = useState(false)
+  const exportCsv = async () => {
+    setExporting(true)
+    try {
+      const all = await queryAll('audit_log', { where, search: search_, order: [{ column: 'created_at', asc: false }] }, 20_000)
+      downloadCsv(`audit-log-${t}.csv`, all.map((r) => ({
+        when: r.created_at ? format(parseISO(r.created_at), 'yyyy-MM-dd HH:mm:ss') : '',
+        user: r.actor_name ?? 'System', role: r.actor_role ?? '', action: r.action, record_type: AUDIT_TABLE_LABEL[r.table_name] ?? r.table_name,
+        record: r.summary ?? '', record_id: r.record_id ?? '',
+        changes: Object.entries(r.changes ?? {}).map(([k, v]) => `${fieldLabel(k)}: ${'from' in v ? `${resolve(k, v.from)} → ` : ''}${'to' in v ? resolve(k, v.to) : ''}`).join(' | '),
+      })))
+    } finally { setExporting(false) }
+  }
+  const rows = { length: anyRows.count ?? 0 }
 
   const dayLabel = (d: string) => d === t ? 'Today' : d === format(subDays(new Date(), 1), 'yyyy-MM-dd') ? 'Yesterday' : format(parseISO(d), 'EEEE, d MMMM yyyy')
 
   return (
     <div>
       <PageHeader title="Audit Log" description="Who changed what, and when — every patient record, appointment, prescription, bill and payment. Entries cannot be edited or deleted."
-        actions={<Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!filtered.length}>Export CSV</Button>} />
+        actions={<Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!total || exporting}>{exporting ? 'Exporting…' : 'Export CSV'}</Button>} />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
@@ -83,7 +106,7 @@ export default function AuditPage() {
         </Select>
         <Select aria-label="User" value={actor} onChange={(e) => { setActor(e.target.value); setLimit(PAGE) }} className="h-9 w-auto max-w-[12rem] py-1 text-sm">
           <option value="">Everyone</option>
-          {actors.map(([name]) => <option key={name} value={name}>{name}</option>)}
+          {actors.map((name) => <option key={name} value={name}>{name}</option>)}
         </Select>
         <Select aria-label="Period" value={range} onChange={(e) => { setRange(e.target.value as typeof range); setLimit(PAGE) }} className="h-9 w-auto py-1 text-sm">
           {RANGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -102,8 +125,8 @@ export default function AuditPage() {
               <ul className="divide-y divide-[#f2f2fa]">{list.map((e) => <AuditItem key={e.id} e={e} resolve={resolve} />)}</ul>
             </section>
           ))}
-          {filtered.length > limit && (
-            <div className="text-center"><Button variant="outline" onClick={() => setLimit((l) => l + PAGE)}>Show more ({num(filtered.length - limit)} older)</Button></div>
+          {total > filtered.length && (
+            <div className="text-center"><Button variant="outline" onClick={() => setLimit((l) => l + PAGE)}>Show more ({num(total - filtered.length)} older)</Button></div>
           )}
         </div>
       )}
