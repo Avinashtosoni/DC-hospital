@@ -129,7 +129,7 @@ export default function SettingsPage() {
   const ctx: TabCtx | null = ready ? { site: site!, app: app!, savedApp, editSite, editApp, dirty } : null
   const current = TABS.find((t) => t.id === tab)!
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full">
       {leavePrompt}
       <PageHeader title="Settings" description="Brand, appearance, dashboards, messaging credentials and hospital-wide preferences." />
       <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">

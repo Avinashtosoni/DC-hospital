@@ -236,7 +236,7 @@ export function AppLayout() {
       )}
       <div className="lg:pl-64">
         <Topbar onMenu={() => setMobileOpen(true)} />
-        <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <main className="w-full min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <Announcement />
           {off ? <ModuleOff /> : <Outlet />}
         </main>

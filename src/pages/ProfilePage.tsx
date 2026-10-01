@@ -74,7 +74,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader title="My Profile" description="Your personal details, photo, password and preferences." />
 
       {/* hero */}
