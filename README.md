@@ -146,6 +146,16 @@ run **`supabase/upgrade-2026-10.sql`** instead. It is safe to run twice and keep
 no-cascade record protection, collision-proof MRN / invoice numbers, IST default dates, the OTP / Contact-form rate limits and
 the indexes / functions behind server-side pagination (section 15).
 
+### Sign-in, sign-out and "Forgot password"
+
+* **Sign out** always lands on the public website home (idle sign-out goes to the sign-in page with a notice).
+* **Forgot password** offers two options: an **e-mail link** (Supabase Auth; add `https://<domain>/reset-password` to the
+  allowed redirect URLs) and a **mobile OTP** on WhatsApp / SMS. The OTP is only sent when the e-mail and the mobile number
+  belong to the same account, is never shown on screen, and is offered only once a WhatsApp or SMS gateway is switched on in
+  Settings → Notifications (event *Password reset OTP*). Resetting this way signs the account out on every device.
+  Existing databases get it from section 16 of `supabase/upgrade-2026-10.sql`.
+* In demo mode both options work locally: the reset link and the code are shown on screen.
+
 ### Server-side pagination (big hospitals)
 
 The app never downloads a whole patient, appointment, billing or audit table. Lists ask the database for **one page**

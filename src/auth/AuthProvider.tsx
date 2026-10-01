@@ -14,6 +14,8 @@ interface AuthCtx {
   signIn: (email: string, password: string) => Promise<Profile>
   signUp: (input: SignUpInput) => Promise<Profile>
   signOut: () => Promise<void>
+  /** true right after this tab signed out on purpose — guards send the visitor to the public home, not the login page */
+  signedOut: boolean
   refresh: () => Promise<void>
   changePassword: (current: string, next: string) => Promise<void>
   signOutEverywhere: () => Promise<void>
@@ -25,11 +27,15 @@ const Ctx = createContext<AuthCtx | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [signedOut, setSignedOut] = useState(false)
   const qc = useQueryClient()
 
   const refresh = useCallback(async () => {
     try { setUser(await auth.getCurrent()) } catch { setUser(null) } finally { setLoading(false) }
   }, [])
+
+  // the "go home after sign-out" hint only matters for the redirect right after it
+  useEffect(() => { if (!signedOut) return; const id = setTimeout(() => setSignedOut(false), 3000); return () => clearTimeout(id) }, [signedOut])
 
   useEffect(() => {
     refresh()
@@ -37,14 +43,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   const value = useMemo<AuthCtx>(() => ({
-    user, loading, refresh,
-    signIn: async (e, p) => { const u = await auth.signIn(e, p); qc.clear(); setUser(u); return u },
-    signUp: async (input) => { const u = await auth.signUp(input); qc.clear(); setUser(u); return u },
-    signOut: async () => { await auth.signOut(); qc.clear(); setUser(null) },
+    user, loading, refresh, signedOut,
+    signIn: async (e, p) => { const u = await auth.signIn(e, p); qc.clear(); setSignedOut(false); setUser(u); return u },
+    signUp: async (input) => { const u = await auth.signUp(input); qc.clear(); setSignedOut(false); setUser(u); return u },
+    // the session is dropped locally even if the network call fails, so "Sign out" always works
+    signOut: async () => { try { await auth.signOut() } finally { setSignedOut(true); setUser(null); qc.clear() } },
     changePassword: (c, n) => auth.changePassword(c, n),
-    signOutEverywhere: async () => { await auth.signOutEverywhere(); qc.clear(); setUser(null) },
+    signOutEverywhere: async () => { await auth.signOutEverywhere(); setSignedOut(true); setUser(null); qc.clear() },
     uploadAvatar: (file) => { if (!user) throw new Error('Not signed in'); return auth.uploadAvatar(user.id, file) },
-  }), [user, loading, refresh, qc])
+  }), [user, loading, refresh, signedOut, qc])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

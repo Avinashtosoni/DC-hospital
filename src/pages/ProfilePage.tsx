@@ -122,7 +122,7 @@ export default function ProfilePage() {
             <Card><div className="p-5 text-sm text-slate-500">Your login isn’t linked to a patient record yet — the front desk links it at your next visit.</div></Card>
           ))}
           {u.role === 'doctor' && me.doctor && <DoctorCard />}
-          <SecurityCard onPassword={changePassword} onEverywhere={async () => { await signOutEverywhere(); nav('/login') }} />
+          <SecurityCard onPassword={changePassword} onEverywhere={async () => { await signOutEverywhere(); nav('/', { replace: true }) }} />
         </div>
 
         <div className="space-y-6">

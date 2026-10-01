@@ -2,6 +2,7 @@ import type { Profile, TableName } from '../types'
 import { supabase } from '../lib/supabase'
 import { cleanTerm } from './query'
 import type { AuthAdapter, DataAdapter, NewRow, Row } from './adapter'
+import { ConfirmEmailError } from './errors'
 
 const client = () => {
   if (!supabase) throw new Error('Supabase is not configured')
@@ -132,7 +133,7 @@ export const supabaseAuth: AuthAdapter = {
     // the role comes from handle_new_user(): an accepted staff invite, otherwise patient
     const { data, error } = await client().auth.signUp({ email, password, options: { data: { full_name, phone, ...(invite_token ? { invite_token } : {}) } } })
     if (error) throw new Error(error.message)
-    if (!data.session) throw new Error('Account created! Please confirm your email, then sign in.')
+    if (!data.session) throw new ConfirmEmailError(email)
     const p = await fetchProfile(data.user!.id)
     if (!p) throw new Error('Profile was not created. Check the handle_new_user trigger.')
     return p

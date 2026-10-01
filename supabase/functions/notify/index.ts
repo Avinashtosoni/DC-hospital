@@ -103,7 +103,7 @@ Deno.serve(async (req) => {
         // retry later with backoff (2, 4, 8 min after this attempt — not after the message was created)
         ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
         // never keep one-time codes around
-        ...(row.event === 'otp' && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
+        ...((row.event === 'otp' || row.event === 'password_otp') && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
       }).eq('id', row.id)
     }
     return json({ processed: rows.length, sent, failed })

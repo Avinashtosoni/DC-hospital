@@ -141,7 +141,7 @@ async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
         const values = params(tpl.waParams, m.vars)
         const components: any[] = values.length ? [{ type: 'body', parameters: values.map((text) => ({ type: 'text', text })) }] : []
         // authentication (OTP) templates also need the code on the copy-code button
-        if (m.event === 'otp') components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: m.vars.code }] })
+        if ((m.event === 'otp' || m.event === 'password_otp')) components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: m.vars.code }] })
         payload = { type: 'template', template: { name: tpl.waTemplate, language: { code: lang }, components } }
       } else payload = { type: 'text', text: { body: m.body, preview_url: false } }
       const r = await fetch(`https://graph.facebook.com/v21.0/${cfg.phoneNumberId}/messages`, {

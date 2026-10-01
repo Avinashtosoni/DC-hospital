@@ -20,10 +20,12 @@ export function RequireAuth({ children, guestHome, guestFallback }: {
   /** Optional renderer for signed-out visitors on other paths; return null to fall through to the login redirect. */
   guestFallback?: (pathname: string) => ReactNode
 }) {
-  const { user, loading } = useAuth()
+  const { user, loading, signedOut } = useAuth()
   const loc = useLocation()
   if (loading) return <FullScreenLoader />
   if (!user && guestHome && loc.pathname === '/') return <>{guestHome}</>
+  // signed out on purpose → back to the public website home
+  if (!user && signedOut) return <Navigate to="/" replace />
   if (!user && guestFallback) { const node = guestFallback(loc.pathname); if (node) return <>{node}</> }
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
   return <>{children}</>

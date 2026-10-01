@@ -4,7 +4,7 @@ import { THEME_PALETTES, type ThemeId } from './palettes'
 // ------------------------------------------------------------------ notifications
 export type Channel = 'sms' | 'whatsapp' | 'email'
 export type NotifyEvent =
-  | 'otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
+  | 'otp' | 'password_otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
   | 'invoice_created' | 'payment_received' | 'lab_report_ready' | 'feedback_request' | 'staff_invite'
 
 export interface EventTemplate {
@@ -24,6 +24,7 @@ export interface EventTemplate {
 
 export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: Channel[]; tokens: string[] }[] = [
   { id: 'otp', label: 'Booking OTP', hint: 'One-time code when a patient books online', channels: ['sms', 'whatsapp'], tokens: ['code', 'hospital'] },
+  { id: 'password_otp', label: 'Password reset OTP', hint: '"Forgot password → Use mobile" on the sign-in page', channels: ['sms', 'whatsapp'], tokens: ['code', 'hospital'] },
   { id: 'appointment_booked', label: 'Appointment booked', hint: 'Online, portal and desk bookings', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'date', 'time', 'ref', 'hospital', 'hospital_phone', 'address'] },
   { id: 'appointment_reminder', label: 'Appointment reminder', hint: 'Day before the visit (queued daily)', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'date', 'time', 'ref', 'hospital', 'hospital_phone', 'address'] },
   { id: 'appointment_rescheduled', label: 'Appointment rescheduled', hint: 'Date or time changed', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'date', 'time', 'ref', 'hospital', 'hospital_phone'] },
@@ -39,6 +40,8 @@ const T = (text: string, subject: string, waTemplate = '', waParams = '', waText
 export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
   otp: T('{code} is your {hospital} booking code. It is valid for 10 minutes. Do not share it with anyone.', 'Your booking code', '', 'code',
     '🔐 *{code}* is your {hospital} verification code.\n\nIt is valid for 10 minutes. Do not share it with anyone — our staff will never ask for it.'),
+  password_otp: T('{code} is your {hospital} password reset code. It is valid for 10 minutes. If you did not ask for it, ignore this message.', 'Your password reset code', '', 'code',
+    '🔑 *{code}* is your {hospital} password reset code.\n\nIt is valid for 10 minutes. Didn\'t ask for it? Ignore this message — your password stays the same.'),
   appointment_booked: T('Hi {name}, your appointment with {doctor} is confirmed for {date} at {time}. Ref {ref}. Please arrive 15 min early. {hospital} {hospital_phone}', 'Appointment confirmed — {date} at {time}', '', 'name,doctor,date,time,ref',
     '✅ *Appointment confirmed*\n\nHi {name},\n🩺 {doctor}\n🗓 {date} at {time}\n🔖 Ref: *{ref}*\n\nPlease arrive 15 minutes early with a photo ID. Pay at the reception.\n📍 {address}\n📞 {hospital_phone}\n\n— {hospital}'),
   appointment_reminder: T('Reminder: {name}, you have an appointment with {doctor} tomorrow, {date} at {time}. Ref {ref}. {hospital} {hospital_phone}', 'Reminder: your appointment tomorrow at {time}', '', 'name,doctor,date,time',
@@ -136,6 +139,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     whatsapp: { enabled: false, provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', botEnabled: false },
     events: {
       otp: { sms: true, whatsapp: true },
+      password_otp: { sms: true, whatsapp: true },
       appointment_booked: { sms: true, whatsapp: true, email: true },
       appointment_reminder: { sms: true, whatsapp: true, email: false },
       appointment_rescheduled: { sms: true, whatsapp: true, email: true },

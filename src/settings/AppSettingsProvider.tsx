@@ -94,7 +94,7 @@ export function useDashboardChrome() {
       timer.current = setTimeout(async () => {
         await signOut()
         toast.info('Signed out after inactivity', { description: `No activity for ${mins} minutes.` })
-        window.location.assign('/login')
+        window.location.assign('/login?reason=idle')
       }, mins * 60_000)
     }
     const evs = ['mousemove', 'keydown', 'pointerdown', 'scroll', 'touchstart'] as const

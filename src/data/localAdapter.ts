@@ -185,6 +185,26 @@ function users(): LocalUser[] {
   localStorage.setItem(USERS_KEY, JSON.stringify(seeded))
   return seeded
 }
+const RESET_KEY = 'dch:demo-reset'
+const readReset = (): { token: string; profile_id: string; expires: number } | null => { try { return JSON.parse(localStorage.getItem(RESET_KEY) ?? 'null') } catch { return null } }
+/** demo store: set a login's password (used by both "Forgot password" options) */
+export function localSetPassword(profileId: string, password: string) {
+  const list = users()
+  const u = list.find((x) => x.profile_id === profileId)
+  if (!u) throw new Error('No login found for this account')
+  u.password = password
+  localStorage.setItem(USERS_KEY, JSON.stringify(list))
+}
+/** demo store: the login whose e-mail AND mobile (profile or patient record) match — same rule as request_password_otp() */
+export function localFindByEmailPhone(email: string, phone10: string): string | null {
+  const u = users().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
+  if (!u) return null
+  const store = load()
+  const p10 = (v?: string | null) => (v ?? '').replace(/\D/g, '').slice(-10)
+  const prof = store.profiles.find((p) => p.id === u.profile_id)
+  const ok = p10(prof?.phone) === phone10 || store.patients.some((pt) => pt.profile_id === u.profile_id && p10(pt.phone) === phone10)
+  return ok ? u.profile_id : null
+}
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 
@@ -248,12 +268,27 @@ export const localAuth: AuthAdapter = {
     u.password = next
     localStorage.setItem(USERS_KEY, JSON.stringify(list))
   },
-  async requestPasswordReset() {
+  // demo mode: no e-mail is sent — the reset link is handed back so it can be opened right away
+  async requestPasswordReset(email, redirectTo) {
     await latency()
-    throw new Error('Password reset by e-mail works once the hospital database is connected. In this demo every account uses the password Demo@123.')
+    const u = users().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
+    if (!u) return {}
+    const token = crypto.randomUUID()
+    localStorage.setItem(RESET_KEY, JSON.stringify({ token, profile_id: u.profile_id, expires: Date.now() + 3600e3 }))
+    return { demoLink: `${redirectTo}#demo_token=${token}` }
   },
-  async hasRecoverySession() { return false },
-  async setNewPassword() { throw new Error('Not available in demo mode') },
+  async hasRecoverySession() {
+    const t = new URLSearchParams(window.location.hash.slice(1)).get('demo_token')
+    const r = readReset()
+    return !!t && !!r && r.token === t && r.expires > Date.now()
+  },
+  async setNewPassword(next) {
+    await latency()
+    const r = readReset()
+    if (!r || r.expires < Date.now()) throw new Error('This reset link has expired. Please request a new one.')
+    localSetPassword(r.profile_id, next)
+    localStorage.removeItem(RESET_KEY)
+  },
   async signOutEverywhere() {
     localStorage.removeItem(SESSION_KEY)
     emit()

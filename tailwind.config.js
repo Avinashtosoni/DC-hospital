@@ -36,6 +36,8 @@ export default {
         shimmer: { from: { backgroundPosition: '200% 0' }, to: { backgroundPosition: '-200% 0' } },
         'pulse-ring': { '0%': { transform: 'scale(.8)', opacity: .7 }, '100%': { transform: 'scale(2.2)', opacity: 0 } },
         'draw': { from: { strokeDashoffset: 400 }, to: { strokeDashoffset: 0 } },
+        shake: { '0%,100%': { transform: 'translateX(0)' }, '20%,60%': { transform: 'translateX(-6px)' }, '40%,80%': { transform: 'translateX(6px)' } },
+        rise: { from: { opacity: 0, transform: 'translateY(10px)' }, to: { opacity: 1, transform: 'none' } },
       },
       animation: {
         'fade-in': 'fade-in .15s ease-out',
@@ -51,6 +53,8 @@ export default {
         shimmer: 'shimmer 6s linear infinite',
         'pulse-ring': 'pulse-ring 1.8s cubic-bezier(.2,.6,.4,1) infinite',
         draw: 'draw 2.4s ease-out infinite',
+        shake: 'shake .4s ease-in-out',
+        rise: 'rise .35s cubic-bezier(.2,.8,.2,1) both',
       },
     },
   },

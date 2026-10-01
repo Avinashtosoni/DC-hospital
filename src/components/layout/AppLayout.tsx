@@ -4,13 +4,14 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { Bell, ChevronDown, Cross, Database, EyeOff, LogOut, Megaphone, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { NAV, navLabel } from './nav'
-import { Avatar, Badge } from '../ui'
+import { Avatar, Badge, Spinner } from '../ui'
 import { ROLE_LABEL } from '../../types'
 import { cn, ago } from '../../lib/utils'
 import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
 import { isSupabaseConfigured } from '../../lib/supabase'
 import { useTable } from '../../hooks/useData'
+import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
 
 /** Patients get the portal in their language; staff screens stay English. */
@@ -140,15 +141,30 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
   const [bell, setBell] = useState(false)
+  const [leaving, setLeaving] = useState(false)
   const notices = useTable('notices')
   const visible = useMemo(() => (notices.data ?? []).filter((n) =>
     user?.role === 'owner' || n.audience === 'all' || (user?.role === 'patient' ? n.audience === 'patients' : n.audience === 'staff' || (user?.role === 'doctor' && n.audience === 'doctors')),
   ).sort((a, b) => b.published_on.localeCompare(a.published_on)).slice(0, 5), [notices.data, user])
   const canSearchPatients = user && user.role !== 'patient'
   const tr = usePortalT()
+  // sign out → public website home (the guard also sends any app page there)
+  const doSignOut = async () => {
+    setMenu(false); setLeaving(true)
+    const first = user?.full_name.replace(/^Dr\.?\s+/i, '').split(' ')[0]
+    try { await signOut() } finally {
+      navigate('/', { replace: true })
+      toast.success(tr('You have signed out'), { description: first ? tr('See you soon, {name}!').replace('{name}', first) : undefined })
+    }
+  }
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-brand-100 bg-white/75 px-4 backdrop-blur-xl sm:px-6">
+      {leaving && (
+        <div role="status" className="fixed inset-0 z-[100] grid animate-fade-in place-items-center bg-white/80 backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-2xl bg-white px-5 py-3 text-sm font-medium text-brand-900 shadow-lift ring-1 ring-brand-100"><Spinner className="h-4 w-4" />{tr('Signing out…')}</div>
+        </div>
+      )}
       <button onClick={onMenu} className="grid h-9 w-9 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Open menu"><Menu className="h-5 w-5" /></button>
       {canSearchPatients ? (
         <form className="relative hidden max-w-md flex-1 sm:block" onSubmit={(e) => { e.preventDefault(); if (q.trim()) navigate(`/patients?q=${encodeURIComponent(q.trim())}`); setQ('') }}>
@@ -200,7 +216,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
               <div className="border-b border-slate-100 px-3 py-2.5"><div className="truncate text-sm font-medium">{user?.full_name}</div><div className="truncate text-xs text-slate-500">{user?.email}</div></div>
               <button onClick={() => { setMenu(false); navigate('/profile') }} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><CircleUserRound className="h-4 w-4" />{tr('My profile')}</button>
               <button onClick={() => { setMenu(false); navigate('/settings') }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"><Settings className="h-4 w-4" />{tr('Settings')}</button>
-              <button onClick={async () => { setMenu(false); await signOut(); navigate('/login') }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50"><LogOut className="h-4 w-4" />{tr('Sign out')}</button>
+              <button onClick={doSignOut} disabled={leaving} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50"><LogOut className="h-4 w-4" />{tr('Sign out')}</button>
             </div>
           </>}
         </div>
