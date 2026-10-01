@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import type { FieldDef, ResourceCtx, ResourceDef } from '../resources/types'
 import { Button, Drawer, Field, Input, Select, Textarea } from './ui'
 import { cn, money } from '../lib/utils'
+import { RelationPicker } from './RelationPicker'
 import type { LineItem, Medication } from '../types'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -43,8 +44,10 @@ export function ResourceFormDrawer({ def, ctx, open, onClose, initial, prefill, 
   const visible = useMemo(() => def.fields.filter((f) => !f.hidden?.(ctx, values, editing)), [def.fields, ctx, values, editing])
   const set = (name: string, v: unknown) => setValues((s) => ({ ...s, [name]: v }))
 
-  const submit = (e: FormEvent) => {
+  const [checking, setChecking] = useState(false)
+  const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (checking) return
     const errs: Record<string, string> = {}
     for (const f of visible) {
       const v = values[f.name]
@@ -55,7 +58,13 @@ export function ResourceFormDrawer({ def, ctx, open, onClose, initial, prefill, 
       if (f.type === 'medications' && Array.isArray(v) && v.some((m: Medication) => !m.name?.trim())) errs[f.name] = 'Every medicine needs a name'
       if (f.type === 'line_items' && Array.isArray(v) && v.some((m: LineItem) => !m.description?.trim())) errs[f.name] = 'Every line needs a description'
     }
-    if (!Object.keys(errs).length && def.validate) Object.assign(errs, def.validate(values, ctx, rows, (initial ?? undefined) as never))
+    if (!Object.keys(errs).length && def.validate) {
+      // some checks ask the database (e.g. is this doctor already booked at that time?)
+      setChecking(true)
+      try { Object.assign(errs, await def.validate(values, ctx, rows, (initial ?? undefined) as never)) }
+      catch (err) { errs._form = (err as Error).message }
+      finally { setChecking(false) }
+    }
     setErrors(errs)
     if (Object.keys(errs).length) return
     // normalise
@@ -76,9 +85,10 @@ export function ResourceFormDrawer({ def, ctx, open, onClose, initial, prefill, 
       subtitle={editing ? 'Update the details below and save.' : 'Fill in the details below.'}
       footer={<>
         <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
-        <Button type="submit" form="resource-form" loading={saving}>{editing ? 'Save changes' : `Create ${def.singular.toLowerCase()}`}</Button>
+        <Button type="submit" form="resource-form" loading={saving || checking}>{editing ? 'Save changes' : `Create ${def.singular.toLowerCase()}`}</Button>
       </>}>
       <form id="resource-form" onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
+        {errors._form && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 sm:col-span-2">{errors._form}</div>}
         {visible.map((f) => (
           <FieldInput key={f.name} f={f} ctx={ctx} values={values} value={values[f.name]} error={errors[f.name]} editing={editing} onChange={(v) => set(f.name, v)} />
         ))}
@@ -106,6 +116,10 @@ function FieldInput({ f, ctx, value, values, onChange, error, editing }: { f: Fi
       break
     case 'relation': {
       const rel = f.relation!
+      if (rel.search) {
+        control = <RelationPicker f={f} ctx={ctx} value={value} values={values} onChange={onChange} disabled={ro} invalid={!!error} />
+        break
+      }
       const opts = [...ctx.lk[rel.table].values()]
         .filter((r: any) => !rel.filter || rel.filter(r, ctx, values) || r.id === value)
         .map((r: any) => ({ value: r.id, label: rel.label(r, ctx) }))

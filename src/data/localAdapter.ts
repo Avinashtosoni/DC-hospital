@@ -1,4 +1,6 @@
 import { addDays, format } from 'date-fns'
+import { runQuery } from './query'
+import { deriveInvoiceStatus } from '../lib/billing'
 import type { DB, Profile, TableName } from '../types'
 import { TABLES } from '../types'
 import type { AuthAdapter, DataAdapter, InviteInfo, NewRow, Row, SignUpInput } from './adapter'
@@ -100,18 +102,44 @@ function patientApptGuard(a: DB['appointments'], patch: Partial<DB['appointments
   patch.status = 'scheduled'
 }
 
+/** Demo-mode mirror of trg_payments_sync_invoice (scripts/sql/scale.sql): an invoice's amount_paid is always the
+ *  sum of its payments and its status follows from it. */
+function syncInvoiceFromPayments(invoiceId: string | undefined) {
+  if (!invoiceId) return
+  const store = load()
+  const inv = store.invoices.find((i) => i.id === invoiceId)
+  if (!inv) return
+  const before = { ...inv }
+  inv.amount_paid = Math.round(store.payments.filter((p) => p.invoice_id === invoiceId).reduce((s, p) => s + Number(p.amount), 0) * 100) / 100
+  inv.status = deriveInvoiceStatus(inv)
+  if (inv.amount_paid !== before.amount_paid || inv.status !== before.status) {
+    inv.updated_at = new Date().toISOString()
+    audit('invoices', 'update', before as unknown as Record<string, unknown>, inv as unknown as Record<string, unknown>)
+  }
+}
+
 export const localAdapter: DataAdapter = {
   mode: 'local',
   async list(table) {
     await latency()
     return structuredClone(load()[table]) as never
   },
+  async query(table, q) {
+    await latency()
+    const res = runQuery(load()[table] as never[], q)
+    return { rows: structuredClone(res.rows), count: res.count } as never
+  },
   async insert<T extends TableName>(table: T, row: NewRow<T>) {
     await latency()
     const now = new Date().toISOString()
     const full = { ...row, id: row.id ?? uuid(), created_at: now, updated_at: now } as unknown as Row<T>
+    if (table === 'payments') { // trg_payments_sync_invoice also stamps the patient from the invoice
+      const p = full as unknown as DB['payments']
+      p.patient_id = load().invoices.find((i) => i.id === p.invoice_id)?.patient_id ?? p.patient_id
+    }
     ;(load()[table] as Row<T>[]).unshift(full)
     audit(table, 'insert', null, full as unknown as Record<string, unknown>)
+    if (table === 'payments') syncInvoiceFromPayments((full as unknown as DB['payments']).invoice_id)
     persist()
     return structuredClone(full)
   },
@@ -123,7 +151,9 @@ export const localAdapter: DataAdapter = {
     const before = rows[idx]
     if (table === 'appointments') patientApptGuard(before as unknown as DB['appointments'], patch as Partial<DB['appointments']>)
     rows[idx] = { ...rows[idx], ...patch, id, updated_at: new Date().toISOString() }
+    if (table === 'payments') { const p = rows[idx] as unknown as DB['payments']; p.patient_id = load().invoices.find((i) => i.id === p.invoice_id)?.patient_id ?? p.patient_id }
     audit(table, 'update', before as unknown as Record<string, unknown>, rows[idx] as unknown as Record<string, unknown>)
+    if (table === 'payments') { syncInvoiceFromPayments((before as unknown as DB['payments']).invoice_id); syncInvoiceFromPayments((rows[idx] as unknown as DB['payments']).invoice_id) }
     persist()
     return structuredClone(rows[idx])
   },
@@ -136,6 +166,7 @@ export const localAdapter: DataAdapter = {
     const before = store[table].find((r) => r.id === id)
     store[table] = store[table].filter((r) => r.id !== id)
     if (before) audit(table, 'delete', before as Record<string, unknown>, null)
+    if (table === 'payments') syncInvoiceFromPayments((before as unknown as DB['payments'] | undefined)?.invoice_id)
     persist()
   },
   async reset() {

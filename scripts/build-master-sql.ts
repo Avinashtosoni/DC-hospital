@@ -177,6 +177,7 @@ const auditSql = readFileSync(resolve(root, 'scripts/sql/audit.sql'), 'utf8')
 const bookingSql = readFileSync(resolve(root, 'scripts/sql/booking.sql'), 'utf8')
 const settingsSql = readFileSync(resolve(root, 'scripts/sql/settings.sql'), 'utf8')
 const patientSql = readFileSync(resolve(root, 'scripts/sql/patient.sql'), 'utf8')
+const scaleSql = readFileSync(resolve(root, 'scripts/sql/scale.sql'), 'utf8')
 
 const rls = `-- =====================================================================================================
 --  6. ROW LEVEL SECURITY (generated from src/auth/permissions.ts)
@@ -208,6 +209,8 @@ ${bookingSql}
 ${settingsSql}
 
 ${patientSql}
+
+${scaleSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -256,6 +259,8 @@ ${bookingSql}
 ${settingsSql}
 
 ${patientSql}
+
+${scaleSql}
 
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS

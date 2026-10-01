@@ -12,7 +12,9 @@ import { ROLE_LABEL } from '../types'
 import { Avatar, Badge, StatusBadge } from '../components/ui'
 import { age, fmtDate, fmtTime, money, today, titleCase } from '../lib/utils'
 import { deriveInvoiceStatus, invoiceBalance } from '../lib/billing'
-import { defineResource, type Option, type ResourceCtx } from './types'
+import { defineResource, type Option, type RelationSpec, type ResourceCtx } from './types'
+import type { Filter } from '../data/query'
+import { db } from '../data/adapter'
 import { LEAVE_LABEL, conflictOf, isFullDay, type ScheduleExt } from '../lib/schedule'
 
 // ------------------------------------------------------------------ helpers
@@ -39,7 +41,7 @@ const Muted = ({ children }: { children: ReactNode }) => <span className="text-s
 
 const patientField = (label = 'Patient') => ({
   name: 'patient_id', label, type: 'relation' as const, required: true,
-  relation: { table: 'patients' as const, label: (p: Patient) => `${p.full_name} · ${p.mrn}` },
+  relation: { table: 'patients' as const, label: (p: Patient) => `${p.full_name} · ${p.mrn}`, search: PATIENT_SEARCH },
   default: (c: ResourceCtx) => c.me.patient?.id,
   hidden: (c: ResourceCtx) => isPatient(c),
 })
@@ -49,13 +51,24 @@ const doctorField = (required = true) => ({
   default: (c: ResourceCtx) => c.me.doctor?.id,
 })
 const ownPatient = (row: { patient_id: string }, c: ResourceCtx) => !isPatient(c) || row.patient_id === c.me.patient?.id
+const NO_ID = '00000000-0000-0000-0000-000000000000'
+/** server-side twin of ownPatient (RLS enforces the same rule in Supabase) */
+const ownPatientQ = (c: ResourceCtx): Filter[] => (isPatient(c) ? [['patient_id', 'eq', c.me.patient?.id ?? NO_ID]] : [])
+/** search box also matches the patient's name, MRN or phone */
+const viaPatient = { column: 'patient_id', table: 'patients' as const, columns: ['full_name', 'mrn', 'phone'] }
+const PATIENT_SEARCH = { columns: ['full_name', 'mrn', 'phone'], order: 'full_name' }
 
 // ================================================================== PATIENTS
 export const patientsRes = defineResource({
   table: 'patients', path: '/patients', title: 'Patients', singular: 'Patient', icon: Users,
   description: 'Registered patients, demographics and contact details.',
-  relations: ['patients'],
   defaultSort: { key: 'created_at', dir: 'desc' },
+  server: {
+    search: ['full_name', 'mrn', 'phone', 'email'],
+    scope: (c) => (isPatient(c) ? [['profile_id', 'eq', c.user.id]] : []),
+    sort: { full_name: 'full_name', gender: 'gender', blood_group: 'blood_group', phone: 'phone', insurance_provider: 'insurance_provider', status: 'status', created_at: 'created_at' },
+    latestBy: 'mrn',
+  },
   rowLink: (r) => `/patients/${r.id}`,
   scope: (r, c) => !isPatient(c) || r.profile_id === c.user.id,
   searchText: (r) => `${r.full_name} ${r.mrn} ${r.phone} ${r.email}`,
@@ -157,10 +170,12 @@ export const appointmentsRes = defineResource({
     { name: 'notes', label: 'Internal notes', type: 'textarea', hidden: (c) => isPatient(c) },
   ],
   beforeSave: (v, c) => (isPatient(c) ? { ...v, patient_id: c.me.patient?.id, status: v.status ?? 'scheduled' } : v),
-  validate: (v, c, rows, existing): Record<string, string> => {
+  validate: async (v, c, _rows, existing): Promise<Record<string, string>> => {
     if (INACTIVE_APPT.includes(v.status)) return {}
-    const clash = rows.find((r) => r.id !== existing?.id && r.doctor_id === v.doctor_id && r.appointment_date === v.appointment_date
-      && r.appointment_time === v.appointment_time && !INACTIVE_APPT.includes(r.status))
+    // ask the database: the list on screen is only a page / window (the unique slot index is the final guard)
+    const clash = v.doctor_id && v.appointment_date && v.appointment_time && (await db.query('appointments', { where: [
+      ['doctor_id', 'eq', v.doctor_id], ['appointment_date', 'eq', v.appointment_date], ['status', 'nin', INACTIVE_APPT],
+    ] })).rows.find((r) => r.id !== existing?.id && r.appointment_time.slice(0, 5) === String(v.appointment_time).slice(0, 5))
     if (clash) return { appointment_time: `This doctor is already booked at ${fmtTime(v.appointment_time)} — pick another slot` }
     // new booking or moved slot → must not fall on leave, blocked time or a hospital holiday
     const moved = !existing || existing.doctor_id !== v.doctor_id || existing.appointment_date !== v.appointment_date || existing.appointment_time !== v.appointment_time
@@ -174,8 +189,13 @@ export const prescriptionsRes = defineResource({
   table: 'prescriptions', path: '/prescriptions', singular: 'Prescription', icon: Pill,
   title: (role) => (role === 'patient' ? 'My Prescriptions' : 'Prescriptions'),
   description: (role) => role === 'patient' ? 'Medicines and advice from your doctors.' : 'E-prescriptions issued after consultations.',
-  relations: ['patients', 'doctors', 'departments'],
+  relations: ['doctors', 'departments'],
   defaultSort: { key: 'prescribed_on', dir: 'desc' },
+  server: {
+    search: ['diagnosis', 'symptoms', 'advice'], searchVia: [viaPatient], scope: ownPatientQ,
+    sort: { diagnosis: 'diagnosis', doctor: 'doctor_id', prescribed_on: 'prescribed_on', follow_up_date: 'follow_up_date' },
+    resolve: { patient_id: 'patients' },
+  },
   scope: ownPatient,
   searchText: (r, c) => `${pName(c, r.patient_id)} ${dName(c, r.doctor_id)} ${r.diagnosis} ${r.medications?.map((m) => m.name).join(' ')}`,
   columns: [
@@ -208,8 +228,13 @@ export const labTestsRes = defineResource({
   table: 'lab_tests', path: '/lab-tests', singular: 'Lab test', icon: FlaskConical,
   title: (role) => (role === 'patient' ? 'My Lab Reports' : 'Laboratory'),
   description: (role) => role === 'patient' ? 'Your diagnostic tests and results.' : 'Track test orders from request to report.',
-  relations: ['patients', 'doctors', 'departments'],
+  relations: ['doctors', 'departments'],
   defaultSort: { key: 'requested_on', dir: 'desc' },
+  server: {
+    search: ['test_name', 'category', 'status', 'result'], searchVia: [viaPatient], scope: ownPatientQ,
+    sort: { test_name: 'test_name', doctor: 'doctor_id', priority: 'priority', requested_on: 'requested_on', price: 'price', status: 'status', result: 'result' },
+    resolve: { patient_id: 'patients' },
+  },
   scope: ownPatient,
   searchText: (r, c) => `${r.test_name} ${pName(c, r.patient_id)} ${r.category} ${r.status}`,
   filters: [
@@ -259,8 +284,13 @@ const bedLabel = (c: ResourceCtx, bedId?: string | null) => {
 export const admissionsRes = defineResource({
   table: 'admissions', path: '/admissions', singular: 'Admission', icon: ClipboardList,
   title: 'Admissions (IPD)', description: 'In-patient admissions, bed allocation and discharges.',
-  relations: ['patients', 'doctors', 'beds', 'wards', 'departments'],
+  relations: ['doctors', 'beds', 'wards', 'departments'],
   defaultSort: { key: 'admission_date', dir: 'desc' },
+  server: {
+    search: ['reason', 'notes'], searchVia: [viaPatient],
+    sort: { admission_date: 'admission_date', los: 'admission_date', status: 'status', doctor: 'doctor_id', bed: 'bed_id' },
+    resolve: { patient_id: 'patients' },
+  },
   searchText: (r, c) => `${pName(c, r.patient_id)} ${dName(c, r.doctor_id)} ${r.reason} ${bedLabel(c, r.bed_id)}`,
   filters: [{ key: 'status', label: 'Status', options: opts('admitted', 'discharged') }],
   columns: [
@@ -280,7 +310,8 @@ export const admissionsRes = defineResource({
     { label: 'Patient profile', icon: Eye, onClick: () => c.navigate(`/patients/${r.patient_id}`) },
   ],
   fields: [
-    { ...patientField(), relation: { table: 'patients', label: (p: Patient) => `${p.full_name} · ${p.mrn}`, filter: (p: Patient) => p.status !== 'inpatient' } },
+    { ...patientField(), relation: { table: 'patients', label: (p: Patient) => `${p.full_name} · ${p.mrn}`, filter: (p: Patient) => p.status !== 'inpatient',
+      search: { ...PATIENT_SEARCH, where: (): Filter[] => [['status', 'neq', 'inpatient']] } } },
     doctorField(),
     { name: 'bed_id', label: 'Bed', type: 'relation', required: true,
       relation: { table: 'beds', label: (b, c) => `${b.bed_number} · ${c.lk.wards.get(b.ward_id)?.name ?? ''}`, filter: (b) => b.status === 'available' },
@@ -407,8 +438,13 @@ export const invoicesRes = defineResource({
   table: 'invoices', path: '/invoices', singular: 'Invoice', icon: Receipt,
   title: (role) => (role === 'patient' ? 'My Bills' : 'Invoices'),
   description: (role) => role === 'patient' ? 'Your hospital bills and payment status.' : 'Patient billing — consultations, IPD, labs and pharmacy.',
-  relations: ['patients'],
   defaultSort: { key: 'issue_date', dir: 'desc' },
+  server: {
+    search: ['invoice_number', 'status', 'notes'], searchVia: [viaPatient], scope: ownPatientQ,
+    sort: { invoice_number: 'invoice_number', issue_date: 'issue_date', due_date: 'due_date', total: 'total', amount_paid: 'amount_paid', status: 'status' },
+    resolve: { patient_id: 'patients' },
+    latestBy: 'invoice_number',
+  },
   rowLink: (r) => `/invoices/${r.id}`,
   scope: ownPatient,
   searchText: (r, c) => `${r.invoice_number} ${pName(c, r.patient_id)} ${r.status}`,
@@ -453,18 +489,20 @@ export const invoicesRes = defineResource({
 
 // ================================================================== PAYMENTS
 const invLabel = (i: Invoice, c: ResourceCtx) => `${i.invoice_number} · ${pName(c, i.patient_id)} · due ${money(invoiceBalance(i))}`
-const syncInvoice = async (c: ResourceCtx, invoiceId: string, delta: number) => {
-  const inv = c.lk.invoices.get(invoiceId)
-  if (!inv) return
-  const amount_paid = Math.max(0, inv.amount_paid + delta)
-  await c.patch('invoices', inv.id, { amount_paid, status: deriveInvoiceStatus({ ...inv, amount_paid }) })
-}
+/** the invoice's amount paid / status and the payment's patient are kept in sync by the database
+ *  (trg_payments_sync_invoice in scripts/sql/scale.sql, mirrored by the demo store) — just refresh the caches */
+const refreshInvoices = (c: ResourceCtx) => c.refresh('invoices')
 export const paymentsRes = defineResource({
   table: 'payments', path: '/payments', singular: 'Payment', icon: CreditCard,
   title: (role) => (role === 'patient' ? 'My Payments' : 'Payments'),
   description: 'Money received against invoices.',
-  relations: ['patients', 'invoices'],
   defaultSort: { key: 'paid_on', dir: 'desc' },
+  server: {
+    search: ['reference', 'method'], scope: ownPatientQ,
+    searchVia: [viaPatient, { column: 'invoice_id', table: 'invoices', columns: ['invoice_number'] }],
+    sort: { paid_on: 'paid_on', method: 'method', reference: 'reference', amount: 'amount' },
+    resolve: { patient_id: 'patients', invoice_id: 'invoices' },
+  },
   scope: ownPatient,
   searchText: (r, c) => `${pName(c, r.patient_id)} ${c.lk.invoices.get(r.invoice_id)?.invoice_number} ${r.reference} ${r.method}`,
   filters: [{ key: 'method', label: 'Method', options: [...opts('cash', 'card', 'insurance', 'bank_transfer'), { value: 'upi', label: 'UPI' }] }],
@@ -479,18 +517,15 @@ export const paymentsRes = defineResource({
   rowActions: (r, c) => [{ label: 'View invoice', icon: Receipt, onClick: () => c.navigate(`/invoices/${r.invoice_id}`) }],
   fields: [
     { name: 'invoice_id', label: 'Invoice', type: 'relation', required: true, span: 2,
-      relation: { table: 'invoices', label: invLabel, filter: (i: Invoice) => invoiceBalance(i) > 0 && !['cancelled', 'draft'].includes(i.status) } },
+      relation: { table: 'invoices', label: invLabel, filter: (i: Invoice) => invoiceBalance(i) > 0 && !['cancelled', 'draft'].includes(i.status),
+        search: { columns: ['invoice_number'], order: 'invoice_number', where: (): Filter[] => [['status', 'in', ['unpaid', 'partial', 'overdue']]] } } },
     { name: 'amount', label: 'Amount (₹)', type: 'currency', required: true, min: 1 },
     { name: 'method', label: 'Method', type: 'select', required: true, options: [...opts('cash', 'card', 'insurance', 'bank_transfer'), { value: 'upi', label: 'UPI' }], default: () => 'upi' },
     { name: 'paid_on', label: 'Payment date', type: 'date', required: true, default: () => today() },
     { name: 'reference', label: 'Reference / Txn ID', type: 'text' },
   ],
-  beforeSave: (v, c) => ({ ...v, patient_id: c.lk.invoices.get(v.invoice_id)?.patient_id }),
-  afterSave: async (s: Payment, c, prev?: Payment) => {
-    if (prev && prev.invoice_id !== s.invoice_id) { await syncInvoice(c, prev.invoice_id, -prev.amount); await syncInvoice(c, s.invoice_id, s.amount) }
-    else await syncInvoice(c, s.invoice_id, s.amount - (prev?.amount ?? 0))
-  },
-  afterDelete: (r: Payment, c) => syncInvoice(c, r.invoice_id, -r.amount),
+  afterSave: (_s, c) => refreshInvoices(c),
+  afterDelete: (_r, c) => refreshInvoices(c),
 })
 
 // ================================================================== EXPENSES
@@ -498,6 +533,10 @@ export const expensesRes = defineResource({
   table: 'expenses', path: '/expenses', title: 'Expenses', singular: 'Expense', icon: Wallet,
   description: 'Operational spending — payroll, supplies, utilities and more.',
   defaultSort: { key: 'expense_date', dir: 'desc' },
+  server: {
+    search: ['description', 'vendor', 'category'],
+    sort: { description: 'description', category: 'category', expense_date: 'expense_date', amount: 'amount', status: 'status' },
+  },
   searchText: (r) => `${r.description} ${r.vendor} ${r.category}`,
   filters: [
     { key: 'category', label: 'Category', options: opts('salaries', 'supplies', 'utilities', 'equipment', 'maintenance', 'rent', 'other') },
@@ -612,6 +651,8 @@ export const usersRes = defineResource({
 export type { Appointment, Department, Doctor, Expense, InventoryItem, Invoice, LabTest, Notice, Patient, Payment, Prescription, Profile, Staff }
 
 // ================================================================== LEAVE, BLOCKED TIME & HOLIDAYS
+/** leave / holiday screens only need bookings from today on (to count the ones a change would hit) */
+const UPCOMING_APPTS: RelationSpec = { table: 'appointments', where: [['appointment_date', 'gte', today()]] }
 export const scheduleExt = (c: ResourceCtx): ScheduleExt => ({ leaves: [...c.lk.doctor_leaves.values()], holidays: [...c.lk.holidays.values()] })
 const QUEUE = '/schedule?tab=reschedule'
 /**
@@ -650,7 +691,7 @@ export const leavesRes = defineResource({
   description: (role) => role === 'doctor'
     ? 'Request leave or block time for surgery and meetings. Reception approves it and reschedules affected patients.'
     : 'Doctor leave, blocked time (surgery, meetings) and hospital holidays. Approved entries close those slots everywhere — including online booking.',
-  relations: ['doctors', 'departments', 'appointments', 'doctor_leaves', 'holidays'],
+  relations: ['doctors', 'departments', UPCOMING_APPTS, 'doctor_leaves', 'holidays'],
   defaultSort: { key: 'start_date', dir: 'desc' },
   scope: (r, c) => !isDoctor(c) || r.doctor_id === c.me.doctor?.id,
   searchText: (r, c) => `${dName(c, r.doctor_id)} ${r.kind} ${r.reason ?? ''} ${r.status}`,
@@ -722,7 +763,7 @@ export const leavesRes = defineResource({
 export const holidaysRes = defineResource({
   table: 'holidays', path: '/schedule', title: 'Leave & Holidays', singular: 'Holiday', icon: PartyPopper,
   description: 'Hospital-wide OPD closures. Emergency, ICU and pharmacy stay open 24×7. Holidays close all slots, including online booking.',
-  relations: ['doctors', 'appointments', 'doctor_leaves', 'holidays'],
+  relations: ['doctors', UPCOMING_APPTS, 'doctor_leaves', 'holidays'],
   defaultSort: { key: 'holiday_date', dir: 'asc' },
   searchText: (r) => `${r.name} ${r.note ?? ''} ${r.holiday_date}`,
   filters: [{ key: 'when', label: 'When', options: [{ value: 'upcoming', label: 'Upcoming' }, { value: 'past', label: 'Past' }], predicate: (r, v) => (v === 'past' ? r.holiday_date < today() : r.holiday_date >= today()) }],

@@ -1,5 +1,6 @@
 import type { Profile, TableName } from '../types'
 import { supabase } from '../lib/supabase'
+import { cleanTerm } from './query'
 import type { AuthAdapter, DataAdapter, NewRow, Row } from './adapter'
 
 const client = () => {
@@ -15,6 +16,13 @@ const ORDER: Partial<Record<TableName, { column: string; ascending: boolean }>> 
 }
 
 const PAGE = 1000
+
+/** the subset of the PostgREST filter builder used by query() (kept loose so every table shares one code path) */
+type PgQuery = PromiseLike<{ data: unknown[] | null; error: { message: string; code?: string; details?: string | null } | null; count: number | null }> & {
+  [k in 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte']: (c: string, v: unknown) => PgQuery } & {
+  in(c: string, v: unknown[]): PgQuery; is(c: string, v: null): PgQuery; not(c: string, op: string, v: unknown): PgQuery
+  or(f: string): PgQuery; order(c: string, o: { ascending: boolean; nullsFirst?: boolean }): PgQuery; range(a: number, b: number): PgQuery
+}
 /** safety net for a runaway table; the dashboard keeps lists in memory */
 const MAX_ROWS = 100_000
 
@@ -38,6 +46,33 @@ export const supabaseAdapter: DataAdapter = {
       console.warn(`[dc-hospital] ${table}: only the latest ${MAX_ROWS} rows are loaded in the browser`)
     }
     return out as never
+  },
+  async query(table, q) {
+    const head = !!q.head
+    let b = client().from(table).select('*', q.count || head ? { count: 'exact', head } : undefined) as unknown as PgQuery
+    for (const [c, op, v] of q.where ?? []) {
+      if (op === 'in') b = b.in(c, (v as unknown[]).length ? v as unknown[] : ['00000000-0000-0000-0000-000000000000'])
+      else if (op === 'nin') b = (v as unknown[]).length ? b.not(c, 'in', `(${(v as unknown[]).map((x) => `"${String(x).replace(/"/g, '')}"`).join(',')})`) : b
+      else if (op === 'is_null') b = b.is(c, null)
+      else if (op === 'not_null') b = b.not(c, 'is', null)
+      else b = b[op](c, v)
+    }
+    const term = q.search ? cleanTerm(q.search.term) : ''
+    if (term && q.search) {
+      const parts = q.search.columns.map((c) => `${c}.ilike.*${term}*`)
+      for (const x of q.search.ids ?? []) if (x.ids.length) parts.push(`${x.column}.in.(${x.ids.slice(0, 150).join(',')})`)
+      b = b.or(parts.join(','))
+    }
+    if (!head) {
+      for (const o of q.order ?? []) b = b.order(o.column, { ascending: o.asc !== false, nullsFirst: false })
+      b = b.order('id', { ascending: true })
+      // never ask for more than one PostgREST page at a time
+      const [from, to] = q.range ?? [0, PAGE - 1]
+      b = b.range(from, Math.min(to, from + PAGE - 1))
+    }
+    const { data, error, count } = await b
+    if (error) throw friendlyDbError(error)
+    return { rows: (data ?? []) as never, count: count ?? (q.count || head ? 0 : null) }
   },
   async insert<T extends TableName>(table: T, row: NewRow<T>) {
     const { data, error } = await client().from(table).insert(row as never).select().single()

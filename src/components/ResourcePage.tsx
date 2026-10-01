@@ -5,7 +5,12 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, MoreHorizontal, Pencil, Plus, Search, SearchX, Trash2, X } from 'lucide-react'
 import type { ResourceCtx, ResourceDef, RowAction } from '../resources/types'
 import { useResourceCtx } from '../resources/useResourceCtx'
-import { useCreate, useRemove, useTable, useUpdate } from '../hooks/useData'
+import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { qk, useCreate, useRemove, useRows, useTable, useUpdate } from '../hooks/useData'
+import { db, queryAll } from '../data/adapter'
+import { cleanTerm, type Filter, type Query } from '../data/query'
+import type { TableName } from '../types'
 import { can } from '../auth/permissions'
 import { translate, useT } from '../i18n'
 import { Button, Card, ConfirmDialog, EmptyState, Input, PageHeader, Select, Skeleton } from './ui'
@@ -13,17 +18,43 @@ import { ResourceFormDrawer } from './ResourceForm'
 import { cn, downloadCsv } from '../lib/utils'
 
 const PAGE_SIZE = 12
+const EXPORT_CAP = 20_000
 const hideCls = { sm: 'hidden sm:table-cell', md: 'hidden md:table-cell', lg: 'hidden lg:table-cell', xl: 'hidden xl:table-cell' }
 
-export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExtra?: ReactNode }) {
-  const { ctx, loading: ctxLoading } = useResourceCtx(def.relations)
-  const q = useTable(def.table)
-  const label = def.singular
-  const create = useCreate(def.table, { label })
-  const update = useUpdate(def.table, { label })
-  const remove = useRemove(def.table, { label })
-  const [params, setParams] = useSearchParams()
+/** Debounced copy of a value (search box → server query). */
+function useDebounced<T>(value: T, ms = 300) {
+  const [v, setV] = useState(value)
+  useEffect(() => { const id = setTimeout(() => setV(value), ms); return () => clearTimeout(id) }, [value, ms])
+  return v
+}
 
+type ListState = { search: string; filters: Record<string, string>; sort: { key: string; dir: 'asc' | 'desc' } }
+
+/** Builds the database query for a server-mode resource list (scope + search + filters + sort). */
+async function buildServerQuery(def: ResourceDef, ctx: ResourceCtx, st: ListState): Promise<Query> {
+  const spec = def.server!
+  const where: Filter[] = [...(spec.scope?.(ctx) ?? [])]
+  for (const f of def.filters ?? []) {
+    const v = st.filters[f.key]
+    if (v) where.push(...(spec.filters?.[f.key]?.(v, ctx) ?? [[f.key, 'eq', v] as Filter]))
+  }
+  const term = cleanTerm(st.search)
+  let search: Query['search']
+  if (term) {
+    // e.g. typing a patient's name on Invoices: find matching patients first, then their invoices
+    const ids = await Promise.all((spec.searchVia ?? []).filter((v) => can(ctx.role, v.table, 'read')).map(async (v) => ({
+      column: v.column,
+      ids: (await db.query(v.table, { search: { term, columns: v.columns }, range: [0, 99] })).rows.map((r) => r.id),
+    })))
+    search = { term, columns: spec.search, ids }
+  }
+  const col = spec.sort?.[st.sort.key]
+  return { where, search, order: col ? [{ column: col, asc: st.sort.dir === 'asc' }] : undefined }
+}
+
+export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExtra?: ReactNode }) {
+  const server = !!def.server
+  const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState(params.get('q') ?? '')
   const [filters, setFilters] = useState<Record<string, string>>(() => Object.fromEntries((def.filters ?? []).map((f) => [f.key, params.get(f.key) ?? ''])))
   const [sort, setSort] = useState(def.defaultSort ?? { key: def.columns[0].key, dir: 'asc' as const })
@@ -32,6 +63,52 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
   const [editing, setEditing] = useState<any | null>(null)
   const [prefill, setPrefill] = useState<Record<string, any>>({})
   const [deleting, setDeleting] = useState<any | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const debounced = useDebounced(search, server ? 300 : 0)
+
+  // ---------------------------------------------------------------- server mode: one page at a time
+  const { ctx: baseCtx } = useResourceCtx(server ? [] : def.relations)
+  const listState: ListState = { search: debounced, filters, sort }
+  const pageQ = useQuery({
+    queryKey: [...qk(def.table), 'page', JSON.stringify(listState), page, baseCtx?.role, baseCtx?.me.patient?.id, baseCtx?.me.doctor?.id],
+    queryFn: async () => db.query(def.table, { ...(await buildServerQuery(def, baseCtx!, listState)), range: [(page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1], count: true }),
+    enabled: server && !!baseCtx,
+    placeholderData: keepPreviousData,
+    staleTime: 15_000,
+  })
+  const pageRows = useMemo(() => (pageQ.data?.rows ?? []) as any[], [pageQ.data])
+  // related records for just the rows on screen (patient names, invoice numbers…)
+  const resolveEntries = Object.entries(def.server?.resolve ?? {})
+  const resolved = useQueries({
+    queries: resolveEntries.map(([col, table]) => {
+      const ids = [...new Set(pageRows.map((r) => r[col]).filter((x): x is string => !!x && !String(x).startsWith('temp-')))].sort()
+      return {
+        queryKey: [...qk(table), 'ids', ids.join(',')],
+        queryFn: async () => (await db.query(table, { where: [['id', 'in', ids]] })).rows as { id: string }[],
+        enabled: server && ids.length > 0 && can(baseCtx?.role, table, 'read'),
+        staleTime: 60_000,
+        placeholderData: keepPreviousData,
+      }
+    }),
+  })
+  const extra = useMemo(() => {
+    const out: Partial<Record<TableName, unknown[]>> = {}
+    resolveEntries.forEach(([, table], i) => { out[table] = [...(out[table] ?? []), ...(resolved[i]?.data ?? [])] })
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolved.map((r) => r.dataUpdatedAt).join('|'), def])
+  const latest = useRows(def.table, { order: [{ column: def.server?.latestBy ?? 'created_at', asc: false }], range: [0, 19] }, { enabled: server && !!def.server?.latestBy })
+
+  // ---------------------------------------------------------------- client mode: small tables, filtered in memory
+  const full = useTable(def.table, { enabled: !server })
+  const { ctx: relCtx, loading: relLoading } = useResourceCtx(server ? (def.relations ?? []) : [], extra)
+  const ctx = server ? relCtx : baseCtx
+  const ctxLoading = server ? relLoading : !baseCtx
+
+  const label = def.singular
+  const create = useCreate(def.table, { label })
+  const update = useUpdate(def.table, { label })
+  const remove = useRemove(def.table, { label })
 
   const role = ctx?.role
   const { t: tt } = useT()
@@ -58,14 +135,15 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
   }, [params, ctx, canCreate])
 
   const columns = useMemo(() => def.columns.filter((c) => role && !c.hideFor?.includes(role) && (!c.showFor || c.showFor.includes(role))), [def.columns, role])
+  const sortable = (key: string) => !server || !!def.server?.sort?.[key]
 
   const scoped = useMemo(() => {
-    if (!ctx || !q.data) return []
-    return def.scope ? q.data.filter((r) => def.scope!(r, ctx)) : q.data
-  }, [q.data, ctx, def])
+    if (server || !ctx || !full.data) return []
+    return def.scope ? full.data.filter((r) => def.scope!(r, ctx)) : full.data
+  }, [server, full.data, ctx, def])
 
   const filtered = useMemo(() => {
-    if (!ctx) return []
+    if (server || !ctx) return []
     const s = search.trim().toLowerCase()
     let rows = scoped
     if (s) rows = rows.filter((r) => def.searchText(r, ctx).toLowerCase().includes(s))
@@ -81,13 +159,19 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
       const cmp = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })
       return sort.dir === 'asc' ? cmp : -cmp
     })
-  }, [scoped, search, filters, sort, ctx, def, columns])
+  }, [server, scoped, search, filters, sort, ctx, def, columns])
 
-  useEffect(() => setPage(1), [search, filters])
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const current = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-  const loading = q.isLoading || ctxLoading || !ctx
+  useEffect(() => setPage(1), [debounced, filters, sort])
+  const total = server ? pageQ.data?.count ?? 0 : filtered.length
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  // a delete on the last page can leave us past the end
+  useEffect(() => { if (server && pageQ.data && page > pages) setPage(pages) }, [server, pageQ.data, page, pages])
+  const current = server ? pageRows : filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const loading = (server ? pageQ.isLoading : full.isLoading) || ctxLoading || !ctx
+  const refreshing = server && pageQ.isFetching && !pageQ.isLoading
   const activeFilters = Object.values(filters).filter(Boolean).length + (search ? 1 : 0)
+  const isEmptyTable = server ? total === 0 && activeFilters === 0 && !pageQ.isPlaceholderData : scoped.length === 0
+  const formRows = (server ? [...(latest.data?.rows ?? []), ...pageRows] : full.data ?? []) as any[]
 
   const openCreate = () => { setPrefill({}); setEditing(null); setFormOpen(true) }
   const openEdit = (row: any) => { setEditing(row); setFormOpen(true) }
@@ -111,23 +195,32 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
     remove.mutate(row.id, { onSuccess: () => def.afterDelete?.(row, ctx) })
   }
 
-  const exportCsv = () => {
+  const exportCsv = async () => {
     if (!ctx) return
-    downloadCsv(`${def.table}-${format(new Date(), 'yyyy-MM-dd')}.csv`, filtered.map((r: any) => {
+    let rows: any[] = filtered
+    if (server) {
+      // export every matching row, not just the visible page
+      setExporting(true)
+      try {
+        rows = await queryAll(def.table, await buildServerQuery(def, ctx, { search, filters, sort }), EXPORT_CAP)
+        if (rows.length >= EXPORT_CAP) toast.info(`Exported the first ${EXPORT_CAP.toLocaleString('en-IN')} rows — narrow the filters to export the rest.`)
+      } catch (e) { toast.error('Export failed', { description: (e as Error).message }); return } finally { setExporting(false) }
+    }
+    downloadCsv(`${def.table}-${format(new Date(), 'yyyy-MM-dd')}.csv`, rows.map((r: any) => {
       const { __optimistic, ...rest } = r
       void __optimistic
       return rest
     }))
   }
 
-  const toggleSort = (key: string) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
+  const toggleSort = (key: string) => { if (sortable(key)) setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })) }
 
   return (
     <div>
       <PageHeader title={title} description={description}
         actions={<>
           {headerExtra}
-          {role !== 'patient' && <Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!filtered.length}>Export</Button>}
+          {role !== 'patient' && <Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!total || exporting}>{exporting ? 'Exporting…' : 'Export'}</Button>}
           {canCreate && <Button icon={<Plus className="h-4 w-4" />} onClick={openCreate} disabled={!ctx}>New {label.toLowerCase()}</Button>}
         </>} />
 
@@ -160,7 +253,7 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
               <tr>
                 {columns.map((c) => (
                   <th key={c.key} className={cn('whitespace-nowrap px-4 py-2.5', c.hideBelow && hideCls[c.hideBelow], c.align === 'right' && 'text-right')}>
-                    <button onClick={() => toggleSort(c.key)} className={cn('inline-flex items-center gap-1 hover:text-slate-800', sort.key === c.key && 'text-slate-800')}>
+                    <button onClick={() => toggleSort(c.key)} disabled={!sortable(c.key)} className={cn('inline-flex items-center gap-1', sortable(c.key) && 'hover:text-slate-800', sort.key === c.key && 'text-slate-800')}>
                       {t(c.header)}
                       {sort.key === c.key && (sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                     </button>
@@ -208,8 +301,8 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
           </table>
         </div>
 
-        {!loading && filtered.length === 0 && (
-          scoped.length === 0 ? (
+        {!loading && total === 0 && (
+          isEmptyTable ? (
             <EmptyState icon={<def.icon className="h-6 w-6" />} title={t('No {what} yet', { what: title.toLowerCase() })}
               description={def.emptyText ? t(def.emptyText) : canCreate ? `Get started by creating your first ${label.toLowerCase()}.` : t('Nothing to show here right now.')}
               action={canCreate && <Button icon={<Plus className="h-4 w-4" />} onClick={openCreate}>New {label.toLowerCase()}</Button>} />
@@ -219,9 +312,9 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
           )
         )}
 
-        {!loading && filtered.length > 0 && (
+        {!loading && total > 0 && (
           <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            <span>Showing <b className="text-slate-700">{(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)}</b> of <b className="text-slate-700">{filtered.length}</b></span>
+            <span>Showing <b className="text-slate-700">{(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)}</b> of <b className="text-slate-700">{total.toLocaleString('en-IN')}</b>{refreshing && <span className="ml-2 text-brand-500">Updating…</span>}</span>
             <div className="flex items-center gap-1">
               <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} aria-label="Previous"><ChevronLeft className="h-3.5 w-3.5" /></Button>
               <span className="px-2">Page {page} / {pages}</span>
@@ -233,7 +326,7 @@ export function ResourcePage({ def, headerExtra }: { def: ResourceDef; headerExt
 
       {ctx && (
         <ResourceFormDrawer def={def} ctx={ctx} open={formOpen} onClose={() => setFormOpen(false)} initial={editing} prefill={prefill}
-          rows={q.data ?? []} onSubmit={handleSubmit} saving={create.isPending || update.isPending} />
+          rows={formRows} onSubmit={handleSubmit} saving={create.isPending || update.isPending} />
       )}
       <ConfirmDialog open={!!deleting} onClose={() => setDeleting(null)} onConfirm={confirmDelete}
         title={`Delete this ${label.toLowerCase()}?`} description="This action cannot be undone. The record will be permanently removed." />
