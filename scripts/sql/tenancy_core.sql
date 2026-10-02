@@ -45,6 +45,13 @@ alter table public.tenant_domains add column if not exists checked_at   timestam
 -- phase 3 — the hospital on Hospital Comrade's shared messaging accounts (set by a Hospital Comrade admin):
 --   { "smsSenderId": "CITYCL", "templates": { "<event>": { "smsTemplateId": "…" } }, "limits": { "sms": 1000, "whatsapp": 1000, "email": null } }
 alter table public.tenants add column if not exists messaging jsonb not null default '{}'::jsonb;
+-- phase 4 — licence and wallet. trial_ends_at / paid_until drive the effective status (tenant_license below); both empty =
+-- the status column is used as set by hand (the primary hospital and older rows). billing = per-hospital overrides:
+--   { "price": 1499, "included": { "sms": 200 }, "ratesPaise": { "whatsapp": 30 }, "legalName": "…", "gstin": "…" }
+alter table public.tenants add column if not exists trial_ends_at timestamptz;
+alter table public.tenants add column if not exists paid_until    timestamptz;
+alter table public.tenants add column if not exists billing       jsonb not null default '{}'::jsonb;
+alter table public.tenants add column if not exists wallet_paise  bigint not null default 0;
 -- one primary (canonical) address per hospital
 create unique index if not exists tenant_domains_one_primary on public.tenant_domains (tenant_id) where is_primary;
 
@@ -212,3 +219,39 @@ end $f$;
 revoke all on function public.ensure_tenant_columns() from public, anon, authenticated;
 
 select public.ensure_tenant_columns();
+-- ------------------------------------------------------------------ licence (phase 4)
+-- The hospital's effective status right now, from its dates — no scheduler needed:
+--   trial (trial_ends_at ahead) → active (paid_until ahead) → grace (ended < graceDays ago: everything works, banner)
+--   → read_only (sign-in and reading work, nothing can be added or changed) · suspended (set by hand: site and app closed).
+-- The primary hospital is always active; a hospital with neither date keeps the status set by hand.
+create or replace function public.tenant_license(p_tenant uuid)
+returns text language plpgsql stable security definer set search_path = public as $$
+declare t public.tenants; v_end timestamptz; v_grace int := 7;
+begin
+  select * into t from public.tenants where id = p_tenant;
+  if not found then return null; end if;
+  if t.is_primary then return 'active'; end if;
+  if t.status = 'suspended' then return 'suspended'; end if;
+  if t.paid_until is null and t.trial_ends_at is null then return t.status; end if;
+  if t.paid_until > now() then return 'active'; end if;
+  if t.trial_ends_at > now() then return 'trial'; end if;
+  if to_regclass('public.platform_settings') is not null then
+    execute $q$ select coalesce((data ->> 'graceDays')::int, 7) from public.platform_settings where key = 'billing' $q$ into v_grace;
+  end if;
+  v_end := greatest(coalesce(t.paid_until, '-infinity'::timestamptz), coalesce(t.trial_ends_at, '-infinity'::timestamptz));
+  return case when v_end + make_interval(days => coalesce(v_grace, 7)) > now() then 'grace' else 'read_only' end;
+end $$;
+-- when the hospital becomes read-only (end of the grace period), for banners
+create or replace function public.tenant_license_dates(p_tenant uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare t public.tenants; v_grace int := 7; v_end timestamptz;
+begin
+  select * into t from public.tenants where id = p_tenant;
+  if not found then return null; end if;
+  if to_regclass('public.platform_settings') is not null then
+    execute $q$ select coalesce((data ->> 'graceDays')::int, 7) from public.platform_settings where key = 'billing' $q$ into v_grace;
+  end if;
+  v_end := nullif(greatest(coalesce(t.paid_until, '-infinity'::timestamptz), coalesce(t.trial_ends_at, '-infinity'::timestamptz)), '-infinity'::timestamptz);
+  return jsonb_build_object('status', public.tenant_license(p_tenant), 'trial_ends_at', t.trial_ends_at, 'paid_until', t.paid_until,
+    'read_only_from', case when t.is_primary or v_end is null then null else v_end + make_interval(days => coalesce(v_grace, 7)) end);
+end $$;

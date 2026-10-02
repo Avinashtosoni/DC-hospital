@@ -251,7 +251,7 @@ drop function if exists public.resolve_tenant(text);
 create or replace function public.resolve_tenant(p_host text, p_slug text default null)
 returns table (id uuid, slug text, name text, status text, modules jsonb, is_primary boolean)
 language sql stable security definer set search_path = public as $$
-  select t.id, t.slug, t.name, t.status, t.modules, t.is_primary
+  select t.id, t.slug, t.name, public.tenant_license(t.id), t.modules, t.is_primary   -- effective status (licence, phase 4)
     from public.tenants t
    where t.id = coalesce(
            (select d.tenant_id from public.tenant_domains d where d.domain = lower(split_part(trim(coalesce(p_host, '')), ':', 1))),
@@ -265,7 +265,10 @@ declare t public.tenants; v_tid uuid := public.current_tenant();
 begin
   select * into t from public.tenants where id = v_tid;
   return jsonb_build_object(
-    'tenant', case when t.id is null then null else jsonb_build_object('id', t.id, 'slug', t.slug, 'name', t.name, 'status', t.status, 'plan', t.plan, 'modules', t.modules, 'is_primary', t.is_primary) end,
+    'tenant', case when t.id is null then null else jsonb_build_object('id', t.id, 'slug', t.slug, 'name', t.name, 'status', public.tenant_license(t.id), 'plan', t.plan, 'modules', t.modules, 'is_primary', t.is_primary) end,
+    -- licence dates for the banner; the wallet balance only for the people who pay (owner / accountant / platform team)
+    'license', case when t.id is null then null else public.tenant_license_dates(t.id)
+      || case when public.has_role('owner', 'accountant') then jsonb_build_object('wallet_paise', t.wallet_paise) else '{}'::jsonb end end,
     'role', public.current_app_role(),
     'provider_role', public.provider_role(),
     'provider_mode', public.provider_mode());
@@ -275,7 +278,7 @@ end $$;
 create or replace function public.provider_tenants()
 returns table (id uuid, slug text, name text, status text, plan text, domain text)
 language sql stable security definer set search_path = public as $$
-  select t.id, t.slug, t.name, t.status, t.plan,
+  select t.id, t.slug, t.name, public.tenant_license(t.id), t.plan,
          (select d.domain from public.tenant_domains d where d.tenant_id = t.id order by d.is_primary desc, d.created_at limit 1)
     from public.tenants t
    where public.provider_can(t.id)
@@ -488,16 +491,4 @@ create policy platform_settings_admin on public.platform_settings for all to aut
   using (public.provider_role() = 'admin') with check (public.provider_role() = 'admin');
 insert into public.platform_settings (key, data) values ('messaging', '{"templates": {}}'::jsonb) on conflict (key) do nothing;
 
--- the notify function adds each batch's outcome (service role only)
-create or replace function public.record_message_usage(p_tenant uuid, p_channel text, p_source text, p_sent int, p_failed int)
-returns void language plpgsql volatile security definer set search_path = public as $$
-begin
-  if coalesce(p_sent, 0) = 0 and coalesce(p_failed, 0) = 0 then return; end if;
-  insert into public.message_usage (tenant_id, month, channel, source, sent, failed)
-  values (p_tenant, date_trunc('month', now() at time zone 'Asia/Kolkata')::date, p_channel, coalesce(p_source, 'own'),
-          greatest(coalesce(p_sent, 0), 0), greatest(coalesce(p_failed, 0), 0))
-  on conflict (tenant_id, month, channel, source) do update
-    set sent = public.message_usage.sent + excluded.sent, failed = public.message_usage.failed + excluded.failed, updated_at = now();
-end $$;
-revoke all on function public.record_message_usage(uuid, text, text, int, int) from public, anon, authenticated;
-grant execute on function public.record_message_usage(uuid, text, text, int, int) to service_role;
+-- record_message_usage(): see billing.sql (it also charges the wallet, phase 4)

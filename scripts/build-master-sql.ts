@@ -17,6 +17,7 @@ import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from '../src/data/seed'
 import type { Role, TableName } from '../src/types'
 import { DEFAULT_FORMS } from '../src/forms/schema'
 import { DEFAULT_APP_SETTINGS, type NotifyEvent } from '../src/settings/types'
+import { BILLING_DEFAULTS } from '../src/platform/billing'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RAW = '__SQL__'
@@ -197,6 +198,9 @@ const newHospitalJson = JSON.stringify(newHospitalSettings)
 if (newHospitalJson.includes('$json$') || newHospitalJson.includes('$$')) throw new Error('new hospital settings contain $json$')
 tenancySql = tenancySql.replace('@@NEW_HOSPITAL_SETTINGS@@', newHospitalJson)
 if (tenancySql.includes('@@NEW_HOSPITAL_SETTINGS@@')) throw new Error('new hospital settings placeholder missing')
+// phase 4 — licence, wallet and payments (loaded last); prices / GST / rates default from src/platform/billing.ts
+const billingSql = readFileSync(resolve(root, 'scripts/sql/billing.sql'), 'utf8').replace('@@BILLING_DEFAULTS@@', () => JSON.stringify(BILLING_DEFAULTS))
+if (billingSql.includes('@@BILLING_DEFAULTS@@')) throw new Error('billing defaults placeholder missing')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
@@ -261,6 +265,8 @@ ${formsSql}
 ${messagingSql}
 
 ${tenancySql}
+
+${billingSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -322,6 +328,8 @@ ${messagingSql}
 
 ${tenancySql}
 
+${billingSql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
@@ -360,7 +368,7 @@ let nextUpgrade = upgrade
 const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
 for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
-  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql]] as const) {
+  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql]] as const) {
   const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
   // the tenancy core goes first (every later section may call current_tenant())

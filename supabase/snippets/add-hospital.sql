@@ -11,6 +11,9 @@ declare
   v_code    text  := 'CCC';                                   -- ✏️ MRN / invoice prefix, 2–6 capital letters (CCC-100001)
   v_plan    text  := 'clinic';                                -- ✏️ clinic | hospital | enterprise | custom
   v_status  text  := 'trial';                                 -- ✏️ trial | active
+  -- trial: free for the platform's trialDays (14), then 7 days' grace, then read-only until a plan is paid.
+  -- active: paid until the date below (e.g. paid outside the app) — later renewals extend it.
+  v_paid_until timestamptz := null;                           -- ✏️ only for active, e.g. now() + interval '1 year'
   v_domain  text  := 'citycare.hospital.digitalcomrade.in';   -- ✏️ the hospital's address ('' = none yet, use ?hospital=)
   v_owner   text  := 'owner@citycare.in';                     -- ✏️ e-mail of the first owner
   -- settings the owner may change; anything not listed is managed by the platform team and hidden from the hospital
@@ -18,8 +21,10 @@ declare
   v_modules jsonb := '{"dashboard": "hospital", "forms": "hospital", "notifications": "hospital", "security": "hospital"}';   -- ✏️
   v_id      uuid;
 begin
-  insert into public.tenants (slug, name, code, plan, status, modules)
-  values (lower(v_slug), v_name, upper(v_code), v_plan, v_status, v_modules)
+  insert into public.tenants (slug, name, code, plan, status, modules, trial_ends_at, paid_until)
+  values (lower(v_slug), v_name, upper(v_code), v_plan, v_status, v_modules,
+          case when v_status = 'trial' then now() + make_interval(days => coalesce((select (data ->> 'trialDays')::int from public.platform_settings where key = 'billing'), 14)) end,
+          case when v_status = 'active' then v_paid_until end)
   returning id into v_id;
   if coalesce(v_domain, '') <> '' then
     insert into public.tenant_domains (domain, tenant_id, is_primary) values (lower(v_domain), v_id, true);

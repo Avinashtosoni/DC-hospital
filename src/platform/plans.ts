@@ -12,6 +12,8 @@ export interface Plan {
   features: string[]
   highlight?: boolean
   cta: string
+  /** messages per month included on Hospital Comrade's shared accounts (beyond them: prepaid wallet, phase 4) */
+  included: { sms: number; whatsapp: number; email: number }
 }
 
 export const PLANS: Plan[] = [
@@ -26,6 +28,7 @@ export const PLANS: Plan[] = [
       'Email support',
     ],
     cta: 'Start with Clinic',
+    included: { sms: 100, whatsapp: 300, email: 1000 },
   },
   {
     id: 'hospital', name: 'Hospital', price: 2999, highlight: true, tagline: 'For growing multi-speciality hospitals',
@@ -39,6 +42,7 @@ export const PLANS: Plan[] = [
       'Reports & owner dashboard',
     ],
     cta: 'Choose Hospital',
+    included: { sms: 500, whatsapp: 1500, email: 5000 },
   },
   {
     id: 'enterprise', name: 'Enterprise', price: 7999, suffix: '+', tagline: 'For large hospitals and groups',
@@ -50,6 +54,7 @@ export const PLANS: Plan[] = [
       'Data import from your old software',
     ],
     cta: 'Talk to sales',
+    included: { sms: 2000, whatsapp: 5000, email: 20000 },
   },
   {
     id: 'custom', name: 'Custom', price: null, tagline: 'Your modules, your price',
@@ -60,6 +65,7 @@ export const PLANS: Plan[] = [
       'Pricing that fits your budget',
     ],
     cta: 'Get a quote',
+    included: { sms: 0, whatsapp: 0, email: 0 },
   },
 ]
 
