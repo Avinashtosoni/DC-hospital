@@ -38,6 +38,7 @@ begin
   select coalesce(jsonb_agg(h order by h ->> 'is_primary' desc, h ->> 'name'), '[]'::jsonb) into r from (
     select jsonb_build_object(
       'id', t.id, 'slug', t.slug, 'name', t.name, 'code', t.code, 'plan', t.plan, 'is_primary', t.is_primary, 'notes', t.notes,
+      'closing_at', t.closing_at, 'purge_after', t.purge_after, 'close_reason', t.close_reason,
       'created_at', t.created_at, 'modules', t.modules, 'license', public.tenant_license_dates(t.id), 'wallet_paise', t.wallet_paise,
       'price', coalesce((t.billing ->> 'price')::numeric, (cfg -> 'plans' -> t.plan ->> 'price')::numeric), 'billing', t.billing,
       'domain', (select d.domain from public.tenant_domains d where d.tenant_id = t.id order by d.is_primary desc, d.created_at limit 1),

@@ -401,6 +401,9 @@ language sql stable security definer set search_path = public as $$
      where p.tenant_id = t.tenant_id
        and (t.audience in ('patients', 'everyone') or t.schedule = 'birthday' or (t.audience = 'roles' and 'patient' = any (t.roles)))
        and (t.schedule <> 'birthday' or to_char(p.date_of_birth, 'MM-DD') = to_char(now() at time zone 'Asia/Kolkata', 'MM-DD'))
+       -- phase 7: patients who said no to health tips & offers, and erased patients, get no custom messages
+       -- (to_jsonb: the columns are added later, in compliance.sql)
+       and coalesce((to_jsonb(p) ->> 'marketing_opt_out')::boolean, false) = false and (to_jsonb(p) ->> 'erased_at') is null
     union all
     select pr.id, pr.full_name, pr.phone, pr.email, 2 from public.profiles pr
      where pr.tenant_id = t.tenant_id and t.schedule <> 'birthday' and pr.role <> 'patient'
@@ -593,7 +596,8 @@ begin
     execute $c$ select cron.schedule('dch-appointment-reminders', '30 12 * * *', 'select public.queue_appointment_reminders()') $c$;  -- 18:00 IST
     -- Hospital Comrade renewal reminders to owners (phase 6); the function exists once billing.sql is loaded
     execute $c$ select cron.schedule('dch-billing-reminders', '0 4 * * *', 'select public.queue_billing_reminders()') $c$;  -- 09:30 IST
-    execute $c$ select cron.schedule('dch-outbox-cleanup', '15 21 * * 0', $d$delete from public.notification_outbox where created_at < now() - interval '400 days'$d$) $c$;
+    -- retention (phase 7): delivery log, audit logs, OTPs, enquiries… per Platform settings → Retention (was dch-outbox-cleanup)
+    execute $c$ select cron.schedule('dch-retention', '30 21 * * *', 'select public.run_retention()') $c$;  -- 03:00 IST
   elsif exists (select 1 from pg_extension where extname = 'pg_cron') then
     for j in execute $q$ select jobid from cron.job where jobname like 'dch-%' $q$ loop
       execute 'select cron.unschedule($1)' using j.jobid;

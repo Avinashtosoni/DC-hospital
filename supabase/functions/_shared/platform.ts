@@ -115,7 +115,9 @@ export const usageMonth = (now = Date.now()) => new Date(now + 5.5 * 3600_000).t
 
 /** OTPs always go out (patients must be able to book and sign in) and so do renewal reminders to the owner
  *  (an empty wallet must not hide "your plan ends") — they are still counted. */
-export const exemptFromLimit = (event: string) => event === 'otp' || event === 'password_otp' || event === 'billing_reminder'
+// platform / legal mail is never blocked by a plan's monthly limit or an empty wallet
+const EXEMPT_EVENTS = new Set(['otp', 'password_otp', 'billing_reminder', 'privacy_request', 'hospital_closing', 'incident_notice'])
+export const exemptFromLimit = (event: string) => EXEMPT_EVENTS.has(event)
 
 /** null when allowed, otherwise the reason (matches isPermanent: "allowance"). */
 export function overAllowance(m: Pick<Msg, 'event' | 'channel'>, used: number, tenant?: TenantMessaging | null): string | null {

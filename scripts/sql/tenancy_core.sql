@@ -17,6 +17,10 @@ create table if not exists public.tenants (
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+-- phase 7: offboarding — a closing hospital is read-only until the platform team purges it (after purge_after)
+alter table public.tenants add column if not exists closing_at timestamptz;
+alter table public.tenants add column if not exists purge_after timestamptz;
+alter table public.tenants add column if not exists close_reason text;
 create unique index if not exists tenants_one_primary on public.tenants (is_primary) where is_primary;
 
 -- the hospital every existing row belongs to (fixed id so upgrades and seeds agree)
@@ -232,6 +236,7 @@ begin
   if not found then return null; end if;
   if t.is_primary then return 'active'; end if;
   if t.status = 'suspended' then return 'suspended'; end if;
+  if t.closing_at is not null then return 'read_only'; end if;          -- closing (phase 7): export only
   if t.paid_until is null and t.trial_ends_at is null then return t.status; end if;
   if t.paid_until > now() then return 'active'; end if;
   if t.trial_ends_at > now() then return 'trial'; end if;
@@ -253,5 +258,6 @@ begin
   end if;
   v_end := nullif(greatest(coalesce(t.paid_until, '-infinity'::timestamptz), coalesce(t.trial_ends_at, '-infinity'::timestamptz)), '-infinity'::timestamptz);
   return jsonb_build_object('status', public.tenant_license(p_tenant), 'trial_ends_at', t.trial_ends_at, 'paid_until', t.paid_until,
-    'read_only_from', case when t.is_primary or v_end is null then null else v_end + make_interval(days => coalesce(v_grace, 7)) end);
+    'read_only_from', case when t.closing_at is not null then t.closing_at when t.is_primary or v_end is null then null else v_end + make_interval(days => coalesce(v_grace, 7)) end,
+    'closing_at', t.closing_at, 'purge_after', t.purge_after);
 end $$;

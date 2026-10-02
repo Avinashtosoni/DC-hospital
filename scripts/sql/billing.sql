@@ -91,7 +91,7 @@ do $cols$
 declare v_cols text;
 begin
   select string_agg(quote_ident(column_name), ', ' order by ordinal_position) into v_cols
-    from information_schema.columns where table_schema = 'public' and table_name = 'tenants' and column_name not in ('wallet_paise', 'billing');
+    from information_schema.columns where table_schema = 'public' and table_name = 'tenants' and column_name not in ('wallet_paise', 'billing', 'close_reason');
   execute 'revoke select on public.tenants from anon, authenticated';
   execute format('grant select (%s) on public.tenants to anon, authenticated', v_cols);
 end $cols$;
@@ -106,6 +106,8 @@ declare v_tenant uuid; v_state text;
 begin
   if coalesce(current_setting('role', true), '') not in ('anon', 'authenticated') then return coalesce(new, old); end if;
   if public.provider_role() in ('admin', 'finance') then return coalesce(new, old); end if;
+  -- privacy rights (consent withdrawal, erasure — phase 7) work even when the plan has ended
+  if current_setting('app.privacy', true) = 'on' then return coalesce(new, old); end if;
   v_tenant := case when tg_op = 'DELETE' then old.tenant_id else new.tenant_id end;
   v_state := public.tenant_license(v_tenant);
   if v_state in ('read_only', 'suspended') then
@@ -124,7 +126,8 @@ begin
             join information_schema.tables x on x.table_schema = c.table_schema and x.table_name = c.table_name and x.table_type = 'BASE TABLE'
            where c.table_schema = 'public' and c.column_name = 'tenant_id'
              and c.table_name not in ('tenant_domains', 'provider_assignments', 'provider_audit', 'profiles', 'push_tokens', 'password_reset_otps',
-                                      'notification_outbox', 'message_usage', 'audit_log', 'billing_payments', 'wallet_ledger')
+                                      'notification_outbox', 'message_usage', 'audit_log', 'billing_payments', 'wallet_ledger',
+                                      'privacy_requests', 'consent_log')  -- phase 7: patients' privacy rights work even when read-only
   loop
     execute format('drop trigger if exists trg_license_guard on public.%I', t);
     execute format('create trigger trg_license_guard before insert or update or delete on public.%I for each row execute function public.license_guard()', t);

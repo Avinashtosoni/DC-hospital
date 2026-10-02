@@ -16,7 +16,8 @@ const JOBS: Record<string, string> = {
   'dch-scheduled-messages': 'Send due custom / birthday messages — every 5 minutes',
   'dch-appointment-reminders': 'Queue tomorrow’s appointment reminders — daily 6:00 PM IST',
   'dch-billing-reminders': 'Remind hospital owners before their plan ends — daily 9:30 AM IST',
-  'dch-outbox-cleanup': 'Delete delivery log older than 400 days — weekly',
+  'dch-outbox-cleanup': 'Delete delivery log older than 400 days — weekly (old; turn automatic sending off and on to update)',
+  'dch-retention': 'Delete old logs, OTPs and enquiries per the retention policy — daily 3:00 AM IST',
 }
 
 export function CronCard({ secrets }: { ctx: TabCtx; secrets: SecretStatus[] | undefined }) {

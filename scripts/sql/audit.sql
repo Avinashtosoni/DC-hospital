@@ -43,6 +43,8 @@ declare
   v_role    text;
   k         text;
 begin
+  -- erasing a patient / purging a hospital (phase 7) must not copy the personal data it removes into the log
+  if current_setting('app.skip_audit', true) = 'on' then return coalesce(new, old); end if;
   if tg_op = 'UPDATE' then
     for k in select jsonb_object_keys(v_new) loop
       -- read_at / starred are personal inbox state (enquiries), not worth an audit entry
