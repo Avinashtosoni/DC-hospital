@@ -19,5 +19,5 @@
     "paths": { "@/*": ["src/*"] },
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "scripts", "vite.config.ts"]
+  "include": ["src", "control-panel/src", "scripts", "vite.config.ts"]
 }

@@ -31,6 +31,8 @@ self.addEventListener('fetch', (e) => {
   const fonts = url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com'
   if (url.origin !== self.location.origin && !fonts) return
   if (url.pathname === '/env.js' || url.pathname === '/sw.js' || url.pathname === '/healthz' || url.pathname.startsWith('/rest/') || url.pathname.startsWith('/functions/')) return
+  // the control panel is a separate app — never cache it as the hospital app's page
+  if (url.pathname === '/control-panel' || url.pathname.startsWith('/control-panel/')) return
 
   if (req.mode === 'navigate') {
     e.respondWith((async () => {

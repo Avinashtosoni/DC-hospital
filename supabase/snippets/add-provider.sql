@@ -1,3 +1,4 @@
+-- Prefer the control panel (https://<PLATFORM_DOMAIN>/control-panel/) — this snippet is the fallback (e.g. the first admin).
 -- ============================================================================================================
 -- Hospital Comrade — make an account a platform team member (until the provider panel exists).
 -- 1. The person signs up once anywhere (any hospital's address) with their work e-mail.

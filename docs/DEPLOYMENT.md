@@ -50,6 +50,7 @@ All of them are read when the container starts (`/env.js`), so changing one only
 
 - New Supabase project: `supabase/production.sql` (no demo data). Existing project: `supabase/upgrade-2026-10.sql`
   (safe to run again; oldest supported database: September 2026). Run on staging first.
+- Control panel (platform team): `https://<your app>/control-panel/` — served by the same container (nginx `location /control-panel/`).
 - After database changes, redeploy the functions: `supabase functions deploy notify`,
   `supabase functions deploy whatsapp-bot --no-verify-jwt`, `supabase functions deploy domains` and
   `supabase functions deploy billing --no-verify-jwt` (Razorpay secrets: see MULTI_TENANCY.md → Billing).

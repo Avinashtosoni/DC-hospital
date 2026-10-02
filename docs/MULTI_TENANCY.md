@@ -66,7 +66,7 @@ settings and sender identity. The Hospital Comrade team works through **provider
       Database: `module_locked()` / `module_guard()`; owner saves keep locked sections of `app_settings` 'app' and
       `site_content` 'settings' unchanged (billing & booking always save); CMS pages, `site_forms`,
       `notification_templates`, credentials, cron setup, "send now" and demo tools refuse a locked hospital.
-      Providers (any mode) are never locked. Switching modules per hospital comes with the provider panel (phase 5).
+      Providers (any mode) are never locked. Switch modules per hospital in the control panel (hospital → Settings).
 - [x] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store
   - `src/tenancy/demo.ts`: DC Hospital (primary, all modules) and City Care Clinic (`?hospital=citycare`, Clinic
     plan, trial, only Dashboard + Website forms unlocked). Each hospital has its own store, settings, website
@@ -190,13 +190,36 @@ settings and sender identity. The Hospital Comrade team works through **provider
 - Defaults to confirm: 14-day trial, 7-day grace, yearly = 10 months, rates above, included messages in `plans.ts`.
   Proper PDF invoices and the owner's full billing page are phase 6.
 
+### Phase 5 — control panel ✅
+A **separate app** at `https://<PLATFORM_DOMAIN>/control-panel/` (own page `control-panel/index.html`, own bundle; the
+hospital app never loads its code, the service worker never caches it, nginx serves it `noindex` and un-framed).
+Same container, same `env.js`, same Supabase login (only `provider_users` get in).
+- [x] **5.1 SQL** (`scripts/sql/control_panel.sql`, after billing; in the upgrade) — `cp_me`, `cp_overview`, `cp_hospitals`,
+  `cp_hospital`, `cp_create_hospital` (replaces `add-hospital.sql`: checks short name / prefix / plan / domain / owner
+  e-mail — one account = one hospital), `cp_update_hospital` (name, prefix, notes, **module locks**, owner e-mail until
+  the owner signs up), `cp_billing` (pins the hospital and calls `provider_billing`), `cp_team` / `cp_save_provider`
+  (replaces `add-provider.sql`; can't remove your own admin), `cp_payments`, `cp_audit`, `cp_settings` /
+  `cp_save_billing_settings` (prices, GST, trial / grace, rates, seller; validated, merged). Every function checks the
+  caller: admin all · finance assigned hospitals + billing · support assigned hospitals, read-only. All actions →
+  `provider_audit`, filed under the hospital.
+- [x] **5.2 App** (`control-panel/src`) — Overview (MRR, received 30 days, wallets, needs attention, messages, new
+  leads), Hospitals (search / filter, add), hospital page (licence, people, addresses, usage · record payment, wallet
+  adjust, plan & special price, extend trial, suspend / resume · module locks & details · activity), Payments (CSV),
+  Leads (status + notes, optimistic), Team, Audit log, Platform settings. Menu and routes follow the role.
+- [x] **5.3 Demo** — same rules in the browser (`control-panel/src/demo.ts`); the demo hospitals share the app's demo
+  billing, and name / prefix / module locks set here apply to the demo app on its next load.
+- [x] **5.4 Verified** — 11 SQL tests (access per role, create / edit, billing, overview, team, settings), 5 demo tests,
+  browser E2E for admin / support / finance; hospital app unchanged.
+- Not yet: deleting a hospital (do it by suspending), domain management stays in the hospital app (Settings → Domain,
+  where the Cloudflare check runs), "sudo" re-auth for admin actions.
+
 ### Later phases
-5 Provider panel · 6 Owner billing page · 7 Ops & compliance · 8 Launch
+6 Owner billing page · 7 Ops & compliance · 8 Launch
 
 ## Going multi-hospital (runbook)
 
-Phase 1 is complete: the database, the app and the Edge Functions keep hospitals apart. Until the provider panel
-(phase 5) exists, hospitals and team members are added with SQL snippets.
+Hospitals and team members are added in the **control panel** (`https://<PLATFORM_DOMAIN>/control-panel/`). The SQL
+snippets in `supabase/snippets/` still work as a fallback (e.g. for the very first admin).
 
 1. **Database** — new project: run `supabase/production.sql` (first change the owner e-mail on the line marked ✏️). Existing
    single-hospital project (September 2026 or newer): run `supabase/upgrade-2026-10.sql` — everything joins the first
@@ -205,8 +228,9 @@ Phase 1 is complete: the database, the app and the Edge Functions keep hospitals
    and `supabase functions deploy domains` (after the SQL: the new functions need the new `claim_notifications`).
 3. **App** — Coolify → environment: `TENANCY=multi`, `PLATFORM_NAME`, `PLATFORM_DOMAIN`, `REQUIRE_BACKEND=true` → restart.
    With one hospital nothing looks different.
-4. **Add a hospital** — Supabase → SQL editor → `supabase/snippets/add-hospital.sql` (edit the ✏️ values). It creates
-   the hospital, its address, its built-in website forms and name, and remembers the owner e-mail.
+4. **Add a hospital** — control panel → Hospitals → **Add hospital** (name, short name, prefix, owner e-mail, address,
+   plan, trial or paid, which settings the hospital may change). It creates the hospital, its address, its built-in
+   website forms and name, and remembers the owner e-mail.
 5. **Its address** — sign in as a provider admin on any hospital address, pick the hospital in the banner,
    Settings → **Domain** → add `www.theirhospital.in` and send the owner the CNAME shown there (the owner sees it in the
    same tab). With Cloudflare for SaaS set up (below) SSL follows automatically. Until then, `https://<app>/?hospital=<slug>`
@@ -215,20 +239,21 @@ Phase 1 is complete: the database, the app and the Edge Functions keep hospitals
    website (if the *Website* module is theirs), settings and staff invites. Messages go out through Hospital Comrade's
    shared accounts from day one; the owner may switch any channel to their own credentials (Settings → Notifications;
    WhatsApp bot webhook: the address shown there, `…/whatsapp-bot?hospital=<slug>` — the bot needs their own number).
-7. **Platform team** — each person signs up once, then `supabase/snippets/add-provider.sql` (admin / support / finance).
+7. **Platform team** — the **first admin**: sign up once, then run `supabase/snippets/add-provider.sql` with role `admin`.
+   Everyone after that: they sign up once (platform site, a work e-mail not used at any hospital), then control panel →
+   Team → **Add member** (admin / support / finance + hospitals).
 8. **Check** — sign in as the owner on the new address (sees an empty hospital), as the first hospital's owner (sees
    nothing of the new one), as support (banner, read-only patients).
 
-Known limits until later phases: platform messaging has a monthly allowance but no wallet / billing yet (phase 4); the provider panel (phase 5)
-replaces the snippets and must set `app.tenant_move = 'on'` while moving a profile, like `add-provider.sql` does.
+Plans, trials, payments and wallets: see *Billing (Razorpay)* below and the control panel's hospital page.
 
 ### The platform domain and the demo
 - `https://<PLATFORM_DOMAIN>` is the Hospital Comrade product page. Never map it (or `www.`) to a hospital.
 - Demo: point `demo.<PLATFORM_DOMAIN>` at the same app. In demo mode (no database) any host other than the platform
   domain opens the demo hospital; with a database, map `demo.<PLATFORM_DOMAIN>` to the demo hospital in Settings → Domain.
   The product page's "Live demo" button uses `/?hospital=main` (and `citycare` for the clinic).
-- Call-back requests: Supabase → Table editor → `platform_leads` (provider admins can also `select` them with their
-  login; the provider panel will list them in phase 5).
+- Call-back requests: control panel → **Leads** (admins).
+- The control panel lives at `/control-panel/` on every address of the app; only platform team accounts can sign in.
 
 ### Cloudflare for SaaS (once, for automatic SSL on hospitals' domains)
 1. Cloudflare → the zone of `PLATFORM_DOMAIN` → **SSL/TLS → Custom Hostnames** → enable (100 hostnames included, then

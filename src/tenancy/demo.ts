@@ -25,6 +25,22 @@ export const DEMO_TENANTS: DemoTenant[] = [
     code: 'CCC', domain: 'citycareclinic.in', email: 'citycare.demo' },
 ]
 
+/** control panel (demo mode) edits — name, record prefix, module locks — kept in this browser */
+export const DEMO_TENANT_EDITS_KEY = 'dch:cp:tenant-edits:v1'
+export type DemoTenantEdit = Partial<Pick<DemoTenant, 'name' | 'code' | 'modules'>>
+export function applyDemoTenantEdits() {
+  let edits: Record<string, DemoTenantEdit> = {}
+  try { edits = JSON.parse(globalThis.localStorage?.getItem(DEMO_TENANT_EDITS_KEY) ?? '{}') ?? {} } catch { /* none */ }
+  for (const t of DEMO_TENANTS) {
+    const e = edits[t.id]
+    if (!e) continue
+    if (typeof e.name === 'string' && e.name.trim()) t.name = e.name.trim()
+    if (typeof e.code === 'string' && /^[A-Z]{2,6}$/.test(e.code)) t.code = e.code
+    if (e.modules && typeof e.modules === 'object') t.modules = e.modules
+  }
+}
+applyDemoTenantEdits()
+
 export const demoTenantBySlug = (slug: string | null | undefined) => DEMO_TENANTS.find((t) => t.slug === slug)
 export const demoTenantById = (id: string | null | undefined) => DEMO_TENANTS.find((t) => t.id === id)
 /** the hospital whose store this tab uses: the provider's choice, else the website's hospital */

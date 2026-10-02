@@ -1,3 +1,4 @@
+-- Prefer the control panel (https://<PLATFORM_DOMAIN>/control-panel/) — this snippet is the fallback (e.g. the first admin).
 -- ============================================================================================================
 -- Hospital Comrade — add a hospital (until the provider panel exists). Supabase → SQL editor → paste → edit the
 -- values marked ✏️ → Run. Then send the owner to the hospital's address to sign up with the owner e-mail: that
