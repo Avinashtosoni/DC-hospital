@@ -25,7 +25,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
-import { deliverRouted, platformCtx, platformStatus, sourceOf, usageMonth, type Meter, type Source } from '../_shared/platform.ts'
+import { deliverRouted, platformCtx, platformDetails, platformStatus, sourceOf, usageMonth, type Meter, type Source } from '../_shared/platform.ts'
 import { corsHeaders, groupByTenant, resolveCaller, type Caller } from '../_shared/tenant.ts'
 
 const cors = corsHeaders()
@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
   let body: any = {}
   try { body = await req.json() } catch { /* empty */ }
 
-  if (body.ping) return json({ ok: true, message: 'notify function is deployed and reachable', platform: platformStatus((k) => Deno.env.get(k)) })
+  if (body.ping) return json({ ok: true, message: 'notify function is deployed and reachable', platform: platformStatus((k) => Deno.env.get(k)), platform_details: platformDetails((k) => Deno.env.get(k)) })
 
   if (body.test) {
     // owner only

@@ -18,7 +18,9 @@ import { CHANNEL_META } from './messaging/channelMeta'
 import { CustomMessages } from './messaging/CustomMessages'
 import { CronCard } from './messaging/CronCard'
 import { UsageCard } from './messaging/UsageCard'
-import { supabaseUrl } from '../../lib/supabase'
+import { PlatformAdminCard, PlatformPanel, SourcePicker, isPlatformChannel, platformStatus, usePlatformInfo } from './messaging/PlatformMessaging'
+import { tenancyEnabled } from '../../tenancy/state'
+import { platformName, supabaseUrl } from '../../lib/supabase'
 import { webhookUrl } from '../../../supabase/functions/_shared/tenant'
 
 const LOG_QK = ['notify-log'] as const
@@ -204,7 +206,12 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
     onError: (e) => setResult({ ok: false, message: (e as Error).message }),
   })
   const toProblem = to.trim() ? recipientProblem(channel, to) : null
-  const status = !cfg.enabled ? { tone: 'slate' as Tone, label: 'Off' } : issues.length ? { tone: 'amber' as Tone, label: 'Setup incomplete' } : { tone: 'green' as Tone, label: 'Ready' }
+  // phase 3: hospitals on the platform can send through Hospital Comrade's shared account instead of their own
+  const tenancy = tenancyEnabled() && isPlatformChannel(channel)
+  const info = usePlatformInfo(tenancy)
+  const onPlatform = tenancy && isPlatformChannel(channel) && (cfg as { source?: string }).source === 'platform'
+  const status: { tone: Tone; label: string } = onPlatform && isPlatformChannel(channel) ? platformStatus(info.data, channel, cfg.enabled)
+    : !cfg.enabled ? { tone: 'slate', label: 'Off' } : issues.length ? { tone: 'amber', label: 'Setup incomplete' } : { tone: 'green', label: 'Ready' }
   const blockTest = ctx.dirty && settingsStore.mode === 'supabase'
   return (
     <Section title={<span className="flex items-center gap-2">{meta.label}<Badge tone={status.tone} dot>{status.label}</Badge></span>} icon={meta.icon}
@@ -216,9 +223,12 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
         </button></label>}>
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <div className="space-y-4">
-          {channel === 'sms' && <SmsForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.sms} />}
-          {channel === 'whatsapp' && <WhatsappForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.whatsapp} />}
-          {channel === 'email' && <EmailForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.email} />}
+          {tenancy && isPlatformChannel(channel) && <SourcePicker channel={channel} ctx={ctx} />}
+          {onPlatform && isPlatformChannel(channel) ? <PlatformPanel channel={channel} info={info} /> : <>
+            {channel === 'sms' && <SmsForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.sms} />}
+            {channel === 'whatsapp' && <WhatsappForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.whatsapp} />}
+            {channel === 'email' && <EmailForm ctx={ctx} secrets={secrets} cfg={ctx.app.notifications.email} />}
+          </>}
           {channel === 'push' && <PushForm ctx={ctx} secrets={secrets} />}
         </div>
         <div className="space-y-3 rounded-xl bg-slate-50 p-4">
@@ -415,7 +425,7 @@ function DeliveryLog() {
                       <tr key={r.id} className="border-b border-slate-50 align-top last:border-0">
                         <td className="whitespace-nowrap px-5 py-2.5 text-xs text-slate-500">{fmtDate(r.created_at)}<br />{fmtTime(format(new Date(r.created_at), 'HH:mm'))}</td>
                         <td className="px-3 py-2.5 text-slate-700">{r.event === 'test' ? 'Test message' : r.event.startsWith('tpl:') ? <span className="inline-flex items-center gap-1">Custom message<Badge tone="violet">custom</Badge></span> : EVENTS.find((e) => e.id === r.event)?.label ?? r.event}</td>
-                        <td className="px-3 py-2.5"><span className="inline-flex items-center gap-1.5 text-slate-600">{CH[r.channel]?.icon}{CH[r.channel]?.label ?? r.channel}</span></td>
+                        <td className="px-3 py-2.5"><span className="inline-flex items-center gap-1.5 text-slate-600">{CH[r.channel]?.icon}{CH[r.channel]?.label ?? r.channel}</span>{r.source === 'platform' && <p className="mt-0.5 text-[11px] text-brand-700">via {platformName || 'Hospital Comrade'}</p>}</td>
                         <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{r.channel === 'push' ? <span className="font-sans">a person’s devices</span> : r.recipient}</td>
                         <td className="px-5 py-2.5"><Badge tone={STATUS_TONE[r.status] ?? 'slate'}>{r.status}</Badge>{r.attempts > 1 && <span className="ml-1 text-[11px] text-slate-400">×{r.attempts}</span>}
                           {r.error && <p className="mt-1 max-w-xs break-words text-xs text-rose-600">{r.error}</p>}</td>
@@ -434,6 +444,7 @@ export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
   const secrets = useQuery({ queryKey: SECRETS_QK, queryFn: settingsStore.secrets })
   const ping = useMutation({ mutationFn: settingsStore.ping })
   const live = settingsStore.mode === 'supabase'
+  const { context } = useAuth()
   return (
     <div className="space-y-6">
       <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 text-sm', live ? 'border-brand-200 bg-brand-50/60 text-brand-900' : 'border-amber-200 bg-amber-50 text-amber-900')}>
@@ -447,6 +458,7 @@ export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
       </div>
       {secrets.isError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">Could not load saved credentials: {(secrets.error as Error).message}</p>}
       <UsageCard ctx={ctx} />
+      {tenancyEnabled() && context?.provider_role === 'admin' && <PlatformAdminCard />}
       {(['sms', 'whatsapp', 'email', 'push'] as Channel[]).map((c) => <ChannelCard key={c} channel={c} ctx={ctx} secrets={secrets.data} />)}
       <ChatbotCard ctx={ctx} secrets={secrets.data} />
       <EventsMatrix ctx={ctx} />
@@ -484,6 +496,7 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
                 {supabaseUrl && <Button size="sm" variant="outline" icon={<Copy className="h-3.5 w-3.5" />} onClick={copy}>Copy</Button>}</div>
             </li>
           </ol>
+          {w.source === 'platform' && tenancyEnabled() && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">WhatsApp is set to the <b>shared</b> account, which can’t receive your patients’ chats. To use the chatbot, switch WhatsApp to <b>Your own account</b> above.</p>}
           {w.provider === 'meta' && <>
             <p>In Meta → WhatsApp → Configuration → Webhook, paste the URL, enter the verify token below and subscribe to <b>messages</b>.</p>
             <SecretInput name="whatsapp_verify_token" secrets={secrets} />

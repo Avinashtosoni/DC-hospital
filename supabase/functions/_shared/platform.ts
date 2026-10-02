@@ -62,6 +62,12 @@ export const platformStatus = (env: Env) => {
   return Object.fromEntries(PLATFORM_CHANNELS.map((c) => [c, a[c]?.provider ?? null])) as Record<PlatformChannel, string | null>
 }
 
+/** Public facts about the shared accounts shown to hospitals (sender ID, from-address, WhatsApp number) — no keys. */
+export const platformDetails = (env: Env) => {
+  const v = (k: string) => (env(k) ?? '').trim()
+  return { smsSenderId: v('PLATFORM_SMS_SENDER_ID').toUpperCase() || null, emailFrom: v('PLATFORM_EMAIL_FROM') || null, whatsappNumber: v('PLATFORM_WHATSAPP_NUMBER') || null }
+}
+
 export const sourceOf = (n: any, channel: Channel): Source => (channel !== 'push' && n?.[channel]?.source === 'platform' ? 'platform' : 'own')
 
 /**

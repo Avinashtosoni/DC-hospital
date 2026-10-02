@@ -6,6 +6,7 @@
  */
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import { demoKey } from '../tenancy/demo'
+import { tenancyEnabled } from '../tenancy/state'
 import type { AppSettings, Channel, NotifyEvent } from './types'
 import { SECRET_FIELDS } from './types'
 
@@ -14,6 +15,8 @@ export interface SecretStatus { key: string; hint: string; updated_at: string; u
 export interface OutboxRow {
   id: string; event: NotifyEvent | 'test' | `tpl:${string}`; channel: Channel; recipient: string; status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'simulated'
   error: string | null; attempts: number; provider_ref: string | null; created_at: string; sent_at: string | null
+  /** phase 3: 'platform' = sent through Hospital Comrade's shared account */
+  source?: 'own' | 'platform' | null
 }
 export interface SendResult { ok: boolean; message: string; provider_ref?: string | null }
 
@@ -47,7 +50,11 @@ const remote = {
     if (error) throw new Error(error.message)
   },
   async log(): Promise<OutboxRow[]> {
-    const { data, error } = await sb().from('notification_outbox').select('id, event, channel, recipient, status, error, attempts, provider_ref, created_at, sent_at').order('created_at', { ascending: false }).limit(100)
+    const cols = 'id, event, channel, recipient, status, error, attempts, provider_ref, created_at, sent_at'
+    const q = (c: string) => sb().from('notification_outbox').select(c).order('created_at', { ascending: false }).limit(100) as unknown as Promise<{ data: unknown[] | null; error: { message: string } | null }>
+    let { data, error } = await q(`${cols}, source`)
+    // database not upgraded to phase 3 yet (no source column) → the log still works
+    if (error && /source/.test(error.message)) ({ data, error } = await q(cols))
     if (error) throw new Error(error.message)
     return (data ?? []) as OutboxRow[]
   },
@@ -152,6 +159,8 @@ export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretS
   const has = (k: string) => secrets.some((x) => x.key === k)
   const out: string[] = []
   const n = s.notifications
+  // Hospital Comrade's shared account: nothing for the hospital to set up (availability is shown by the panel)
+  if (channel !== 'push' && tenancyEnabled() && n[channel]?.source === 'platform') return out
   if (channel === 'email') {
     const e = n.email
     if (!e.fromEmail) out.push('Sender email is required')
