@@ -99,8 +99,11 @@ async function supabase(url: URL, init: RequestInit & { headers: Headers }): Pro
     }
     if (fn === 'billing_quote') {
       if (body.p_kind === 'plan' && body.p_months !== 1 && body.p_months !== 12) return new Response('{"message":"Choose 1 month or 12 months."}', { status: 400 })
-      const base = body.p_kind === 'plan' ? 99900 * (body.p_months === 12 ? 10 : 1) : Math.round(body.p_amount * 100)
-      return reply({ kind: body.p_kind, plan: body.p_kind === 'plan' ? 'clinic' : null, months: body.p_kind === 'plan' ? body.p_months : null, base_paise: base, gst_paise: Math.round(base * 0.18), total_paise: base + Math.round(base * 0.18) }, h)
+      const plan = body.p_kind === 'plan' ? body.p_plan ?? 'clinic' : null
+      const price: Record<string, number> = { clinic: 99900, hospital: 299900 }
+      if (plan && !price[plan]) return new Response('{"message":"Unknown plan"}', { status: 400 })
+      const base = plan ? price[plan] * (body.p_months === 12 ? 10 : 1) : Math.round(body.p_amount * 100)
+      return reply({ kind: body.p_kind, plan, months: body.p_kind === 'plan' ? body.p_months : null, base_paise: base, gst_paise: Math.round(base * 0.18), total_paise: base + Math.round(base * 0.18) }, h)
     }
     if (fn === 'apply_payment') {
       const row = db.billing_payments.find((r) => r.id === body.p_payment)
@@ -429,13 +432,15 @@ Deno.test('phase 4: beyond the included messages an empty wallet stops platform 
   const month = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 7) + '-01'
   db.message_usage = [{ tenant_id: CITY, month, channel: 'sms', source: 'platform', sent: 100, failed: 0 }]
   try {
-    db.notification_outbox = [outRow('w1', CITY, '9810000041'), { ...outRow('w2', CITY, '9810000042'), event: 'otp', vars: { code: '123456' } }]
+    db.notification_outbox = [outRow('w1', CITY, '9810000041'), { ...outRow('w2', CITY, '9810000042'), event: 'otp', vars: { code: '123456' } },
+      { ...outRow('w3', CITY, '9810000043'), event: 'billing_reminder' }]
       .map((r) => ({ ...r, status: 'sending' }))
     claimRows = db.notification_outbox.map((r) => ({ ...r }))
-    assertEquals(await (await post(notify, { flush: true }, SERVICE)).json(), { processed: 2, sent: 1, failed: 1 })
+    assertEquals(await (await post(notify, { flush: true }, SERVICE)).json(), { processed: 3, sent: 2, failed: 1 })
     const byId = Object.fromEntries(db.notification_outbox.map((r) => [r.id, r]))
     assertEquals(byId.w1.status, 'failed'); assert(/wallet balance is too low/.test(byId.w1.error))
     assertEquals(byId.w2.status, 'sent')
+    assertEquals(byId.w3.status, 'sent')                            // phase 6: "your plan ends" must reach the owner
   } finally {
     city.data = before; db.message_usage = []; db.platform_settings = db.platform_settings.filter((r) => r.key !== 'billing')
     delete tenant.plan; delete tenant.wallet_paise; delete tenant.billing
@@ -501,5 +506,16 @@ Deno.test('billing: the webhook applies a payment when the browser never returne
     // bad plan length → the database's message
     const bad = await post(billing, { action: 'order', kind: 'plan', months: 3 }, 'tok-city-owner')
     assertEquals(bad.status, 400); assert(/1 month or 12/.test((await bad.json()).error))
+  } finally { rzpEnv(false) }
+})
+
+Deno.test('billing (phase 6): an order may renew on another plan — priced by the database, recorded on the payment', async () => {
+  reset(); rzpEnv(true); rzpCalls.length = 0; db.billing_payments = []
+  try {
+    const o = await (await post(billing, { action: 'order', kind: 'plan', months: 1, plan: 'hospital' }, 'tok-city-owner')).json()
+    assertEquals([o.amount, o.description], [353882, 'Hospital plan · 1 month'])
+    assertEquals(db.billing_payments[0].plan, 'hospital')
+    const bad = await post(billing, { action: 'order', kind: 'plan', months: 1, plan: 'gold' }, 'tok-city-owner')
+    assertEquals(bad.status, 400)
   } finally { rzpEnv(false) }
 })

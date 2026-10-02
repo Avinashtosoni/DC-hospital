@@ -5,8 +5,8 @@
  */
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import { activeDemoTenant } from '../tenancy/demo'
-import { demoApplyPayment, demoBilling, demoProviderBilling, demoQuote, demoSummary, saveDemoBilling } from './demo'
-import type { BillingSummary, LedgerRow, PaymentRow, ProviderBillingAction, Quote } from './types'
+import { demoApplyPayment, demoBilling, demoChangeTrialPlan, demoProviderBilling, demoQuote, demoSummary, demoUsageHistory, saveDemoBilling } from './demo'
+import type { BillingSummary, LedgerRow, PaymentRow, ProviderBillingAction, Quote, UsageMonth } from './types'
 
 export const BILLING_QK = ['hc-billing'] as const
 const wait = (ms = 300) => new Promise((r) => setTimeout(r, ms))
@@ -72,14 +72,28 @@ export const billingApi = {
     return rpc<BillingSummary | null>('billing_summary')
   },
 
-  async quote(kind: 'plan' | 'wallet', months = 1, amount?: number): Promise<Quote> {
-    if (!isSupabaseConfigured) return demoQuote(demoId(), kind, months, amount)
-    return rpc<Quote>('my_billing_quote', { p_kind: kind, p_months: months, p_amount: kind === 'wallet' ? amount ?? null : null })
+  /** plan: renew on another plan (switches when paid) */
+  async quote(kind: 'plan' | 'wallet', months = 1, amount?: number, plan?: string | null): Promise<Quote> {
+    if (!isSupabaseConfigured) return demoQuote(demoId(), kind, months, amount, plan)
+    return rpc<Quote>('my_billing_quote', { p_kind: kind, p_months: months, p_amount: kind === 'wallet' ? amount ?? null : null, p_plan: kind === 'plan' ? plan ?? null : null })
+  },
+
+  /** messages per month for the usage chart (oldest first) */
+  async usageHistory(months = 6): Promise<UsageMonth[]> {
+    if (!isSupabaseConfigured) { await wait(150); return demoUsageHistory(demoId(), months) }
+    const rows = await rpc<UsageMonth[]>('billing_usage_history', { p_months: months })
+    return (rows ?? []).map((r) => ({ ...r, own: Number(r.own), charged_paise: Number(r.charged_paise) }))
+  },
+
+  /** during the free trial only: switch plans straight away */
+  async changeTrialPlan(plan: string): Promise<void> {
+    if (!isSupabaseConfigured) { await wait(); demoChangeTrialPlan(demoId(), plan); return }
+    await rpc('change_trial_plan', { p_plan: plan })
   },
 
   async payments(): Promise<PaymentRow[]> {
     if (!isSupabaseConfigured) return demoBilling(demoId())?.payments.slice(0, 50) ?? []
-    const { data, error } = await supabase!.from('billing_payments' as never).select('id, created_at, kind, plan, months, base_paise, gst_paise, total_paise, status, provider, method, paid_at, invoice_no, period_from, period_to')
+    const { data, error } = await supabase!.from('billing_payments' as never).select('id, created_at, kind, plan, months, base_paise, gst_paise, total_paise, status, provider, method, paid_at, invoice_no, period_from, period_to, buyer, seller, payment_id')
       .neq('status', 'created').order('created_at', { ascending: false }).limit(50)
     if (error) throw new Error(error.message)
     return (data ?? []) as unknown as PaymentRow[]
@@ -100,13 +114,13 @@ export const billingApi = {
   },
 
   /** pay for a plan renewal or a wallet top-up; resolves with the invoice number */
-  async pay(kind: 'plan' | 'wallet', opts: { months?: number; amount?: number }, prefill: { name?: string; email?: string; contact?: string } = {}): Promise<string> {
+  async pay(kind: 'plan' | 'wallet', opts: { months?: number; amount?: number; plan?: string | null }, prefill: { name?: string; email?: string; contact?: string } = {}): Promise<string> {
     if (!isSupabaseConfigured) {
-      const q = demoQuote(demoId(), kind, opts.months ?? 1, opts.amount)
+      const q = demoQuote(demoId(), kind, opts.months ?? 1, opts.amount, opts.plan)
       await wait(900)
       return demoApplyPayment(demoId(), q, 'razorpay', 'upi')
     }
-    const order = await invoke<RzpOrder>({ action: 'order', kind, months: opts.months ?? 1, amount: opts.amount })
+    const order = await invoke<RzpOrder>({ action: 'order', kind, months: opts.months ?? 1, amount: opts.amount, plan: kind === 'plan' ? opts.plan ?? undefined : undefined })
     const r = await checkout(order, prefill)
     const done = await invoke<{ invoice_no: string }>({ action: 'verify', order_id: r.razorpay_order_id, payment_id: r.razorpay_payment_id, signature: r.razorpay_signature })
     return done.invoice_no

@@ -40,7 +40,7 @@ export function LicenseBanner() {
       <Icon className="h-4 w-4 shrink-0" />
       <p className="min-w-0 flex-1"><b className="font-semibold">{b.title}.</b> {b.text}</p>
       {b.cta && !onPlanTab && (
-        <Link to="/settings?tab=plan" className={cn('shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition',
+        <Link to="/billing" className={cn('shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition',
           b.tone === 'danger' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-brand-900 hover:bg-brand-800')}>
           {context?.license?.status === 'trial' ? 'Choose a plan' : 'Renew now'}
         </Link>

@@ -19,6 +19,22 @@ export interface BillingSummary {
   buyer: { legalName: string; gstin: string; address: string }
   /** this month's messages on Hospital Comrade's shared accounts */
   usage: Partial<Record<Channel, number>>
+  /** phase 6 — the plan picker: every plan's monthly price (null = priced individually) and allowance */
+  plans?: Record<string, { price: number | null; included: Partial<Record<Channel, number>> }>
+  /** a price agreed with the team — the owner can't switch plans themselves */
+  custom_price?: boolean
+  /** printed on new invoices (paid invoices keep their own copy) */
+  seller?: Seller
+}
+
+export interface Seller { name: string; gstin: string; address: string; state: string; email: string; sac?: string }
+
+/** public.billing_usage_history() — one row per month, oldest first */
+export interface UsageMonth {
+  month: string               // YYYY-MM
+  sent: Partial<Record<Channel, number>>
+  own: number                 // sent on the hospital's own accounts (free)
+  charged_paise: number       // charged to the wallet beyond the allowance
 }
 
 /** public.billing_quote() */
@@ -62,6 +78,10 @@ export interface PaymentRow {
   invoice_no: string | null
   period_from: string | null
   period_to: string | null
+  /** buyer / seller as printed on the invoice when it was paid */
+  buyer?: { legalName?: string; gstin?: string; address?: string } | null
+  seller?: Seller | null
+  payment_id?: string | null
 }
 
 export type ProviderBillingAction = 'manual_payment' | 'wallet_adjust' | 'extend_trial' | 'set_plan' | 'suspend' | 'resume' | 'demo_end_trial'

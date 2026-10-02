@@ -1,5 +1,5 @@
 import {
-  BarChart3, BedDouble, Building2, CalendarCheck, ClipboardList, CreditCard, FlaskConical, HeartPulse, LayoutDashboard,
+  BadgeIndianRupee, BarChart3, BedDouble, Building2, CalendarCheck, ClipboardList, CreditCard, FlaskConical, HeartPulse, LayoutDashboard,
   CalendarOff, CircleUserRound, History, Globe, Inbox, Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, Star, type LucideIcon,
 } from 'lucide-react'
 import type { Role } from '../../types'
@@ -35,6 +35,8 @@ export const NAV: NavSection[] = [
     { label: (r) => (r === 'patient' ? 'My Payments' : 'Payments'), path: '/payments', icon: CreditCard, roles: ['owner', 'accountant', 'receptionist', 'patient'] },
     { label: 'Expenses', path: '/expenses', icon: Wallet, roles: ['owner', 'accountant'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, roles: ['owner', 'accountant'] },
+    // the hospital's own Hospital Comrade subscription — only on the platform (hidden by useNavLocked otherwise)
+    { label: 'Billing & plan', path: '/billing', icon: BadgeIndianRupee, roles: ['owner', 'accountant'] },
   ] },
   { title: 'Website', items: [
     { label: 'Website CMS', path: '/cms', icon: Globe, roles: ['owner'] },

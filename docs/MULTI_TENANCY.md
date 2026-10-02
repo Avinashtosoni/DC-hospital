@@ -188,7 +188,7 @@ settings and sender identity. The Hospital Comrade team works through **provider
   idempotent payments, RLS, column grants, provider tools), 16 Edge Function tests (order / verify / webhook with
   Razorpay mocked, wallet stop), browser: owner pays + tops up, admin → read-only banner.
 - Defaults to confirm: 14-day trial, 7-day grace, yearly = 10 months, rates above, included messages in `plans.ts`.
-  Proper PDF invoices and the owner's full billing page are phase 6.
+  PDF invoices and the owner's billing page: phase 6 below.
 
 ### Phase 5 — control panel ✅
 A **separate app** at `https://<PLATFORM_DOMAIN>/control-panel/` (own page `control-panel/index.html`, own bundle; the
@@ -213,8 +213,33 @@ Same container, same `env.js`, same Supabase login (only `provider_users` get in
 - Not yet: deleting a hospital (do it by suspending), domain management stays in the hospital app (Settings → Domain,
   where the Cloudflare check runs), "sudo" re-auth for admin actions.
 
+### Phase 6 — owner billing page ✅
+**Billing & plan** (`/billing`, sidebar → Finance) for the owner and accountant (accountant: read-only, can't pay) of
+hospitals on the platform; hidden on the platform's own hospital and single installs. Settings → Plan & wallet and the
+licence banner now lead here (old `?tab=plan` links redirect).
+- [x] **6.1 SQL** (`scripts/sql/billing.sql`, in the upgrade) — `billing_quote` / `my_billing_quote` take a target
+  plan (`p_plan`): renewing on another plan is priced at that plan and the plan **switches when the payment arrives**
+  (the new period starts after the current one); custom-priced hospitals and "Custom" are refused. `change_trial_plan`
+  (owner, trial only, nothing paid): instant switch. `billing_summary` adds `plans`, `custom_price`, `seller`.
+  `billing_payments.seller` keeps the seller as it was when the invoice was numbered. `billing_usage_history(months)`
+  (owner / accountant). `queue_billing_reminders()` — e-mail + push to the owner 7 / 3 / 1 days before the trial / plan
+  ends and once when grace starts (once per milestone and end date), daily 09:30 IST as cron job
+  `dch-billing-reminders`. Reminders go out even with an empty wallet (like OTPs) but still count as usage.
+  Provider manual payments can name a plan too.
+- [x] **6.2 App** (`src/pages/billing/BillingPage.tsx`) — plan + renewal (1 / 12 months), compare plans (switch now
+  in the trial, "Renew on …" afterwards, "Talk to us" for Custom), wallet, 6-month usage chart + charges, invoices with
+  **PDF tax invoice** (`src/billing/invoicePdf.ts`, lazy jsPDF: seller / buyer GSTIN, place of supply from the buyer's
+  GSTIN, CGST + SGST same state / IGST other state, SAC, amount in words), wallet statement **CSV**, invoice details.
+  Control panel → Platform settings → seller **SAC code**.
+- [x] **6.3 Verified** — 6 new SQL tests + 1 provider check, 5 browser-side tests, 17 Edge Function tests (order on
+  another plan, reminders pass the wallet stop), browser E2E: owner trial switch → pay on Hospital → renew on Clinic
+  quote → PDF + CSV download; accountant read-only; primary hospital has no Billing.
+- To confirm: **SAC 998315** (default; ask your CA), place of supply without a buyer GSTIN = the seller's state.
+- Existing installs: apply `supabase/upgrade-2026-10.sql`, then **switch automatic delivery off and on once**
+  (Settings → Notifications) so the new cron job is scheduled; the hospital's e-mail channel must be on for reminders.
+
 ### Later phases
-6 Owner billing page · 7 Ops & compliance · 8 Launch
+7 Ops & compliance · 8 Launch
 
 ## Going multi-hospital (runbook)
 

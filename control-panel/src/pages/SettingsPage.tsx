@@ -88,6 +88,7 @@ export function SettingsPage() {
               <Field label="Address" className="sm:col-span-2"><Input value={f.seller.address} onChange={(e) => set({ seller: { ...f.seller, address: e.target.value } })} /></Field>
               <Field label="State"><Input value={f.seller.state} onChange={(e) => set({ seller: { ...f.seller, state: e.target.value } })} /></Field>
               <Field label="Billing e-mail"><Input type="email" value={f.seller.email} onChange={(e) => set({ seller: { ...f.seller, email: e.target.value } })} /></Field>
+              <Field label="SAC code" hint="Printed on invoices — confirm with your CA (default 998315)"><Input value={f.seller.sac ?? ''} placeholder="998315" maxLength={8} onChange={(e) => set({ seller: { ...f.seller, sac: e.target.value.replace(/\D/g, '') } })} /></Field>
             </div>
           </Section>
           <Section title="Brand & domain" subtitle="Set on the server (PLATFORM_NAME / PLATFORM_DOMAIN environment variables).">

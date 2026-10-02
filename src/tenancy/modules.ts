@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from '../auth/AuthProvider'
-import type { MyContext } from './state'
+import { isPrimaryTenant, tenancyEnabled, type MyContext } from './state'
 
 /**
  * Settings modules a hospital can be locked out of (multi-hospital mode). A locked module is managed by the
@@ -27,5 +27,6 @@ export function useModuleLocks() {
 /** is this app path hidden because its module is locked? */
 export function useNavLocked() {
   const locked = useModuleLocks()
-  return useCallback((path: string) => locked(NAV_MODULE[path]), [locked])
+  // Billing & plan only exists for hospitals on the platform (not single installs / the platform's own hospital)
+  return useCallback((path: string) => (path === '/billing' ? !tenancyEnabled() || isPrimaryTenant() : locked(NAV_MODULE[path])), [locked])
 }
