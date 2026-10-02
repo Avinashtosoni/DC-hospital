@@ -33,7 +33,7 @@ export function LicenseBanner() {
   if (!tenancyEnabled() || !b || !user || user.role === 'patient') return null
   const dismissible = b.tone !== 'danger' && context?.license?.status !== 'grace'
   if (dismissible && gone) return null
-  const onPlanTab = loc.pathname === '/settings' && new URLSearchParams(loc.search).get('tab') === 'plan'
+  const onPlanTab = loc.pathname === '/billing'
   const Icon = b.tone === 'danger' ? Lock : b.tone === 'warning' ? AlertTriangle : Clock
   return (
     <div role="status" className={cn('mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-3 text-sm', TONE[b.tone])}>
