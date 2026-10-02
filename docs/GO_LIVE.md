@@ -4,6 +4,9 @@ From a demo deployment to a platform that paying hospitals can use: a new Supaba
 live payments, backups and a checked launch. Work top to bottom; each step says how to verify it. Budget one day for
 the setup and a week of soft launch with one or two friendly hospitals before you advertise.
 
+> **First time?** Follow [SETUP_GUIDE.md](SETUP_GUIDE.md) — the same steps in order (Hinglish), with a credentials
+> sheet and a hands-on staging test checklist. This file has the details behind each step.
+
 > Two tools check your work: **`npm run preflight -- https://<your-domain>`** (from any laptop, looks at the site the
 > way a browser does) and **Control panel → System health → Launch checklist** (looks inside the database and lists
 > the manual steps). Launch when both show nothing to fix.
