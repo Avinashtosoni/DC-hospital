@@ -99,6 +99,9 @@ drop policy if exists push_tokens_own_delete on public.push_tokens;
 create policy push_tokens_own_read on public.push_tokens for select to authenticated using (profile_id = auth.uid() or public.has_role('owner'));
 create policy push_tokens_own_delete on public.push_tokens for delete to authenticated using (profile_id = auth.uid());
 
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
+
 -- a device belongs to whoever signed in on it last (shared reception PCs)
 create or replace function public.register_push_token(p_token text, p_platform text default 'web', p_user_agent text default null)
 returns void language plpgsql volatile security definer set search_path = public as $$

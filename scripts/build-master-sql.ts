@@ -345,12 +345,19 @@ console.log(`✔ supabase/production.sql written (${(production.length / 1024).t
 const upgradePath = resolve(root, 'supabase/upgrade-2026-10.sql')
 const upgrade = readFileSync(upgradePath, 'utf8')
 let nextUpgrade = upgrade
-for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql], ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql]] as const) {
+// Every source file that defines functions is carried (same order as master.sql): an upgraded database must end up with
+// exactly the functions, policies and grants of a fresh install — tests/sql/upgrade.test.ts compares the two.
+const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
+for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
+  ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
+  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql]] as const) {
   const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
   // the tenancy core goes first (every later section may call current_tenant())
   nextUpgrade = re.test(nextUpgrade) ? nextUpgrade.replace(re, () => block)
     : name === 'tenant-core' ? nextUpgrade.replace(/\nbegin;\n/, () => `\nbegin;\n\n${block}\n`)
+    // after the hand-written sections (which carry older versions of some functions), before the scale section
+    : (CORE_SECTIONS as readonly string[]).includes(name) ? nextUpgrade.replace(/\n-- >>> scale /, () => `\n${block}\n\n-- >>> scale `)
     : nextUpgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)
   if (!nextUpgrade.includes(`-- <<< ${name}`)) throw new Error(`could not place the ${name} section in upgrade-2026-10.sql`)
 }

@@ -375,3 +375,11 @@ create trigger trg_notification_templates_locked before insert or update or dele
 
 revoke all on function public.keep_locked_sections(), public.guard_locked_table() from public, anon, authenticated;
 grant execute on function public.module_locked(text) to anon, authenticated;
+
+-- ------------------------------------------------------------------ internal helpers stay internal (phase 1.7)
+-- master.sql grants EXECUTE on every function to authenticated after tenancy_core.sql ran, and new functions are
+-- executable by PUBLIC by default — so the revokes are repeated here, at the very end. Only SECURITY DEFINER
+-- functions call these (they run as the owner). tenant_secret reads credentials; tenant_setting the hospital's
+-- private settings (gateway URLs, sessions); ensure_tenant_columns changes the schema.
+revoke all on function public.tenant_secret(text), public.tenant_setting(text), public.tenant_content(text),
+  public.ensure_tenant_columns() from public, anon, authenticated;

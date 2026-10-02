@@ -5580,6 +5580,8 @@ create table if not exists public.password_reset_otps (
   token_used_at  timestamptz,
   created_at     timestamptz not null default now()
 );
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 create index if not exists password_reset_otps_phone_idx on public.password_reset_otps (phone, created_at desc);
 alter table public.password_reset_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.password_reset_otps from anon, authenticated;
@@ -5759,6 +5761,8 @@ create table if not exists public.site_forms (
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 drop trigger if exists trg_site_forms_updated_at on public.site_forms;
 create trigger trg_site_forms_updated_at before update on public.site_forms
   for each row execute function public.set_updated_at();
@@ -6046,6 +6050,9 @@ drop policy if exists push_tokens_own_read on public.push_tokens;
 drop policy if exists push_tokens_own_delete on public.push_tokens;
 create policy push_tokens_own_read on public.push_tokens for select to authenticated using (profile_id = auth.uid() or public.has_role('owner'));
 create policy push_tokens_own_delete on public.push_tokens for delete to authenticated using (profile_id = auth.uid());
+
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 
 -- a device belongs to whoever signed in on it last (shared reception PCs)
 create or replace function public.register_push_token(p_token text, p_platform text default 'web', p_user_agent text default null)
@@ -7057,6 +7064,14 @@ create trigger trg_notification_templates_locked before insert or update or dele
 
 revoke all on function public.keep_locked_sections(), public.guard_locked_table() from public, anon, authenticated;
 grant execute on function public.module_locked(text) to anon, authenticated;
+
+-- ------------------------------------------------------------------ internal helpers stay internal (phase 1.7)
+-- master.sql grants EXECUTE on every function to authenticated after tenancy_core.sql ran, and new functions are
+-- executable by PUBLIC by default — so the revokes are repeated here, at the very end. Only SECURITY DEFINER
+-- functions call these (they run as the owner). tenant_secret reads credentials; tenant_setting the hospital's
+-- private settings (gateway URLs, sessions); ensure_tenant_columns changes the schema.
+revoke all on function public.tenant_secret(text), public.tenant_setting(text), public.tenant_content(text),
+  public.ensure_tenant_columns() from public, anon, authenticated;
 
 commit;
 

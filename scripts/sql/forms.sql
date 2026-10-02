@@ -23,6 +23,8 @@ create table if not exists public.site_forms (
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 drop trigger if exists trg_site_forms_updated_at on public.site_forms;
 create trigger trg_site_forms_updated_at before update on public.site_forms
   for each row execute function public.set_updated_at();

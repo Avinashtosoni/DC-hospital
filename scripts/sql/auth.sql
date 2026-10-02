@@ -23,6 +23,8 @@ create table if not exists public.password_reset_otps (
   token_used_at  timestamptz,
   created_at     timestamptz not null default now()
 );
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 create index if not exists password_reset_otps_phone_idx on public.password_reset_otps (phone, created_at desc);
 alter table public.password_reset_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.password_reset_otps from anon, authenticated;

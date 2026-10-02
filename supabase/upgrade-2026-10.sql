@@ -365,6 +365,1407 @@ end $$;
 revoke all on function public.clear_demo_data() from public, anon;
 grant execute on function public.clear_demo_data() to authenticated;
 
+-- >>> audit (generated from scripts/sql/audit.sql — do not edit here)
+-- =====================================================================================================
+--  7d. AUDIT TRAIL — who changed what, and when
+--
+--  Every insert / update / delete on the clinical + financial tables writes one row to public.audit_log
+--  with the acting user (auth.uid() → profiles), a short summary of the record and a column-level diff
+--  ({"column": {"from": old, "to": new}}). The trigger runs as SECURITY DEFINER, so users cannot write,
+--  edit or delete audit rows themselves: RLS allows the owner to read everything and every other staff
+--  member to read only their own actions (see ROW_RULES in src/auth/permissions.ts).
+--
+--  Created AFTER the demo data is loaded, so the seed itself is not logged
+--  (a short demo history is seeded directly instead).
+--  Server-side callers without a user (e.g. the public booking API) can label themselves with
+--    perform set_config('app.actor_name', 'Website booking', true);
+--    perform set_config('app.actor_role', 'public', true);
+-- =====================================================================================================
+
+create or replace function public.audit_summary(p_table text, r jsonb)
+returns text language sql immutable set search_path = public as $$
+  select left(case p_table
+    when 'patients'      then concat_ws(' ', r ->> 'full_name', '(' || (r ->> 'mrn') || ')')
+    when 'invoices'      then r ->> 'invoice_number'
+    when 'appointments'  then concat_ws(' · ', r ->> 'appointment_date', r ->> 'appointment_time')
+    when 'payments'      then '₹' || (r ->> 'amount') || ' · ' || upper(coalesce(r ->> 'method', ''))
+    when 'prescriptions' then r ->> 'diagnosis'
+    when 'lab_tests'     then r ->> 'test_name'
+    when 'doctor_leaves' then concat_ws(' ', r ->> 'kind', r ->> 'start_date',
+                                case when r ->> 'end_date' <> r ->> 'start_date' then '→ ' || (r ->> 'end_date') end)
+    when 'holidays'      then concat_ws(' · ', r ->> 'name', r ->> 'holiday_date')
+    when 'expenses'      then r ->> 'description'
+    else coalesce(r ->> 'full_name', r ->> 'name', r ->> 'title')
+  end, 160)
+$$;
+
+create or replace function public.audit_row()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_old     jsonb := case when tg_op in ('UPDATE', 'DELETE') then to_jsonb(old) end;
+  v_new     jsonb := case when tg_op in ('INSERT', 'UPDATE') then to_jsonb(new) end;
+  v_row     jsonb := coalesce(v_new, v_old);
+  v_changes jsonb := '{}'::jsonb;
+  v_actor   uuid  := auth.uid();
+  v_name    text;
+  v_role    text;
+  k         text;
+begin
+  if tg_op = 'UPDATE' then
+    for k in select jsonb_object_keys(v_new) loop
+      -- read_at / starred are personal inbox state (enquiries), not worth an audit entry
+      continue when k in ('id', 'created_at', 'updated_at', 'read_at', 'starred');
+      if (v_new -> k) is distinct from (v_old -> k) then
+        v_changes := v_changes || jsonb_build_object(k, jsonb_build_object('from', v_old -> k, 'to', v_new -> k));
+      end if;
+    end loop;
+    if v_changes = '{}'::jsonb then return new; end if;   -- nothing meaningful changed
+  else
+    for k in select jsonb_object_keys(v_row) loop
+      continue when k in ('id', 'created_at', 'updated_at') or jsonb_typeof(v_row -> k) = 'null';
+      v_changes := v_changes || jsonb_build_object(k, jsonb_build_object(case when tg_op = 'INSERT' then 'to' else 'from' end, v_row -> k));
+    end loop;
+  end if;
+
+  if v_actor is not null then
+    select p.full_name, p.role::text into v_name, v_role from public.profiles p where p.id = v_actor;
+  end if;
+
+  insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
+  values (
+    tg_table_name,
+    (v_row ->> 'id')::uuid,
+    lower(tg_op),
+    v_actor,
+    coalesce(v_name, nullif(current_setting('app.actor_name', true), ''), case when v_actor is null then 'System' else 'Unknown user' end),
+    coalesce(v_role, nullif(current_setting('app.actor_role', true), ''), 'system'),
+    public.audit_summary(tg_table_name, v_row),
+    v_changes
+  );
+  return coalesce(new, old);
+end $$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['staff_invites', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'invoices', 'payments',
+                           'doctors', 'doctor_leaves', 'holidays', 'profiles', 'staff', 'expenses'] loop
+    execute format('drop trigger if exists trg_%1$s_audit on public.%1$I', t);
+    execute format('create trigger trg_%1$s_audit after insert or update or delete on public.%1$I
+                    for each row execute function public.audit_row()', t);
+  end loop;
+end $$;
+
+-- the log is append-only for everyone (only the definer trigger writes to it)
+revoke insert, update, delete, truncate on public.audit_log from anon, authenticated;
+-- <<< audit
+
+-- >>> cms (generated from scripts/sql/cms.sql — do not edit here)
+-- =====================================================================================================
+--  8. WEBSITE CMS
+--  Content for the public website, edited by the hospital owner from Dashboard → Website CMS.
+--  Unlike the tables above, these are NOT dropped when you re-run this file — your website edits,
+--  version history and uploaded images are kept. (To start over, delete the rows from site_content.)
+--
+--  site_content            one row per section (settings, home, about, doctors, …) → jsonb document.
+--                          Missing rows fall back to the defaults shipped with the app.
+--  site_content_revisions  the previous version of a section, saved automatically on every publish/reset.
+--  storage "site-media"    public bucket for images uploaded from the CMS media library.
+-- =====================================================================================================
+create table if not exists public.site_content (
+  key              text primary key check (key ~ '^[a-zA-Z]{2,40}$'),
+  data             jsonb not null default '{}'::jsonb,
+  updated_at       timestamptz not null default now(),
+  updated_by       uuid,
+  updated_by_name  text
+);
+
+create table if not exists public.site_content_revisions (
+  id               uuid primary key default gen_random_uuid(),
+  key              text not null,
+  data             jsonb not null,
+  created_at       timestamptz not null default now(),
+  created_by_name  text
+);
+create index if not exists site_content_revisions_key_idx on public.site_content_revisions (key, created_at desc);
+
+-- 8a. stamp who/when on every write (the client never sends these)
+drop function if exists public.site_content_stamp() cascade;
+create function public.site_content_stamp()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.updated_at := now();
+  new.updated_by := auth.uid();
+  new.updated_by_name := coalesce((select full_name from public.profiles where id = auth.uid()), 'Database');
+  return new;
+end $$;
+create trigger trg_site_content_stamp before insert or update on public.site_content
+  for each row execute function public.site_content_stamp();
+
+-- 8b. keep the replaced version in the history (latest 30 per section)
+drop function if exists public.site_content_revision() cascade;
+create function public.site_content_revision()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and new.data = old.data then return new; end if;
+  insert into public.site_content_revisions (tenant_id, key, data, created_at, created_by_name)
+  values (old.tenant_id, old.key, old.data, old.updated_at, old.updated_by_name);
+  delete from public.site_content_revisions r
+  where r.key = old.key and r.tenant_id = old.tenant_id
+    and r.id not in (select id from public.site_content_revisions where key = old.key and tenant_id = old.tenant_id order by created_at desc limit 30);
+  return coalesce(new, old);
+end $$;
+create trigger trg_site_content_revision after update or delete on public.site_content
+  for each row execute function public.site_content_revision();
+
+-- 8c. row level security
+alter table public.site_content enable row level security;
+alter table public.site_content_revisions enable row level security;
+
+drop policy if exists site_content_public_read on public.site_content;
+drop policy if exists site_content_owner_insert on public.site_content;
+drop policy if exists site_content_owner_update on public.site_content;
+drop policy if exists site_content_owner_delete on public.site_content;
+drop policy if exists site_content_revisions_owner_read on public.site_content_revisions;
+
+create policy site_content_public_read on public.site_content for select to anon, authenticated using (true);
+create policy site_content_owner_insert on public.site_content for insert to authenticated with check (public.has_role('owner'));
+create policy site_content_owner_update on public.site_content for update to authenticated using (public.has_role('owner')) with check (public.has_role('owner'));
+create policy site_content_owner_delete on public.site_content for delete to authenticated using (public.has_role('owner'));
+create policy site_content_revisions_owner_read on public.site_content_revisions for select to authenticated using (public.has_role('owner'));
+
+-- Contact form: anyone (signed in or not) may send a *new* enquiry, but only staff can read them (policies above).
+drop policy if exists site_enquiries_public_insert on public.site_enquiries;
+create policy site_enquiries_public_insert on public.site_enquiries for insert to anon, authenticated
+  with check (status = 'new' and notes is null and starred = false and read_at is null);
+
+-- Contact-form flood protection: 3 messages per mobile number per hour and 60 per hour for the whole site.
+-- Staff inserts are not limited.
+create or replace function public.limit_site_enquiries()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_digits text := right(regexp_replace(new.phone, '\D', '', 'g'), 10);
+begin
+  if auth.uid() is not null and public.is_staff() then return new; end if;
+  if (select count(*) from public.site_enquiries where tenant_id = new.tenant_id and created_at > now() - interval '1 hour'
+        and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits) >= 3 then
+    raise exception 'You have already sent us a few messages in the last hour — we will get back to you soon. For anything urgent please call us.';
+  end if;
+  if (select count(*) from public.site_enquiries where tenant_id = new.tenant_id and created_at > now() - interval '1 hour') >= 60 then
+    raise exception 'We are receiving a lot of messages right now. Please try again shortly or call us.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_site_enquiries_limit on public.site_enquiries;
+create trigger trg_site_enquiries_limit before insert on public.site_enquiries
+  for each row execute function public.limit_site_enquiries();
+revoke all on function public.limit_site_enquiries() from public, anon;
+
+revoke all on public.site_content, public.site_content_revisions from anon;
+grant select on public.site_content to anon;
+grant select, insert, update, delete on public.site_content to authenticated;
+revoke all on public.site_content_revisions from authenticated;
+grant select on public.site_content_revisions to authenticated;
+grant insert on public.site_enquiries to anon;
+
+-- 8d. media bucket (public read, owner-only write). Images are resized to WebP in the browser before upload.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('site-media', 'site-media', true, 10485760, array['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
+on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists site_media_public_read on storage.objects;
+drop policy if exists site_media_owner_insert on storage.objects;
+drop policy if exists site_media_owner_update on storage.objects;
+drop policy if exists site_media_owner_delete on storage.objects;
+create policy site_media_public_read on storage.objects for select to anon, authenticated using (bucket_id = 'site-media');
+create policy site_media_owner_insert on storage.objects for insert to authenticated with check (bucket_id = 'site-media' and public.has_role('owner'));
+create policy site_media_owner_update on storage.objects for update to authenticated using (bucket_id = 'site-media' and public.has_role('owner'));
+create policy site_media_owner_delete on storage.objects for delete to authenticated using (bucket_id = 'site-media' and public.has_role('owner'));
+
+-- 8e. profile photos: public read; each user writes only inside their own "<user id>/" folder
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 2097152, array['image/png', 'image/jpeg', 'image/webp'])
+on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists avatars_public_read on storage.objects;
+drop policy if exists avatars_own_insert on storage.objects;
+drop policy if exists avatars_own_update on storage.objects;
+drop policy if exists avatars_own_delete on storage.objects;
+create policy avatars_public_read on storage.objects for select to anon, authenticated using (bucket_id = 'avatars');
+create policy avatars_own_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy avatars_own_update on storage.objects for update to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy avatars_own_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+-- <<< cms
+
+-- >>> booking (generated from scripts/sql/booking.sql — do not edit here)
+-- =====================================================================================================
+--  9. ONLINE BOOKING (public website → /book)
+--
+--  Anonymous visitors never touch the tables directly. They call these SECURITY DEFINER functions:
+--    public_doctors()                          bookable doctors (no private fields)
+--    public_availability(doctor, from, to)     booked slots, approved leave/blocks, hospital holidays
+--    booking_otp_channels()                    which channels can deliver the code ('whatsapp', 'sms')
+--    request_booking_otp(phone, channel)       sends a 6-digit code on the chosen channel (rate limited: 1 / 30 s, 5 / hour)
+--    verify_booking_otp(phone, code)           5 attempts per code, 10 minute expiry → one-time token
+--    public_book_appointment(token, …)         re-validates the slot server-side, then creates
+--                                              patient (if new) → appointment → unpaid invoice
+--
+--  SMS: codes are queued by public.send_booking_otp() on the channels configured in Settings → Notifications
+--  and delivered by the Edge Function `notify`. With no gateway configured — and the CMS setting
+--  "Show the OTP on screen" ON — the code is returned to the browser for testing.
+--  All dates/times are Indian Standard Time.
+-- =====================================================================================================
+
+drop function if exists public.public_doctors() cascade;
+drop function if exists public.public_availability(uuid, date, date) cascade;
+drop function if exists public.request_booking_otp(text) cascade;
+drop function if exists public.request_booking_otp(text, text) cascade;
+drop function if exists public.booking_otp_channels() cascade;
+drop function if exists public.send_booking_otp(text, text, uuid) cascade;
+drop function if exists public.send_booking_otp(text, text, uuid, text[]) cascade;
+drop function if exists public.verify_booking_otp(text, text) cascade;
+drop function if exists public.public_book_appointment(uuid, uuid, date, text, text, text, date, text, text) cascade;
+drop function if exists public.send_booking_otp(text, text) cascade;
+drop function if exists public.booking_setting(text, text, text) cascade;
+drop function if exists public.norm_phone(text) cascade;
+
+alter table public.booking_otps enable row level security;   -- no policies: unreachable through the API
+revoke all on public.booking_otps from anon, authenticated;
+
+create or replace function public.norm_phone(p text)
+returns text language sql immutable as $$
+  select right(regexp_replace(coalesce(p, ''), '\D', '', 'g'), 10)
+$$;
+
+-- reads site_content.settings → <group> → <key> (the CMS "Online booking" / "Billing" groups)
+create or replace function public.booking_setting(p_key text, p_default text, p_group text default 'booking')
+returns text language sql stable security definer set search_path = public as $$
+  select coalesce((public.tenant_content('settings') -> p_group ->> p_key), p_default)
+$$;
+
+-- Queues the code on the channels enabled in Settings → Notifications (SMS / WhatsApp) and returns how many
+-- messages were queued. 0 = no gateway configured → the booking page may show the code on screen (demo mode).
+-- Delivery is done by the Edge Function `notify` (supabase/functions/notify), which reads the credentials.
+drop function if exists public.send_booking_otp(text, text);
+create or replace function public.send_booking_otp(p_phone text, p_code text, p_ref uuid default null, p_only text[] default null)
+returns int language plpgsql security definer set search_path = public as $$
+begin
+  return coalesce(public.notify_enqueue('otp', p_phone, null, jsonb_build_object('code', p_code, 'otp', p_code), 'booking_otps', p_ref, p_only), 0);
+exception when undefined_function then
+  return 0;
+end $$;
+
+-- Channels that can deliver the booking code right now: switched on in Settings → Notifications AND ticked for
+-- the "Booking OTP" event. WhatsApp first. Public (the booking page shows a WhatsApp / SMS choice); reveals no config.
+create or replace function public.booking_otp_channels()
+returns text[] language plpgsql stable security definer set search_path = public as $$
+declare
+  n   jsonb;
+  ch  text;
+  out text[] := '{}';
+begin
+  -- plpgsql (not sql): app_settings is created later in this file set (settings.sql)
+  n := public.tenant_setting('app') -> 'notifications';
+  if n is null then return out; end if;
+  foreach ch in array array['whatsapp', 'sms'] loop
+    if coalesce((n -> ch ->> 'enabled')::boolean, false)
+       and coalesce((n -> 'events' -> 'otp' ->> ch)::boolean, false)
+       and coalesce(n -> 'templates' -> 'otp' ->> 'text', '') <> '' then
+      out := out || ch;
+    end if;
+  end loop;
+  return out;
+end $$;
+
+create or replace function public.public_doctors()
+returns table (id uuid, full_name text, specialization text, department text, consultation_fee numeric,
+               available_days text[], shift text, status text)
+language sql stable security definer set search_path = public as $$
+  select d.id, d.full_name, d.specialization, dep.name, d.consultation_fee, d.available_days, d.shift, d.status
+  from public.doctors d
+  left join public.departments dep on dep.id = d.department_id
+  where d.status = 'active' and d.tenant_id = public.current_tenant()
+  order by d.full_name
+$$;
+
+create or replace function public.public_availability(p_doctor uuid, p_from date, p_to date)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with r as (select p_from as f, least(p_to, p_from + 62) as t)
+  select jsonb_build_object(
+    'booked', coalesce((
+      select jsonb_agg(jsonb_build_object('doctor_id', a.doctor_id, 'appointment_date', a.appointment_date,
+                                          'appointment_time', a.appointment_time, 'status', a.status))
+      from public.appointments a, r
+      where a.tenant_id = public.current_tenant() and (p_doctor is null or a.doctor_id = p_doctor) and a.appointment_date between r.f and r.t
+        and a.status not in ('cancelled', 'no_show')), '[]'::jsonb),
+    'leaves', coalesce((
+      select jsonb_agg(jsonb_build_object('id', l.id, 'doctor_id', l.doctor_id, 'kind', l.kind, 'status', l.status,
+                                          'start_date', l.start_date, 'end_date', l.end_date,
+                                          'start_time', l.start_time, 'end_time', l.end_time))
+      from public.doctor_leaves l, r
+      where l.tenant_id = public.current_tenant() and (p_doctor is null or l.doctor_id = p_doctor) and l.status = 'approved'
+        and l.start_date <= r.t and l.end_date >= r.f), '[]'::jsonb),
+    'holidays', coalesce((
+      select jsonb_agg(jsonb_build_object('id', h.id, 'holiday_date', h.holiday_date, 'name', h.name))
+      from public.holidays h, r where h.tenant_id = public.current_tenant() and h.holiday_date between r.f and r.t), '[]'::jsonb))
+$$;
+
+-- p_channel: 'whatsapp' or 'sms' as picked by the visitor; null / unavailable → every available channel
+create or replace function public.request_booking_otp(p_phone text, p_channel text default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_phone  text := public.norm_phone(p_phone);
+  v_code   text;
+  v_queued int;
+  v_id     uuid;
+  v_avail  text[] := public.booking_otp_channels();
+  v_use    text[];
+begin
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+  if v_phone !~ '^[6-9][0-9]{9}$' then
+    raise exception 'Please enter a valid 10-digit Indian mobile number.';
+  end if;
+  if exists (select 1 from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '30 seconds') then
+    raise exception 'Please wait 30 seconds before requesting another code.';
+  end if;
+  if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
+    raise exception 'Too many codes requested for this number. Please try again in an hour.';
+  end if;
+  -- whole-site cap: stops bots cycling through thousands of numbers to run up the SMS bill ("SMS pumping")
+  if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
+     >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
+    raise exception 'Online booking is very busy right now. Please try again in a few minutes or call the hospital.';
+  end if;
+
+  v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
+  insert into public.booking_otps (phone, code_hash, expires_at)
+  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
+  returning id into v_id;
+  v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;
+  v_queued := case when cardinality(v_use) > 0 then public.send_booking_otp(v_phone, v_code, v_id, v_use) else 0 end;
+
+  -- the code is only ever returned to the browser when no SMS/WhatsApp gateway took it AND demo mode is on
+  -- `ref` lets the browser ask the notify function to deliver exactly this message right away
+  return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', v_queued, 'ref', v_id,
+    'channels', case when v_queued > 0 then to_jsonb(v_use) else '[]'::jsonb end,
+    'demo_code', case when v_queued = 0 and public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
+end $$;
+
+-- returns {ok:true, token} or {ok:false, error} (no exception, so the failed-attempt counter is kept)
+create or replace function public.verify_booking_otp(p_phone text, p_code text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_phone text := public.norm_phone(p_phone);
+  o       public.booking_otps;
+  v_token uuid;
+begin
+  select * into o from public.booking_otps
+  where tenant_id = public.current_tenant() and phone = v_phone and verified_at is null
+  order by created_at desc limit 1
+  for update;
+
+  if not found or o.expires_at < now() then
+    return jsonb_build_object('ok', false, 'error', 'This code has expired. Please request a new one.');
+  end if;
+  if o.attempts >= 5 then
+    return jsonb_build_object('ok', false, 'error', 'Too many wrong attempts. Please request a new code.');
+  end if;
+  if coalesce(p_code, '') !~ '^[0-9]{6}$' or o.code_hash <> extensions.crypt(p_code, o.code_hash) then
+    update public.booking_otps set attempts = attempts + 1 where id = o.id;
+    return jsonb_build_object('ok', false, 'error',
+      case when o.attempts + 1 >= 5 then 'Too many wrong attempts. Please request a new code.'
+           else format('That code is not correct — %s attempt%s left.', 4 - o.attempts, case when 4 - o.attempts = 1 then '' else 's' end) end);
+  end if;
+
+  v_token := gen_random_uuid();
+  update public.booking_otps set verified_at = now(), token = v_token where id = o.id;
+  return jsonb_build_object('ok', true, 'token', v_token);
+end $$;
+
+-- Why a slot can't be booked (same rules as src/lib/schedule.ts), or null when it is free to book.
+-- Double-booking itself is prevented by the unique index appointments_one_per_slot.
+drop function if exists public.slot_problem(uuid, date, text, boolean) cascade;
+create function public.slot_problem(p_doctor uuid, p_date date, p_time text, p_enforce_window boolean default true)
+returns text language plpgsql stable security definer set search_path = public as $$
+declare
+  d         public.doctors;
+  v_now     timestamp := now() at time zone 'Asia/Kolkata';
+  v_min     int;
+  v_shift   text[];
+  v_advance int := coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30);
+  v_notice  int := coalesce(nullif(public.booking_setting('minNoticeMinutes', '60'), '')::int, 60);
+begin
+  if coalesce(p_time, '') !~ '^[0-2][0-9]:[0-5][0-9]$' then return 'Invalid time.'; end if;
+  v_min := split_part(p_time, ':', 1)::int * 60 + split_part(p_time, ':', 2)::int;
+  select * into d from public.doctors where id = p_doctor and tenant_id = public.current_tenant();
+  if not found or d.status <> 'active' then return 'This doctor is not taking bookings right now.'; end if;
+  if p_date < v_now::date then return 'This date is in the past.'; end if;
+  if p_enforce_window and p_date > v_now::date + v_advance then return format('Please choose a date within the next %s days.', v_advance); end if;
+  if p_enforce_window and p_date + make_interval(mins => v_min) < v_now + make_interval(mins => v_notice) then
+    return 'This time is too soon — please pick a later slot.';
+  end if;
+  if not p_enforce_window and p_date + make_interval(mins => v_min) < v_now then return 'This time has already passed.'; end if;
+  if v_min % 30 <> 0 or v_min < 480 or v_min > 1110 then return 'Invalid time.'; end if;
+  if exists (select 1 from public.holidays where tenant_id = public.current_tenant() and holiday_date = p_date) then return 'The OPD is closed on this day.'; end if;
+  if not (to_char(p_date, 'Dy') = any (coalesce(nullif(d.available_days, '{}'), array['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']))) then
+    return 'The doctor does not consult on this day.';
+  end if;
+  v_shift := regexp_match(coalesce(d.shift, ''), '(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})');
+  if v_shift is not null and (v_min < v_shift[1]::int * 60 + v_shift[2]::int or v_min >= v_shift[3]::int * 60 + v_shift[4]::int) then
+    return 'Outside the doctor''s consulting hours.';
+  end if;
+  if exists (
+    select 1 from public.doctor_leaves l
+    where l.doctor_id = d.id and l.status = 'approved' and p_date between l.start_date and l.end_date
+      and (l.start_time is null
+           or (v_min >= split_part(l.start_time, ':', 1)::int * 60 + split_part(l.start_time, ':', 2)::int
+               and v_min < split_part(l.end_time, ':', 1)::int * 60 + split_part(l.end_time, ':', 2)::int))
+  ) then
+    return 'The doctor is unavailable at this time.';
+  end if;
+  return null;
+end $$;
+
+-- Books a slot for an already-verified mobile number (OTP on the website, or the WhatsApp sender itself).
+-- Internal: only called by public_book_appointment / whatsapp_book_appointment.
+drop function if exists public.book_slot_internal(text, uuid, date, text, text, text, date, text, text, text) cascade;
+create function public.book_slot_internal(
+  p_phone text, p_doctor uuid, p_date date, p_time text,
+  p_name text, p_gender text, p_dob date, p_email text, p_reason text, p_source text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  d         public.doctors;
+  v_patient public.patients;
+  v_appt    public.appointments;
+  v_inv     public.invoices;
+  v_dep     text;
+  v_now     timestamp := now() at time zone 'Asia/Kolkata';
+  v_new     boolean := false;
+  v_name    text := regexp_replace(trim(coalesce(p_name, '')), '\s+', ' ', 'g');
+  v_phone   text := public.norm_phone(p_phone);
+  v_problem text;
+  v_ref     text;
+  v_seq     int;
+  v_fee     numeric;
+  v_rate    numeric;
+  v_tax     numeric;
+begin
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+  if v_phone !~ '^[6-9][0-9]{9}$' then raise exception 'Please enter a valid 10-digit Indian mobile number.'; end if;
+
+  -- input
+  if char_length(v_name) < 2 or char_length(v_name) > 80 then raise exception 'Please enter the patient''s full name.'; end if;
+  if p_gender is null or p_gender not in ('male', 'female', 'other') then p_gender := 'other'; end if;
+  if p_dob is not null and (p_dob > v_now::date or p_dob < v_now::date - 43830) then raise exception 'Please check the date of birth.'; end if;
+  if nullif(trim(p_email), '') is not null and trim(p_email) !~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please check the email address.'; end if;
+
+  -- the slot must really be free
+  v_problem := public.slot_problem(p_doctor, p_date, p_time, true);
+  if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
+  select * into d from public.doctors where id = p_doctor and tenant_id = public.current_tenant();
+
+  -- patient: same mobile AND same name → existing record (families often share one phone)
+  select * into v_patient from public.patients
+  where tenant_id = public.current_tenant() and public.norm_phone(phone) = v_phone and lower(regexp_replace(trim(full_name), '\s+', ' ', 'g')) = lower(v_name)
+  order by created_at limit 1;
+
+  if v_patient.id is not null then
+    if exists (select 1 from public.appointments where patient_id = v_patient.id and doctor_id = d.id
+               and appointment_date = p_date and status not in ('cancelled', 'no_show')) then
+      raise exception 'You already have a booking with this doctor on this day.';
+    end if;
+  else
+    -- mrn '' → assign_record_number() numbers it per hospital
+    insert into public.patients (mrn, full_name, gender, date_of_birth, phone, email, status)
+    values ('', v_name, p_gender, p_dob, '+91 ' || substr(v_phone, 1, 5) || ' ' || substr(v_phone, 6),
+            nullif(lower(trim(p_email)), ''), 'outpatient')
+    returning * into v_patient;
+    v_new := true;
+  end if;
+
+  -- appointment (the partial unique index settles a race for the same slot)
+  v_ref := 'DCB-' || upper(encode(extensions.gen_random_bytes(3), 'hex'));
+  begin
+    insert into public.appointments (patient_id, doctor_id, appointment_date, appointment_time, type, status, reason, source, booking_ref)
+    values (v_patient.id, d.id, p_date, p_time, 'consultation', 'scheduled', nullif(left(trim(p_reason), 500), ''), p_source, v_ref)
+    returning * into v_appt;
+  exception when unique_violation then
+    raise exception 'SLOT_TAKEN: Sorry — someone just booked this slot. Please pick another time.';
+  end;
+
+  -- unpaid invoice (GST % from Settings → Billing; 0 = exempt → Bill of Supply)
+  v_fee  := d.consultation_fee;
+  v_rate := coalesce(nullif(public.booking_setting('gstRate', '0', 'billing'), '')::numeric, 0);
+  v_tax  := round(v_fee * v_rate / 100, 2);
+  -- invoice_number '' → assign_record_number() numbers it per hospital
+  insert into public.invoices (invoice_number, patient_id, issue_date, due_date, items, subtotal, tax, discount, total, amount_paid, status, notes)
+  values ('', v_patient.id, v_now::date, p_date,
+          jsonb_build_array(jsonb_build_object(
+            'description', format('Consultation — %s (%s) · %s, %s', d.full_name, d.specialization, to_char(p_date, 'DD Mon YYYY'), p_time),
+            'quantity', 1, 'unit_price', v_fee)),
+          v_fee, v_tax, 0, v_fee + v_tax, 0, 'unpaid', initcap(p_source) || ' booking ' || v_ref)
+  returning * into v_inv;
+
+  select name into v_dep from public.departments where id = d.department_id;
+  return jsonb_build_object(
+    'ref', v_ref,
+    'is_new_patient', v_new,
+    'appointment', to_jsonb(v_appt) - 'notes',
+    'patient', jsonb_build_object('id', v_patient.id, 'full_name', v_patient.full_name, 'mrn', v_patient.mrn,
+                                  'phone', v_patient.phone, 'email', v_patient.email, 'gender', v_patient.gender,
+                                  'address', v_patient.address),
+    'doctor', jsonb_build_object('id', d.id, 'full_name', d.full_name, 'specialization', d.specialization, 'department', v_dep),
+    'invoice', to_jsonb(v_inv));
+end $$;
+revoke all on function public.book_slot_internal(text, uuid, date, text, text, text, date, text, text, text) from public, anon, authenticated;
+
+create or replace function public.public_book_appointment(
+  p_token uuid, p_doctor uuid, p_date date, p_time text,
+  p_name text, p_gender text, p_dob date, p_email text, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  o     public.booking_otps;
+  v_res jsonb;
+begin
+  perform set_config('app.actor_name', 'Website booking', true);
+  perform set_config('app.actor_role', 'public', true);
+  if public.booking_setting('enabled', 'true') <> 'true' then
+    raise exception 'Online booking is switched off right now. Please call the hospital to book.';
+  end if;
+  -- verified phone (one booking per verification, valid 30 minutes)
+  select * into o from public.booking_otps where token = p_token and tenant_id = public.current_tenant() for update;
+  if not found or o.verified_at is null or o.token_used_at is not null or o.verified_at < now() - interval '30 minutes' then
+    raise exception 'OTP_REQUIRED: Please verify your mobile number again.';
+  end if;
+  v_res := public.book_slot_internal(o.phone, p_doctor, p_date, p_time, p_name, p_gender, p_dob, p_email, p_reason, 'website');
+  update public.booking_otps set token_used_at = now() where id = o.id;
+  return v_res;
+end $$;
+
+-- WhatsApp chatbot bookings: the sender's number is already verified by WhatsApp. Service role only
+-- (called by the Edge Function supabase/functions/whatsapp-bot).
+drop function if exists public.whatsapp_book_appointment(text, uuid, date, text, text, text) cascade;
+create function public.whatsapp_book_appointment(p_phone text, p_doctor uuid, p_date date, p_time text, p_name text, p_reason text default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+begin
+  perform set_config('app.actor_name', 'WhatsApp booking', true);
+  perform set_config('app.actor_role', 'public', true);
+  return public.book_slot_internal(p_phone, p_doctor, p_date, p_time, p_name, 'other', null, null, p_reason, 'whatsapp');
+end $$;
+revoke all on function public.whatsapp_book_appointment(text, uuid, date, text, text, text) from public, anon, authenticated;
+grant execute on function public.whatsapp_book_appointment(text, uuid, date, text, text, text) to service_role;
+grant execute on function public.public_doctors() to service_role;
+grant execute on function public.public_availability(uuid, date, date) to service_role;
+
+revoke all on function public.send_booking_otp(text, text, uuid, text[]) from public, anon, authenticated;
+revoke all on function public.slot_problem(uuid, date, text, boolean) from public, anon;
+grant execute on function public.slot_problem(uuid, date, text, boolean) to authenticated;
+revoke all on function public.booking_setting(text, text, text) from public, anon;
+grant execute on function public.public_doctors() to anon, authenticated;
+grant execute on function public.public_availability(uuid, date, date) to anon, authenticated;
+grant execute on function public.request_booking_otp(text, text) to anon, authenticated;
+grant execute on function public.booking_otp_channels() to anon, authenticated;
+grant execute on function public.verify_booking_otp(text, text) to anon, authenticated;
+grant execute on function public.public_book_appointment(uuid, uuid, date, text, text, text, date, text, text) to anon, authenticated;
+-- <<< booking
+
+-- >>> settings (generated from scripts/sql/settings.sql — do not edit here)
+-- =====================================================================================================
+--  11. HOSPITAL SETTINGS · CREDENTIALS · NOTIFICATIONS (SMS / WhatsApp / Email)
+--
+--    app_settings          one row ('app') with the dashboard settings JSON. Everyone signed in can read it
+--                          (theme, date format…); only the owner can change it.
+--    app_secrets           API keys / passwords. WRITE-ONLY from the browser: the owner sets them through
+--                          set_app_secret() and only sees a masked hint (app_secret_status()). The Edge Function
+--                          `notify` reads them with the service-role key.
+--    notification_outbox   messages queued by triggers (appointment booked, reminder, invoice, lab report…)
+--                          and by the booking OTP. The Edge Function claims and delivers them.
+--
+--  These tables are NOT dropped when this file is re-run, so saved settings and credentials survive.
+--  Deploy the sender once:   supabase functions deploy notify
+--  Optional automatic delivery + reminders with pg_cron + pg_net (Database → Extensions), e.g.:
+--    select cron.schedule('notify-flush', '* * * * *', $c$ select net.http_post(
+--      url := 'https://<project-ref>.supabase.co/functions/v1/notify',
+--      headers := jsonb_build_object('Authorization', 'Bearer <service-role-key>', 'Content-Type', 'application/json'),
+--      body := '{"flush":true}'::jsonb) $c$);
+--    select cron.schedule('appointment-reminders', '30 12 * * *', $c$ select public.queue_appointment_reminders() $c$);  -- 18:00 IST
+-- =====================================================================================================
+
+-- ------------------------------------------------------------------ settings
+create table if not exists public.app_settings (
+  key              text primary key,
+  data             jsonb not null default '{}'::jsonb,
+  updated_at       timestamptz not null default now(),
+  updated_by       uuid,
+  updated_by_name  text
+);
+alter table public.app_settings enable row level security;
+revoke all on public.app_settings from anon;
+grant select, insert, update on public.app_settings to authenticated;
+grant all on public.app_settings to service_role;
+
+drop policy if exists app_settings_read on public.app_settings;
+drop policy if exists app_settings_owner_insert on public.app_settings;
+drop policy if exists app_settings_owner_update on public.app_settings;
+create policy app_settings_read on public.app_settings for select to authenticated using (true);
+create policy app_settings_owner_insert on public.app_settings for insert to authenticated with check (public.has_role('owner'));
+create policy app_settings_owner_update on public.app_settings for update to authenticated using (public.has_role('owner')) with check (public.has_role('owner'));
+
+drop function if exists public.app_settings_stamp() cascade;
+create function public.app_settings_stamp()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_changes jsonb := '{}'::jsonb;
+  k text;
+  v_name text := (select full_name from public.profiles where id = auth.uid());
+begin
+  new.updated_at := now();
+  new.updated_by := auth.uid();
+  new.updated_by_name := coalesce(v_name, 'Database');
+  -- audit: which sections changed
+  for k in select jsonb_object_keys(new.data) loop
+    if tg_op = 'INSERT' or (new.data -> k) is distinct from (old.data -> k) then
+      v_changes := v_changes || jsonb_build_object(k, jsonb_build_object('from', case when tg_op = 'UPDATE' then old.data -> k end, 'to', new.data -> k));
+    end if;
+  end loop;
+  if v_changes <> '{}'::jsonb then
+    insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
+    values ('app_settings', null, lower(tg_op), auth.uid(), coalesce(v_name, 'System'),
+            coalesce((select role::text from public.profiles where id = auth.uid()), 'system'), 'Hospital settings', v_changes);
+  end if;
+  return new;
+end $$;
+create trigger trg_app_settings_stamp before insert or update on public.app_settings
+  for each row execute function public.app_settings_stamp();
+
+-- ------------------------------------------------------------------ credentials (write-only)
+create table if not exists public.app_secrets (
+  key              text primary key check (key ~ '^[a-z0-9_]{2,64}$'),
+  value            text not null,
+  updated_at       timestamptz not null default now(),
+  updated_by_name  text
+);
+alter table public.app_secrets enable row level security;   -- no policies: unreachable through the API
+revoke all on public.app_secrets from anon, authenticated;
+grant all on public.app_secrets to service_role;
+
+drop function if exists public.app_secret_status() cascade;
+create function public.app_secret_status()
+returns table (key text, hint text, updated_at timestamptz, updated_by_name text)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.has_role('owner') then
+    raise exception 'Only the hospital owner can view credentials';
+  end if;
+  return query
+    select s.key, '••••' || case when length(s.value) >= 12 then right(s.value, 4) else '' end, s.updated_at, s.updated_by_name
+    from public.app_secrets s where s.tenant_id = public.current_tenant() order by s.key;
+end $$;
+
+drop function if exists public.set_app_secret(text, text) cascade;
+create function public.set_app_secret(p_key text, p_value text)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare v_name text := (select full_name from public.profiles where id = auth.uid());
+begin
+  if not public.has_role('owner') then
+    raise exception 'Only the hospital owner can change credentials';
+  end if;
+  perform public.module_guard('notifications');
+  if p_key !~ '^[a-z0-9_]{2,64}$' then
+    raise exception 'Invalid credential name';
+  end if;
+  if nullif(trim(coalesce(p_value, '')), '') is null then
+    delete from public.app_secrets where key = p_key and tenant_id = public.current_tenant();
+  else
+    insert into public.app_secrets (key, value, updated_at, updated_by_name)
+    values (p_key, trim(p_value), now(), v_name)
+    on conflict (tenant_id, key) do update set value = excluded.value, updated_at = now(), updated_by_name = excluded.updated_by_name;
+  end if;
+  insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
+  values ('app_secrets', null, case when nullif(trim(coalesce(p_value, '')), '') is null then 'delete' else 'update' end,
+          auth.uid(), coalesce(v_name, 'System'), 'owner', 'Credential ' || p_key,
+          jsonb_build_object(p_key, jsonb_build_object('to', case when nullif(trim(coalesce(p_value, '')), '') is null then 'removed' else 'updated (hidden)' end)));
+end $$;
+
+revoke all on function public.app_secret_status() from public, anon;
+revoke all on function public.set_app_secret(text, text) from public, anon;
+grant execute on function public.app_secret_status() to authenticated;
+grant execute on function public.set_app_secret(text, text) to authenticated;
+
+-- ------------------------------------------------------------------ outbox
+create table if not exists public.notification_outbox (
+  id             uuid primary key default gen_random_uuid(),
+  event          text not null,
+  channel        text not null check (channel in ('sms', 'whatsapp', 'email')),
+  recipient      text not null,
+  subject        text,
+  body           text not null default '',
+  vars           jsonb not null default '{}'::jsonb,
+  status         text not null default 'pending' check (status in ('pending', 'sending', 'sent', 'failed', 'skipped')),
+  attempts       int not null default 0,
+  error          text,
+  provider_ref   text,
+  related_table  text,
+  related_id     uuid,
+  created_at     timestamptz not null default now(),
+  sent_at        timestamptz
+);
+-- retry bookkeeping (added later; `if not exists` keeps re-runs safe)
+alter table public.notification_outbox add column if not exists last_attempt_at timestamptz;
+alter table public.notification_outbox add column if not exists next_attempt_at timestamptz not null default now();
+create index if not exists notification_outbox_queue_idx on public.notification_outbox (status, created_at);
+create index if not exists notification_outbox_related_idx on public.notification_outbox (related_id, event);
+
+alter table public.notification_outbox enable row level security;
+revoke all on public.notification_outbox from anon, authenticated;
+-- the delivery log is visible to the owner, but never the message body (it can contain an OTP)
+grant select (id, event, channel, recipient, status, attempts, error, provider_ref, related_table, related_id, created_at, sent_at)
+  on public.notification_outbox to authenticated;
+grant all on public.notification_outbox to service_role;
+drop policy if exists notification_outbox_owner_read on public.notification_outbox;
+create policy notification_outbox_owner_read on public.notification_outbox for select to authenticated using (public.has_role('owner'));
+
+-- Queue one message per enabled channel for an event. Never raises (a failed notification must not
+-- roll back the booking / invoice that triggered it).
+drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid) cascade;
+drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid, text[]) cascade;
+drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uuid, text[], uuid) cascade;  -- section 18 version (re-run safety)
+-- p_only: restrict to these channels (e.g. the booking OTP channel the visitor picked); null = every enabled channel
+create function public.notify_enqueue(p_event text, p_phone text, p_email text, p_vars jsonb, p_related_table text default null, p_related_id uuid default null, p_only text[] default null)
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare
+  n        jsonb := (public.tenant_setting('app') -> 'notifications');
+  site     jsonb := public.tenant_content('settings');
+  tpl      jsonb;
+  ch       text;
+  v_to     text;
+  v_body   text;
+  v_subj   text;
+  v_vars   jsonb;
+  k        text;
+  v_count  int := 0;
+begin
+  if n is null or n -> 'events' -> p_event is null then return 0; end if;
+  tpl := n -> 'templates' -> p_event;
+  v_vars := jsonb_build_object(
+      'hospital', coalesce(nullif(site ->> 'name', ''), 'DC Hospital'),
+      'hospital_phone', coalesce(nullif(site ->> 'appointmentsPhone', ''), site ->> 'phone', ''),
+      'address', coalesce(site ->> 'address', ''),
+      'site_url', rtrim(coalesce(site ->> 'siteUrl', ''), '/'))
+    || coalesce(p_vars, '{}'::jsonb);
+
+  foreach ch in array array['sms', 'whatsapp', 'email'] loop
+    continue when coalesce((n -> 'events' -> p_event ->> ch)::boolean, false) is not true;
+    continue when coalesce((n -> ch ->> 'enabled')::boolean, false) is not true;
+    continue when p_only is not null and not (ch = any (p_only));
+    if ch = 'email' then
+      v_to := nullif(lower(trim(coalesce(p_email, ''))), '');
+      continue when v_to is null or v_to !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$';
+    else
+      v_to := right(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), 10);
+      continue when v_to !~ '^[6-9][0-9]{9}$';
+    end if;
+    -- WhatsApp may have its own wording (bold, emoji, line breaks); otherwise the shared text is used
+    v_body := case when ch = 'whatsapp' and coalesce(tpl ->> 'waText', '') <> '' then tpl ->> 'waText' else coalesce(tpl ->> 'text', '') end;
+    v_subj := coalesce(tpl ->> 'subject', '');
+    continue when v_body = '';
+    for k in select jsonb_object_keys(v_vars) loop
+      v_body := replace(v_body, '{' || k || '}', coalesce(v_vars ->> k, ''));
+      v_subj := replace(v_subj, '{' || k || '}', coalesce(v_vars ->> k, ''));
+    end loop;
+    insert into public.notification_outbox (event, channel, recipient, subject, body, vars, related_table, related_id)
+    values (p_event, ch, v_to, nullif(v_subj, ''), v_body, v_vars, p_related_table, p_related_id);
+    v_count := v_count + 1;
+  end loop;
+  return v_count;
+exception when others then
+  raise warning 'notify_enqueue(%) failed: %', p_event, sqlerrm;
+  return 0;
+end $$;
+revoke all on function public.notify_enqueue(text, text, text, jsonb, text, uuid, text[]) from public, anon, authenticated;
+
+create or replace function public.fmt_appt_time(t text)
+returns text language sql immutable as $$ select trim(to_char(t::time, 'FMHH12:MI AM')) $$;
+
+-- ------------------------------------------------------------------ event triggers
+drop function if exists public.notify_appointment() cascade;
+create function public.notify_appointment()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  p public.patients;
+  d public.doctors;
+  v_event text;
+begin
+  if tg_op = 'INSERT' then
+    if new.status = 'cancelled' then return new; end if;
+    v_event := 'appointment_booked';
+  elsif new.status = 'cancelled' and old.status is distinct from 'cancelled' then
+    v_event := 'appointment_cancelled';
+  elsif new.status <> 'cancelled' and (new.appointment_date, new.appointment_time) is distinct from (old.appointment_date, old.appointment_time) then
+    v_event := 'appointment_rescheduled';
+  else
+    return new;
+  end if;
+  if new.appointment_date < (now() at time zone 'Asia/Kolkata')::date then return new; end if;  -- back-dated entry
+  select * into p from public.patients where id = new.patient_id;
+  select * into d from public.doctors where id = new.doctor_id;
+  perform public.notify_enqueue(v_event, p.phone, p.email, jsonb_build_object(
+    'name', split_part(p.full_name, ' ', 1), 'patient', p.full_name, 'doctor', d.full_name,
+    'date', to_char(new.appointment_date, 'Dy, DD Mon YYYY'), 'time', public.fmt_appt_time(new.appointment_time),
+    'ref', coalesce(new.booking_ref, upper(left(new.id::text, 8)))), 'appointments', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_appointment: %', sqlerrm;
+  return new;
+end $$;
+create trigger trg_appointments_notify after insert or update on public.appointments
+  for each row execute function public.notify_appointment();
+
+drop function if exists public.notify_invoice() cascade;
+create function public.notify_invoice()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p public.patients;
+begin
+  if new.status not in ('unpaid', 'partial', 'overdue') then return new; end if;
+  select * into p from public.patients where id = new.patient_id;
+  perform public.notify_enqueue('invoice_created', p.phone, p.email, jsonb_build_object(
+    'name', split_part(p.full_name, ' ', 1), 'invoice', new.invoice_number,
+    'amount', '₹' || trim(to_char(new.total, 'FM99,99,99,990.00')),
+    'due_date', coalesce(to_char(new.due_date, 'DD Mon YYYY'), 'on receipt')), 'invoices', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_invoice: %', sqlerrm;
+  return new;
+end $$;
+create trigger trg_invoices_notify after insert on public.invoices
+  for each row execute function public.notify_invoice();
+
+drop function if exists public.notify_payment() cascade;
+create function public.notify_payment()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p public.patients; v_inv text;
+begin
+  select * into p from public.patients where id = new.patient_id;
+  select invoice_number into v_inv from public.invoices where id = new.invoice_id;
+  perform public.notify_enqueue('payment_received', p.phone, p.email, jsonb_build_object(
+    'name', split_part(p.full_name, ' ', 1), 'invoice', coalesce(v_inv, ''),
+    'amount', '₹' || trim(to_char(new.amount, 'FM99,99,99,990.00')),
+    'method', initcap(replace(new.method, '_', ' '))), 'payments', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_payment: %', sqlerrm;
+  return new;
+end $$;
+create trigger trg_payments_notify after insert on public.payments
+  for each row execute function public.notify_payment();
+
+drop function if exists public.notify_lab() cascade;
+create function public.notify_lab()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p public.patients;
+begin
+  if new.status <> 'completed' or old.status = 'completed' then return new; end if;
+  select * into p from public.patients where id = new.patient_id;
+  perform public.notify_enqueue('lab_report_ready', p.phone, p.email, jsonb_build_object(
+    'name', split_part(p.full_name, ' ', 1), 'test', new.test_name), 'lab_tests', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_lab: %', sqlerrm;
+  return new;
+end $$;
+create trigger trg_lab_tests_notify after update on public.lab_tests
+  for each row execute function public.notify_lab();
+
+-- Queue tomorrow's reminders (idempotent). Run daily with pg_cron, or from Settings → Notifications.
+drop function if exists public.queue_appointment_reminders() cascade;
+create function public.queue_appointment_reminders()
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare
+  r record;
+  v_count int := 0;
+  v_t uuid;
+  v_day date := (now() at time zone 'Asia/Kolkata')::date + 1;
+begin
+  if auth.uid() is not null and not public.has_role('owner', 'receptionist') then
+    raise exception 'Not allowed';
+  end if;
+  -- the daily cron job: once per hospital, so each reminder uses that hospital's templates and providers
+  if auth.uid() is null and nullif(current_setting('app.tenant_id', true), '') is null then
+    for v_t in select id from public.tenants where status <> 'suspended' order by created_at loop
+      perform set_config('app.tenant_id', v_t::text, true);
+      v_count := v_count + public.queue_appointment_reminders();
+    end loop;
+    perform set_config('app.tenant_id', '', true);
+    return v_count;
+  end if;
+  for r in
+    select a.*, p.full_name as p_name, p.phone as p_phone, p.email as p_email, d.full_name as d_name
+    from public.appointments a
+    join public.patients p on p.id = a.patient_id
+    join public.doctors d on d.id = a.doctor_id
+    where a.tenant_id = public.current_tenant() and a.appointment_date = v_day and a.status in ('scheduled', 'confirmed')
+      and not exists (select 1 from public.notification_outbox o where o.related_id = a.id and o.event = 'appointment_reminder')
+  loop
+    v_count := v_count + public.notify_enqueue('appointment_reminder', r.p_phone, r.p_email, jsonb_build_object(
+      'name', split_part(r.p_name, ' ', 1), 'patient', r.p_name, 'doctor', r.d_name,
+      'date', to_char(r.appointment_date, 'Dy, DD Mon YYYY'), 'time', public.fmt_appt_time(r.appointment_time),
+      'ref', coalesce(r.booking_ref, upper(left(r.id::text, 8)))), 'appointments', r.id);
+  end loop;
+  return v_count;
+end $$;
+revoke all on function public.queue_appointment_reminders() from public, anon;
+grant execute on function public.queue_appointment_reminders() to authenticated, service_role;
+
+-- Used by the Edge Function (service role) to take a batch of messages to deliver.
+-- claim_notifications(p_limit, p_tenant) — the queue for the notify Edge Function — lives in messaging.sql.
+
+-- Deliver specific fresh messages right away (e.g. the OTP a visitor just requested). Used by the notify
+-- function for callers that may not flush the whole queue (anonymous visitors, patients).
+drop function if exists public.claim_notifications_for(uuid[]) cascade;
+create function public.claim_notifications_for(p_ids uuid[])
+returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
+begin
+  return query
+    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
+    where o.id in (
+      select x.id from public.notification_outbox x
+      where x.status = 'pending' and x.attempts = 0 and x.created_at > now() - interval '15 minutes'
+        and (x.id = any (p_ids) or x.related_id = any (p_ids))
+      order by x.created_at
+      limit 10
+      for update skip locked)
+    returning o.*;
+end $$;
+revoke all on function public.claim_notifications_for(uuid[]) from public, anon, authenticated;
+grant execute on function public.claim_notifications_for(uuid[]) to service_role;
+-- <<< settings
+
+-- >>> patient (generated from scripts/sql/patient.sql — do not edit here)
+-- =====================================================================================================
+--  13. PATIENT SELF-SERVICE · FEEDBACK · STAFF INVITES · GO-LIVE HELPERS · WHATSAPP BOT STATE
+-- =====================================================================================================
+
+-- ------------------------------------------------------------------ helpers
+create or replace function public.site_url()
+returns text language sql stable security definer set search_path = public as $$
+  select rtrim(coalesce((public.tenant_content('settings') ->> 'siteUrl'), ''), '/')
+$$;
+
+-- ------------------------------------------------------------------ patients book / reschedule / cancel their own visits
+-- The patient portal writes to `appointments` directly (RLS: own rows). This trigger makes sure a patient
+-- can only book a genuinely free slot for themselves, move a future visit to another free slot of the
+-- same doctor, or cancel it — never change the doctor, status (other than cancel), notes or reference.
+create or replace function public.guard_patient_appointment()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_problem text;
+  v_now     timestamp := now() at time zone 'Asia/Kolkata';
+  v_cutoff  int := coalesce(nullif(public.booking_setting('rescheduleCutoffHours', '4'), '')::int, 4);
+begin
+  if auth.uid() is null or not public.has_role('patient') then return new; end if;
+
+  if tg_op = 'INSERT' then
+    if new.patient_id is distinct from public.my_patient_id() then raise exception 'You can only book appointments for yourself.'; end if;
+    new.status := 'scheduled';
+    new.source := 'portal';
+    new.notes := null;
+    new.contacted_at := null;
+    v_problem := public.slot_problem(new.doctor_id, new.appointment_date, new.appointment_time, true);
+    if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
+    return new;
+  end if;
+
+  -- UPDATE
+  if old.status not in ('scheduled', 'confirmed') or old.appointment_date + old.appointment_time::time < v_now then
+    raise exception 'This appointment can no longer be changed online. Please call the hospital.';
+  end if;
+  new.patient_id := old.patient_id;
+  new.doctor_id := old.doctor_id;
+  new.type := old.type;
+  new.notes := old.notes;
+  new.source := old.source;
+  new.booking_ref := old.booking_ref;
+  new.contacted_at := old.contacted_at;
+
+  if new.status is distinct from old.status and new.status <> 'cancelled'
+     and not (new.status = 'scheduled' and (new.appointment_date, new.appointment_time) is distinct from (old.appointment_date, old.appointment_time)) then
+    raise exception 'You can only cancel an appointment.';
+  end if;
+  if new.status = 'cancelled' then
+    new.appointment_date := old.appointment_date;
+    new.appointment_time := old.appointment_time;
+    return new;
+  end if;
+
+  if (new.appointment_date, new.appointment_time) is distinct from (old.appointment_date, old.appointment_time) then
+    if old.appointment_date + old.appointment_time::time < v_now + make_interval(hours => v_cutoff) then
+      raise exception 'Appointments can be rescheduled online up to % hours before the visit. Please call the hospital.', v_cutoff;
+    end if;
+    v_problem := public.slot_problem(new.doctor_id, new.appointment_date, new.appointment_time, true);
+    if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
+    new.status := 'scheduled';   -- a moved visit needs to be confirmed again
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_appointments_patient_guard on public.appointments;
+create trigger trg_appointments_patient_guard before insert or update on public.appointments
+  for each row execute function public.guard_patient_appointment();
+
+-- ------------------------------------------------------------------ visit feedback
+create or replace function public.guard_feedback()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare a public.appointments;
+begin
+  select * into a from public.appointments where id = new.appointment_id;
+  if not found then raise exception 'Appointment not found.'; end if;
+  if a.status <> 'completed' then raise exception 'You can rate a visit once it is completed.'; end if;
+  if auth.uid() is not null and public.has_role('patient') then
+    if a.patient_id is distinct from public.my_patient_id() then raise exception 'You can only rate your own visits.'; end if;
+    new.source := 'portal';
+  end if;
+  new.patient_id := a.patient_id;
+  new.doctor_id := a.doctor_id;
+  new.comment := nullif(left(trim(coalesce(new.comment, '')), 1000), '');
+  new.tags := coalesce(new.tags, '{}');
+  return new;
+end $$;
+drop trigger if exists trg_visit_feedback_guard on public.visit_feedback;
+create trigger trg_visit_feedback_guard before insert on public.visit_feedback
+  for each row execute function public.guard_feedback();
+
+-- Public feedback link (/feedback/<appointment id>) sent after the visit. The appointment id is a random
+-- UUID, so it works like a one-time token; nothing personal beyond the first name is returned.
+drop function if exists public.feedback_context(uuid) cascade;
+create function public.feedback_context(p_appt uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  a public.appointments;
+  p public.patients;
+  d public.doctors;
+begin
+  select * into a from public.appointments where id = p_appt and tenant_id = public.current_tenant();
+  if not found or a.status <> 'completed' or a.appointment_date < current_date - 60 then
+    return jsonb_build_object('ok', false, 'error', 'This feedback link has expired.');
+  end if;
+  select * into p from public.patients where id = a.patient_id;
+  select * into d from public.doctors where id = a.doctor_id;
+  return jsonb_build_object('ok', true,
+    'first_name', split_part(p.full_name, ' ', 1),
+    'doctor', d.full_name, 'specialization', d.specialization,
+    'date', a.appointment_date,
+    'submitted', exists (select 1 from public.visit_feedback f where f.appointment_id = a.id));
+end $$;
+
+drop function if exists public.submit_feedback(uuid, int, text, text[], boolean) cascade;
+create function public.submit_feedback(p_appt uuid, p_rating int, p_comment text, p_tags text[] default '{}', p_recommend boolean default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare a public.appointments;
+begin
+  perform set_config('app.actor_name', 'Patient feedback', true);
+  select * into a from public.appointments where id = p_appt and tenant_id = public.current_tenant();
+  if not found or a.status <> 'completed' or a.appointment_date < current_date - 60 then
+    raise exception 'This feedback link has expired.';
+  end if;
+  if p_rating is null or p_rating not between 1 and 5 then raise exception 'Please choose a rating from 1 to 5 stars.'; end if;
+  begin
+    insert into public.visit_feedback (appointment_id, patient_id, rating, comment, tags, would_recommend, source)
+    values (p_appt, a.patient_id, p_rating, p_comment,
+            (select coalesce(array_agg(t), '{}') from unnest(coalesce(p_tags, '{}')) t where t ~ '^[a-z_]{2,30}$'),
+            p_recommend, case when auth.uid() is null then 'link' else 'portal' end);
+  exception when unique_violation then
+    raise exception 'Thank you — feedback for this visit has already been received.';
+  end;
+  return jsonb_build_object('ok', true);
+end $$;
+revoke all on function public.feedback_context(uuid) from public;
+revoke all on function public.submit_feedback(uuid, int, text, text[], boolean) from public;
+grant execute on function public.feedback_context(uuid) to anon, authenticated;
+grant execute on function public.submit_feedback(uuid, int, text, text[], boolean) to anon, authenticated;
+
+-- ask for feedback when a visit is marked completed
+create or replace function public.notify_feedback_request()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p public.patients; d public.doctors;
+begin
+  if new.status <> 'completed' or old.status = 'completed' or public.site_url() = '' then return new; end if;
+  select * into p from public.patients where id = new.patient_id;
+  select * into d from public.doctors where id = new.doctor_id;
+  perform public.notify_enqueue('feedback_request', p.phone, p.email, jsonb_build_object(
+    'name', split_part(p.full_name, ' ', 1), 'doctor', d.full_name,
+    'link', public.site_url() || '/feedback/' || new.id), 'appointments', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_feedback_request: %', sqlerrm;
+  return new;
+end $$;
+drop trigger if exists trg_appointments_feedback on public.appointments;
+create trigger trg_appointments_feedback after update on public.appointments
+  for each row execute function public.notify_feedback_request();
+
+-- ------------------------------------------------------------------ staff invitations
+create or replace function public.stamp_staff_invite()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.email := lower(trim(new.email));
+  new.invited_by_name := coalesce(new.invited_by_name, (select full_name from public.profiles where id = auth.uid()));
+  if exists (select 1 from auth.users u where lower(u.email) = new.email) then
+    raise exception 'An account with this email already exists — change its role in Users & Roles instead.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_staff_invites_stamp on public.staff_invites;
+create trigger trg_staff_invites_stamp before insert on public.staff_invites
+  for each row execute function public.stamp_staff_invite();
+
+create or replace function public.notify_staff_invite()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if public.site_url() = '' then return new; end if;   -- no website address yet: the owner shares the link manually
+  perform public.notify_enqueue('staff_invite', new.phone, new.email, jsonb_build_object(
+    'name', split_part(new.full_name, ' ', 1), 'role', initcap(new.role::text),
+    'link', public.site_url() || '/register?invite=' || new.token), 'staff_invites', new.id);
+  return new;
+exception when others then
+  raise warning 'notify_staff_invite: %', sqlerrm;
+  return new;
+end $$;
+drop trigger if exists trg_staff_invites_notify on public.staff_invites;
+create trigger trg_staff_invites_notify after insert on public.staff_invites
+  for each row execute function public.notify_staff_invite();
+
+-- the sign-up page shows who the invite is for
+drop function if exists public.invite_lookup(text) cascade;
+create function public.invite_lookup(p_token text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select jsonb_build_object('ok', true, 'email', email, 'full_name', full_name, 'role', role, 'phone', phone)
+     from public.staff_invites where token = p_token and status = 'pending' and expires_at > now() and tenant_id = public.current_tenant()),
+    jsonb_build_object('ok', false, 'error', 'This invitation link is invalid or has expired. Ask the hospital to send a new one.'))
+$$;
+revoke all on function public.invite_lookup(text) from public;
+grant execute on function public.invite_lookup(text) to anon, authenticated;
+
+-- New auth users: an accepted staff invite gives the invited role; the production bootstrap e-mail
+-- (supabase/production.sql) becomes the first owner; everyone else is a patient.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  next_mrn int;
+  v_name   text := coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(new.email, '@', 1));
+  v_phone  text := nullif(new.raw_user_meta_data ->> 'phone', '');
+  v_inv    public.staff_invites;
+  v_owner  text := lower((public.tenant_setting('bootstrap') ->> 'owner_email'));
+  v_meta   text := new.raw_user_meta_data ->> 'tenant_id';
+  v_tenant uuid;
+begin
+  -- the hospital this sign-up belongs to (same rule as profiles_pick_tenant): an invite only counts there
+  if v_meta ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    select id into v_tenant from public.tenants where id = v_meta::uuid and status <> 'suspended';
+  end if;
+  v_tenant := coalesce(v_tenant, public.current_tenant(), public.primary_tenant());
+
+  select * into v_inv from public.staff_invites
+  where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email) and tenant_id = v_tenant
+    and status = 'pending' and expires_at > now()
+  for update;
+
+  if found then
+    insert into public.profiles (id, full_name, email, role, phone)
+    values (new.id, coalesce(nullif(v_name, ''), v_inv.full_name), new.email, v_inv.role, coalesce(v_phone, v_inv.phone))
+    on conflict (id) do update set role = excluded.role;
+    update public.staff_invites set status = 'accepted', accepted_at = now() where id = v_inv.id;
+    -- link an existing doctor / staff record with the same e-mail
+    if v_inv.role = 'doctor' then
+      update public.doctors set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null and tenant_id = v_tenant;
+    else
+      update public.staff set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null and tenant_id = v_tenant;
+    end if;
+    return new;
+  end if;
+
+  if v_owner is not null and lower(new.email) = v_owner and v_tenant = public.primary_tenant()
+     and not exists (select 1 from public.profiles where role = 'owner' and tenant_id = v_tenant) then
+    insert into public.profiles (id, full_name, email, role, phone) values (new.id, v_name, new.email, 'owner', v_phone)
+    on conflict (id) do update set role = 'owner';
+    return new;
+  end if;
+
+  insert into public.profiles (id, full_name, email, role, phone)
+  values (new.id, v_name, new.email, 'patient', v_phone)
+  on conflict (id) do nothing;
+
+  -- mrn '' → assign_record_number() gives the next number of this hospital (with its prefix)
+  insert into public.patients (profile_id, mrn, full_name, email, phone, gender, status)
+  values (new.id, '', v_name, new.email, v_phone, 'other', 'outpatient')
+  on conflict (profile_id) do nothing;
+  return new;
+end $$;
+
+-- ------------------------------------------------------------------ go-live helpers (owner only)
+-- Demo seed rows use ids shaped d0cXXXXX-0000-4000-8000-XXXXXXXXXXXX, which random UUIDs never produce.
+create or replace function public.is_demo_id(p uuid)
+returns boolean language sql immutable as $$ select p::text ~ '^d0c[0-9]{5}-0000-4000-8000-[0-9]{12}$' $$;
+
+drop function if exists public.demo_status() cascade;
+create function public.demo_status()
+returns jsonb language plpgsql stable security definer set search_path = public, extensions as $$
+declare u auth.users;
+begin
+  if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  if public.current_tenant() is distinct from public.primary_tenant() then
+    return jsonb_build_object('demo_accounts_active', 0, 'owner_is_demo_email', false, 'owner_has_demo_password', false, 'demo_rows', 0);
+  end if;
+  select * into u from auth.users where id = auth.uid();
+  return jsonb_build_object(
+    'demo_accounts_active', (select count(*) from auth.users a where public.is_demo_id(a.id) and a.id <> auth.uid()
+                             and (a.banned_until is null or a.banned_until < now())),
+    'owner_is_demo_email', lower(u.email) like '%@dchospital.com',
+    'owner_has_demo_password', coalesce(u.encrypted_password = extensions.crypt('Demo@123', u.encrypted_password), false),
+    'demo_rows', (select count(*) from public.patients where public.is_demo_id(id))
+               + (select count(*) from public.appointments where public.is_demo_id(id))
+               + (select count(*) from public.invoices where public.is_demo_id(id)));
+end $$;
+
+-- Locks the demo logins (random password + banned), except the account running this.
+drop function if exists public.lock_demo_accounts() cascade;
+create function public.lock_demo_accounts()
+returns int language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v_count int;
+begin
+  if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo logins live in the main hospital
+  perform public.module_guard('data');
+  update auth.users set encrypted_password = extensions.crypt(encode(extensions.gen_random_bytes(24), 'hex'), extensions.gen_salt('bf')),
+                        banned_until = 'infinity'
+  where public.is_demo_id(id) and id <> auth.uid();
+  get diagnostics v_count = row_count;
+  insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
+  values ('profiles', null, 'update', auth.uid(), (select full_name from public.profiles where id = auth.uid()), 'owner',
+          'Locked ' || v_count || ' demo accounts', '{}'::jsonb);
+  return v_count;
+end $$;
+
+-- Deletes the demo patients / visits / bills / staff records. Real records (random ids) are untouched.
+drop function if exists public.clear_demo_data() cascade;
+create function public.clear_demo_data()
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare v_total int := 0; v_n int; t text; v_id uuid;
+begin
+  if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo rows live in the main hospital
+  perform public.module_guard('data');
+  perform set_config('app.actor_name', 'Go-live cleanup', true);
+  foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
+                           'doctor_leaves', 'site_enquiries', 'site_forms', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
+  loop
+    begin
+      execute format('delete from public.%I where public.is_demo_id(id)', t);
+      get diagnostics v_n = row_count;
+      v_total := v_total + v_n;
+    exception when foreign_key_violation or restrict_violation then
+      -- a real record points at a demo one (e.g. a real bill for a demo patient): keep those, delete the rest
+      for v_id in execute format('select id from public.%I where public.is_demo_id(id)', t) loop
+        begin
+          execute format('delete from public.%I where id = $1', t) using v_id;
+          v_total := v_total + 1;
+        exception when foreign_key_violation or restrict_violation then null;
+        end;
+      end loop;
+    end;
+  end loop;
+  return v_total;
+end $$;
+revoke all on function public.demo_status() from public, anon;
+revoke all on function public.lock_demo_accounts() from public, anon;
+revoke all on function public.clear_demo_data() from public, anon;
+grant execute on function public.demo_status() to authenticated;
+grant execute on function public.lock_demo_accounts() to authenticated;
+grant execute on function public.clear_demo_data() to authenticated;
+
+-- ------------------------------------------------------------------ WhatsApp chatbot state
+alter table public.wa_sessions enable row level security;   -- no policies: Edge Function (service role) only
+revoke all on public.wa_sessions from anon, authenticated;
+grant all on public.wa_sessions to service_role;
+grant select, insert, update on public.visit_feedback to service_role;
+grant select on public.appointments, public.doctors, public.patients, public.departments to service_role;
+
+-- tables created in this section need the standard grants too
+grant select, insert, update, delete on public.visit_feedback, public.staff_invites to authenticated;
+
+-- ------------------------------------------------------------------ WhatsApp chatbot helpers (service role only)
+-- The sender's number is verified by WhatsApp itself, so the bot can book / list / cancel for that number.
+create or replace function public.bot_free_slots(p_doctor uuid, p_limit int default 8)
+returns table (slot_date date, slot_time text)
+language sql stable security definer set search_path = public as $$
+  with days as (
+    select (now() at time zone 'Asia/Kolkata')::date + g as d
+    from generate_series(0, least(coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30), 60)) g
+  ), times as (
+    select to_char(time '08:00' + make_interval(mins => 30 * g), 'HH24:MI') as t from generate_series(0, 21) g
+  )
+  select days.d, times.t
+  from days cross join times
+  where public.slot_problem(p_doctor, days.d, times.t, true) is null
+    and not exists (select 1 from public.appointments a
+                    where a.tenant_id = public.current_tenant() and a.doctor_id = p_doctor and a.appointment_date = days.d and left(a.appointment_time, 5) = times.t
+                      and a.status not in ('cancelled', 'no_show'))
+  order by 1, 2
+  limit greatest(1, least(p_limit, 20))
+$$;
+
+create or replace function public.bot_patient(p_phone text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('id', p.id, 'full_name', p.full_name, 'mrn', p.mrn)
+  from public.patients p
+  where p.tenant_id = public.current_tenant() and public.norm_phone(p.phone) = public.norm_phone(p_phone)
+  order by p.created_at
+  limit 1
+$$;
+
+create or replace function public.bot_upcoming(p_phone text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', a.id, 'ref', coalesce(a.booking_ref, upper(left(a.id::text, 8))), 'date', a.appointment_date,
+           'time', left(a.appointment_time, 5), 'status', a.status, 'doctor', d.full_name) order by a.appointment_date, a.appointment_time), '[]'::jsonb)
+  from public.appointments a
+  join public.patients p on p.id = a.patient_id
+  join public.doctors d on d.id = a.doctor_id
+  where a.tenant_id = public.current_tenant() and public.norm_phone(p.phone) = public.norm_phone(p_phone)
+    and a.appointment_date >= (now() at time zone 'Asia/Kolkata')::date
+    and a.status in ('scheduled', 'confirmed')
+$$;
+
+create or replace function public.whatsapp_cancel_appointment(p_phone text, p_appt uuid)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  perform set_config('app.actor_name', 'WhatsApp bot', true);
+  perform set_config('app.actor_role', 'public', true);
+  update public.appointments a set status = 'cancelled'
+  from public.patients p
+  where a.id = p_appt and a.tenant_id = public.current_tenant() and p.id = a.patient_id and public.norm_phone(p.phone) = public.norm_phone(p_phone)
+    and a.status in ('scheduled', 'confirmed') and a.appointment_date >= (now() at time zone 'Asia/Kolkata')::date
+  returning a.id into v_id;
+  if v_id is null then raise exception 'This appointment cannot be cancelled here. Please call the hospital.'; end if;
+  return true;
+end $$;
+
+revoke all on function public.bot_free_slots(uuid, int) from public, anon, authenticated;
+revoke all on function public.bot_patient(text) from public, anon, authenticated;
+revoke all on function public.bot_upcoming(text) from public, anon, authenticated;
+revoke all on function public.whatsapp_cancel_appointment(text, uuid) from public, anon, authenticated;
+grant execute on function public.bot_free_slots(uuid, int) to service_role;
+grant execute on function public.bot_patient(text) to service_role;
+grant execute on function public.bot_upcoming(text) to service_role;
+grant execute on function public.whatsapp_cancel_appointment(text, uuid) to service_role;
+-- <<< patient
+
 -- >>> scale (generated from scripts/sql/scale.sql — do not edit here)
 -- =====================================================================================================
 --  15. SCALE — server-side pagination support (idempotent; also shipped in supabase/upgrade-2026-10.sql)
@@ -512,6 +1913,8 @@ create table if not exists public.password_reset_otps (
   token_used_at  timestamptz,
   created_at     timestamptz not null default now()
 );
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 create index if not exists password_reset_otps_phone_idx on public.password_reset_otps (phone, created_at desc);
 alter table public.password_reset_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.password_reset_otps from anon, authenticated;
@@ -692,6 +2095,8 @@ create table if not exists public.site_forms (
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 drop trigger if exists trg_site_forms_updated_at on public.site_forms;
 create trigger trg_site_forms_updated_at before update on public.site_forms
   for each row execute function public.set_updated_at();
@@ -980,6 +2385,9 @@ drop policy if exists push_tokens_own_read on public.push_tokens;
 drop policy if exists push_tokens_own_delete on public.push_tokens;
 create policy push_tokens_own_read on public.push_tokens for select to authenticated using (profile_id = auth.uid() or public.has_role('owner'));
 create policy push_tokens_own_delete on public.push_tokens for delete to authenticated using (profile_id = auth.uid());
+
+-- tables created by this section get their hospital column right away (functions below refer to it)
+select public.ensure_tenant_columns();
 
 -- a device belongs to whoever signed in on it last (shared reception PCs)
 create or replace function public.register_push_token(p_token text, p_platform text default 'web', p_user_agent text default null)
@@ -1614,6 +3022,15 @@ grant execute on function public.admin_user_status(uuid[]) to authenticated;
 grant execute on function public.admin_delete_user(uuid) to authenticated;
 -- <<< messaging
 
+-- notices: an expiry date can't be before the publish date (databases from before September 2026 lack this check)
+update public.notices set expires_on = null where expires_on < published_on;
+do $notices$ begin
+  if not exists (select 1 from pg_constraint where conrelid = 'public.notices'::regclass and contype = 'c'
+                  and pg_get_constraintdef(oid) like '%expires_on >= published_on%') then
+    alter table public.notices add constraint notices_check check (expires_on is null or expires_on >= published_on);
+  end if;
+end $notices$;
+
 -- >>> tenancy (generated from scripts/sql/tenancy.sql — do not edit here)
 -- =====================================================================================================
 --  19. MULTI-TENANCY — Hospital Comrade (many hospitals on one database) + provider roles
@@ -1992,6 +3409,14 @@ create trigger trg_notification_templates_locked before insert or update or dele
 
 revoke all on function public.keep_locked_sections(), public.guard_locked_table() from public, anon, authenticated;
 grant execute on function public.module_locked(text) to anon, authenticated;
+
+-- ------------------------------------------------------------------ internal helpers stay internal (phase 1.7)
+-- master.sql grants EXECUTE on every function to authenticated after tenancy_core.sql ran, and new functions are
+-- executable by PUBLIC by default — so the revokes are repeated here, at the very end. Only SECURITY DEFINER
+-- functions call these (they run as the owner). tenant_secret reads credentials; tenant_setting the hospital's
+-- private settings (gateway URLs, sessions); ensure_tenant_columns changes the schema.
+revoke all on function public.tenant_secret(text), public.tenant_setting(text), public.tenant_content(text),
+  public.ensure_tenant_columns() from public, anon, authenticated;
 -- <<< tenancy
 
 commit;
