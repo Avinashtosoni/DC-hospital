@@ -29,3 +29,22 @@ describe('platform legal pages', () => {
     expect(JSON.stringify(legalDoc('dpa'))).toMatch(/24 hours/)
   })
 })
+
+describe('free-trial sign-up form', async () => {
+  const { signupProblem, signupInfo, trialSignup } = await import('../src/platform/api')
+  const ok = { organisation: 'Sunrise Clinic', name: 'Meera', email: 'meera@sunrise.in', phone: '+91 98765 43210', city: '', plan: 'clinic', website: '' }
+  it('checks like the database does', () => {
+    expect(signupProblem(ok, true)).toBeNull()
+    expect(signupProblem(ok, false)).toMatch(/Terms of Service/)
+    expect(signupProblem({ ...ok, phone: '12345' }, true)).toMatch(/10-digit/)
+    expect(signupProblem({ ...ok, email: 'x@y' }, true)).toMatch(/e-mail/)
+    expect(signupProblem({ ...ok, organisation: ' ' }, true)).toMatch(/hospital/)
+  })
+  it('demo mode: reviewed sign-up, kept in the browser for the panel', async () => {
+    const m = new Map<string, string>()
+    globalThis.localStorage = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), clear: () => m.clear(), key: () => null, length: 0 } as Storage
+    expect(await signupInfo()).toMatchObject({ enabled: true, mode: 'approve', trialDays: 14 })
+    expect(await trialSignup({ ...ok, email: ' Meera@Sunrise.in ' }, '2026-10-02')).toEqual({ status: 'pending', email: 'meera@sunrise.in' })
+    expect(JSON.parse(m.get('dch:platform-signups:v1')!)[0]).toMatchObject({ organisation: 'Sunrise Clinic', terms_version: '2026-10-02' })
+  })
+})

@@ -78,7 +78,8 @@ end $$;
 
 -- a new hospital: tenants row, address, owner e-mail (first sign-up with it becomes the owner), default settings
 --   { slug, name, code, plan, owner_email, domain?, status: trial|active, trial_days?, months? (active), modules?, notes? }
-create or replace function public.cp_create_hospital(p jsonb)
+-- hospital_create() does the work (internal — also used by self-service sign-up); cp_create_hospital() is the admin's door
+create or replace function public.hospital_create(p jsonb)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
   cfg     jsonb := public.billing_config();
@@ -93,7 +94,6 @@ declare
   v_mod   jsonb := coalesce(p -> 'modules', '{"dashboard": "hospital", "forms": "hospital", "notifications": "hospital", "security": "hospital"}'::jsonb);
   v_id    uuid;
 begin
-  perform public.cp_require(array['admin']);
   if v_slug !~ '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$' then raise exception 'Short name: 2–40 characters, a-z, 0-9 and -, e.g. citycare'; end if;
   if char_length(v_name) not between 2 and 120 then raise exception 'Enter the hospital''s name.'; end if;
   if v_code !~ '^[A-Z]{2,6}$' then raise exception 'Record prefix: 2–6 capital letters, e.g. CCC'; end if;
@@ -124,6 +124,13 @@ begin
   perform public.seed_hospital_defaults(v_id);
   perform public.provider_log('hospital:create', v_slug, jsonb_build_object('plan', v_plan, 'status', v_stat, 'owner', v_owner, 'domain', nullif(v_dom, '')));
   return jsonb_build_object('id', v_id, 'slug', v_slug, 'domain', nullif(v_dom, ''), 'owner_email', v_owner);
+end $$;
+
+create or replace function public.cp_create_hospital(p jsonb)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+begin
+  perform public.cp_require(array['admin']);
+  return public.hospital_create(p);
 end $$;
 
 -- edit a hospital: { name?, code?, notes?, modules?, owner_email? (until the owner has signed up) }
@@ -317,7 +324,7 @@ begin
 end $$;
 
 -- ------------------------------------------------------------------ who may call what
-revoke all on function public.cp_require(text[]) from public, anon, authenticated;
+revoke all on function public.cp_require(text[]), public.hospital_create(jsonb) from public, anon, authenticated;
 revoke all on function public.cp_me(), public.cp_hospitals(uuid), public.cp_hospital(uuid), public.cp_create_hospital(jsonb), public.cp_update_hospital(uuid, jsonb),
   public.cp_billing(uuid, text, jsonb), public.cp_overview(), public.cp_team(), public.cp_save_provider(jsonb), public.cp_payments(uuid, int),
   public.cp_audit(uuid, int), public.cp_settings(), public.cp_save_billing_settings(jsonb) from public, anon;

@@ -121,3 +121,32 @@ describe('control panel phase 7 (demo)', () => {
     await expect(cp.retention()).rejects.toThrow(/\(admin\)/)
   })
 })
+
+describe('control panel phase 8.2 sign-ups (demo)', () => {
+  test('a request from the product page shows up; approve creates the hospital, reject records the note', async () => {
+    localStorage.setItem('dch:platform-signups:v1', JSON.stringify([{ organisation: 'Ganga Eye Care', name: 'Dr. Asha', email: 'Asha@GangaEye.in', phone: '+91 98111 22233', city: 'Bhagalpur', plan: 'clinic', terms_version: '2026-10-02', created_at: new Date().toISOString() }]))
+    await as('support')
+    await expect(cp.signups()).rejects.toThrow(/\(admin\)/)
+    await as('admin')
+    const list = await cp.signups()
+    const mine = list.find((s) => s.organisation === 'Ganga Eye Care')!
+    expect(mine).toMatchObject({ email: 'asha@gangaeye.in', phone: '9811122233', slug: 'gangaeyecare', code: 'GEC', status: 'pending' })
+    expect(list[0].status).toBe('pending')
+    expect((await cp.signupSettings()).pending).toBe(3)
+    const done = await cp.decideSignup(mine.id, 'approve')
+    expect(done).toMatchObject({ status: 'created', owner_joined: false, decided_by_name: 'Aman Sinha' })
+    const h = await cp.hospital(done.hospital_id!)
+    expect(h).toMatchObject({ slug: 'gangaeyecare', owner_email: 'asha@gangaeye.in' })
+    expect(h.license.status).toBe('trial')
+    await expect(cp.decideSignup(mine.id, 'reject')).rejects.toThrow(/already handled/)
+    expect(await cp.decideSignup('demo-signup-2', 'reject', 'Duplicate')).toMatchObject({ status: 'rejected', reason: 'Duplicate' })
+    expect((await cp.signupSettings()).pending).toBe(1)
+  }, 20_000)
+
+  test('settings are validated and saved', async () => {
+    await as('admin')
+    await expect(cp.saveSignupSettings({ trialDays: 0 })).rejects.toThrow(/1 to 90/)
+    await expect(cp.saveSignupSettings({ platformUrl: 'http://x' })).rejects.toThrow(/https/)
+    expect(await cp.saveSignupSettings({ mode: 'instant', trialDays: 30, enabled: false })).toMatchObject({ mode: 'instant', trialDays: 30, enabled: false })
+  }, 20_000)
+})

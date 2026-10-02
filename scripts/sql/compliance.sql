@@ -465,6 +465,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare
   c   jsonb := public.retention_config();
   r   jsonb := '{}'::jsonb;
+  r_s jsonb;
   n   bigint;
   d   int;
 begin
@@ -487,6 +488,8 @@ begin
   delete from public.privacy_requests where status <> 'open' and resolved_at < now() - make_interval(days => d); get diagnostics n = row_count; r := r || jsonb_build_object('privacy_requests', n);
   d := greatest(coalesce((c ->> 'waSessionDays')::int, 30), 1);
   delete from public.wa_sessions where updated_at < now() - make_interval(days => d); get diagnostics n = row_count; r := r || jsonb_build_object('wa_sessions', n);
+  -- self-service sign-ups (phase 8, signup.sql — loaded after this file)
+  if to_regprocedure('public.signup_cleanup()') is not null then execute 'select public.signup_cleanup()' into r_s; r := r || jsonb_build_object('signups', r_s); end if;
   perform set_config('app.skip_audit', '', true);
   update public.platform_settings set data = data || jsonb_build_object('last_run', jsonb_build_object('at', now(), 'deleted', r)), updated_at = now() where key = 'retention';
   return r;

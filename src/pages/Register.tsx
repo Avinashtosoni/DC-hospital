@@ -18,14 +18,16 @@ import { useT } from '../i18n'
 export default function Register() {
   const { user, signUp } = useAuth()
   const nav = useNavigate()
-  const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '', confirm: '' })
+  const [params] = useSearchParams()
+  // ?email= from the free-trial sign-up page: the hospital's owner e-mail
+  const [form, setForm] = useState({ full_name: '', email: (params.get('email') ?? '').trim().slice(0, 150), phone: '', password: '', confirm: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [agree, setAgree] = useState(false)
   const [confirmFor, setConfirmFor] = useState<string | null>(null)
   const site = useSiteSettings()
   const { t } = useT()
-  const token = useSearchParams()[0].get('invite') ?? ''
+  const token = params.get('invite') ?? ''
   const invite = useQuery({ queryKey: ['invite', token], queryFn: () => lookupInvite(token), enabled: !!token, staleTime: Infinity })
   const inv = invite.data?.ok ? invite.data : null
   useEffect(() => {

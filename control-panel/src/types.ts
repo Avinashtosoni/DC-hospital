@@ -177,3 +177,39 @@ export type RetentionConfig = Partial<Record<RetentionKey, number>> & { last_run
 /** same minimums as cp_save_retention() */
 export const RETENTION_MIN: Record<RetentionKey, number> = { auditDays: 365, providerAuditDays: 365, outboxDays: 30, otpDays: 1, enquiryDays: 30, leadDays: 30, privacyDays: 365, waSessionDays: 1 }
 export const RETENTION_DEFAULTS: Record<RetentionKey, number> = { auditDays: 1095, providerAuditDays: 1095, outboxDays: 400, otpDays: 7, enquiryDays: 1095, leadDays: 1095, privacyDays: 1095, waSessionDays: 30 }
+
+// ------------------------------------------------------------------ phase 8.2 — self-service sign-up
+export type SignupStatus = 'pending' | 'created' | 'rejected' | 'expired'
+export interface CpSignup {
+  id: string
+  created_at: string
+  organisation: string
+  contact_name: string
+  email: string
+  phone: string
+  city: string | null
+  plan: string
+  trial_days: number
+  slug: string
+  code: string
+  status: SignupStatus
+  hospital_id: string | null
+  hospital_slug?: string | null
+  owner_joined?: boolean
+  terms_version: string
+  decided_at: string | null
+  decided_by_name: string | null
+  reason: string | null
+}
+export interface SignupSettings {
+  enabled: boolean
+  mode: 'instant' | 'approve'
+  trialDays: number
+  plan: string
+  maxPerDay: number
+  unclaimedDays: number
+  /** the product site's address, used in the welcome e-mail's link */
+  platformUrl: string
+  pending?: number
+}
+export const SIGNUP_DEFAULTS: SignupSettings = { enabled: true, mode: 'approve', trialDays: 14, plan: 'clinic', maxPerDay: 25, unclaimedDays: 14, platformUrl: '' }

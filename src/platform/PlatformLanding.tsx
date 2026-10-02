@@ -8,6 +8,7 @@ import { cn } from '../lib/utils'
 import { PLANS, type Plan } from './plans'
 import { leadProblem, submitLead, type Lead } from './api'
 import LegalPage, { platformHref } from './LegalPage'
+import SignupPage from './SignupPage'
 import { legalDocs } from './legal'
 
 /**
@@ -46,11 +47,12 @@ const FAQS = [
   { q: 'What does the demo contain?', a: 'Two sample hospitals with fake patients and bills. Every role has a one-click demo login, and nothing you change affects anyone else.' },
 ]
 
-/** the platform domain's pages: / (product), /legal/:slug */
+/** the platform domain's pages: / (product), /signup (free trial), /legal/:slug */
 export default function PlatformLanding() {
   const path = typeof location === 'undefined' ? '/' : location.pathname
   const legal = path.match(/^\/legal\/([a-z]+)\/?$/)
   if (legal) return <LegalPage slug={legal[1]} />
+  if (/^\/signup\/?$/.test(path)) return <SignupPage />
   return <ProductPage />
 }
 
@@ -106,7 +108,8 @@ function Header() {
           {links.map(([l, h]) => <a key={h} href={h} className="transition hover:text-peri-500">{l}</a>)}
         </nav>
         <div className="flex items-center gap-2">
-          <a href={DEMO_URL} className="btn-peri hidden !px-5 !py-2.5 sm:inline-flex">Live demo<ArrowRight className="h-4 w-4" /></a>
+          <a href={DEMO_URL} className="hidden px-2 text-sm font-semibold text-peri-800 hover:text-peri-500 lg:inline">Live demo</a>
+          <a href={platformHref('/signup')} className="btn-peri hidden !px-5 !py-2.5 sm:inline-flex">Start free trial<ArrowRight className="h-4 w-4" /></a>
           <button type="button" className="grid h-10 w-10 place-items-center rounded-xl text-peri-800 hover:bg-peri-100 md:hidden" aria-label={open ? 'Close menu' : 'Open menu'} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
@@ -116,7 +119,8 @@ function Header() {
         <nav aria-label="Mobile" className="border-t border-peri-200/60 bg-white md:hidden">
           <div className="l-container flex flex-col py-3">
             {links.map(([l, h]) => <a key={h} href={h} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 font-medium text-peri-900 hover:bg-peri-50">{l}</a>)}
-            <a href={DEMO_URL} className="btn-peri mt-2">Live demo<ArrowRight className="h-4 w-4" /></a>
+            <a href={DEMO_URL} className="rounded-xl px-3 py-3 font-medium text-peri-900 hover:bg-peri-50">Live demo</a>
+            <a href={platformHref('/signup')} className="btn-peri mt-2">Start free trial<ArrowRight className="h-4 w-4" /></a>
           </div>
         </nav>
       )}
@@ -154,10 +158,10 @@ function Hero() {
             Appointments, patient records, billing, lab, wards and WhatsApp reminders — plus a beautiful hospital website on your own domain. Ready in a day.
           </p>
           <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
-            <a href={DEMO_URL} className="btn-peri w-full sm:w-auto">Try the live demo<ArrowRight className="h-4 w-4" /></a>
-            <a href="#contact" className="btn-ghost w-full sm:w-auto">Talk to us</a>
+            <a href={platformHref('/signup')} className="btn-peri w-full sm:w-auto">Start free trial<ArrowRight className="h-4 w-4" /></a>
+            <a href={DEMO_URL} className="btn-ghost w-full sm:w-auto">Try the live demo</a>
           </div>
-          <p className="mt-5 text-sm text-slate-500">Plans from <b className="text-peri-900">{inr(999)}/month</b> · No setup fee · Cancel anytime</p>
+          <p className="mt-5 text-sm text-slate-500">Free trial, no card · Plans from <b className="text-peri-900">{inr(999)}/month</b> · <a href="#contact" className="underline-offset-4 hover:underline">Talk to us</a></p>
         </div>
         <DashboardMock />
       </div>
@@ -288,8 +292,10 @@ function Pricing() {
             <ul className="mt-6 flex-1 space-y-2.5 text-sm">
               {p.features.map((f) => <li key={f} className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-peri-600" />{f}</li>)}
             </ul>
-            <a href={`#contact`} data-plan={p.id} onClick={() => window.dispatchEvent(new CustomEvent('hc:plan', { detail: p.id }))}
-              className={cn('mt-7 w-full', p.highlight ? 'btn-peri' : 'btn-ghost')}>{p.cta}</a>
+            {p.id === 'clinic' || p.id === 'hospital'
+              ? <a href={platformHref(`/signup?plan=${p.id}`)} className={cn('mt-7 w-full', p.highlight ? 'btn-peri' : 'btn-ghost')}>Start free trial</a>
+              : <a href={`#contact`} data-plan={p.id} onClick={() => window.dispatchEvent(new CustomEvent('hc:plan', { detail: p.id }))}
+                  className={cn('mt-7 w-full', p.highlight ? 'btn-peri' : 'btn-ghost')}>{p.cta}</a>}
           </div>
         ))}
       </div>

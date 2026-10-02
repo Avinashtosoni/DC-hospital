@@ -11,12 +11,13 @@ import type { PaymentRow } from '../../src/billing/types'
 import { BILLING_DEFAULTS, type BillingConfig } from '../../src/platform/billing'
 import { DEMO_PROVIDERS, DEMO_TENANT_EDITS_KEY, DEMO_TENANTS, type DemoProvider, type DemoTenantEdit } from '../../src/tenancy/demo'
 import type { CpApi } from './api'
-import type { CpAudit, CpHealth, CpHospital, CpHospitalDetail, CpIncident, CpLead, CpMe, CpMember, CpOverview, CpPayment, ModuleMap, ProviderRole, RetentionConfig } from './types'
-import { RETENTION_DEFAULTS, RETENTION_KEYS, RETENTION_MIN } from './types'
+import type { CpAudit, CpHealth, CpHospital, CpHospitalDetail, CpIncident, CpLead, CpMe, CpMember, CpOverview, CpPayment, CpSignup, ModuleMap, ProviderRole, RetentionConfig, SignupSettings } from './types'
+import { RETENTION_DEFAULTS, RETENTION_KEYS, RETENTION_MIN, SIGNUP_DEFAULTS } from './types'
 
 const KEY = 'dch:cp:v1'
 const SESSION = 'dch:cp:session:v1'
 const LEADS = 'dch:platform-leads:v1'
+const SIGNUPS = 'dch:platform-signups:v1'   // written by the product page's /signup in demo mode
 const PASSWORD = 'Demo@123'
 const DEFAULT_MODULES: ModuleMap = { dashboard: 'hospital', forms: 'hospital', notifications: 'hospital', security: 'hospital' }
 const MODULE_KEYS = ['general', 'appearance', 'dashboard', 'notifications', 'forms', 'security', 'data', 'cms']
@@ -40,6 +41,8 @@ interface Store {
   incidents?: CpIncident[]
   retention?: RetentionConfig
   purged?: { slug: string; name: string; at: string }[]
+  signup?: Partial<SignupSettings>
+  signupDecisions?: Record<string, Partial<CpSignup>>
 }
 
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
@@ -578,6 +581,79 @@ export const demoCp: CpApi = {
     save(s)
     return deleted
   },
+
+  async signups() { await wait(); need(['admin']); return signupsAll() },
+
+  async decideSignup(id, action, reason) {
+    await wait(400)
+    const m = need(['admin'])
+    const row = signupsAll().find((x) => x.id === id)
+    if (!row) throw new Error('Sign-up not found')
+    if (row.status !== 'pending') throw new Error('This sign-up was already handled.')
+    let patch: Partial<CpSignup>
+    if (action === 'approve') {
+      const taken = new Set(rowsAll().map((h) => h.slug))
+      let slug = row.slug, i = 1
+      while (taken.has(slug)) slug = `${row.slug}-${++i}`
+      const h = await demoCp.createHospital({ slug, name: row.organisation, code: row.code, plan: row.plan, owner_email: row.email, domain: '', status: 'trial',
+        trial_days: row.trial_days, months: 12, modules: DEFAULT_MODULES, notes: `Self-service sign-up · ${row.contact_name} · ${row.phone}${row.city ? ` · ${row.city}` : ''} · Terms ${row.terms_version}` })
+      patch = { status: 'created', hospital_id: h.id, hospital_slug: h.slug, slug: h.slug, owner_joined: false }
+    } else {
+      patch = { status: 'rejected', reason: reason?.trim().slice(0, 300) || null }
+    }
+    const s = load()
+    s.signupDecisions = { ...s.signupDecisions, [id]: { ...patch, decided_at: iso(), decided_by_name: m.name } }
+    save(s)
+    log(`signup:${action}`, patch.hospital_id ?? null, row.organisation, { email: row.email, reason: reason ?? null })
+    return { ...row, ...s.signupDecisions[id] }
+  },
+
+  async signupSettings() { await wait(); need(['admin']); return { ...signupSettings(), pending: signupsAll().filter((x) => x.status === 'pending').length } },
+
+  async saveSignupSettings(p) {
+    await wait()
+    need(['admin'])
+    if (p.mode !== undefined && !['instant', 'approve'].includes(p.mode)) throw new Error('Mode: instant or approve.')
+    if (p.trialDays !== undefined && !(Number.isInteger(p.trialDays) && p.trialDays >= 1 && p.trialDays <= 90)) throw new Error('Trial: 1 to 90 days.')
+    if (p.plan !== undefined && !(p.plan in config().plans)) throw new Error(`Unknown plan ${p.plan}`)
+    if (p.maxPerDay !== undefined && !(Number.isInteger(p.maxPerDay) && p.maxPerDay >= 1 && p.maxPerDay <= 1000)) throw new Error('Sign-ups per day: 1 to 1000.')
+    if (p.unclaimedDays !== undefined && !(Number.isInteger(p.unclaimedDays) && p.unclaimedDays >= 3 && p.unclaimedDays <= 90)) throw new Error('Unclaimed trials: close after 3 to 90 days.')
+    if (p.platformUrl !== undefined && !/^(https:\/\/[a-z0-9.-]+(:[0-9]+)?\/?)?$/.test(p.platformUrl)) throw new Error('Website: https://your-domain (or leave empty).')
+    const s = load()
+    const { pending: _p, ...clean } = p
+    s.signup = { ...s.signup, ...clean }
+    save(s)
+    log('settings:signup', null, null, clean as Record<string, unknown>)
+    return demoCp.signupSettings()
+  },
+}
+
+function signupSettings(s = load()): SignupSettings { return { ...SIGNUP_DEFAULTS, ...s.signup } }
+const slugify = (n: string) => { const b = n.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 30); return b.length >= 3 ? b : 'hospital' }
+const initials = (n: string) => {
+  const w = n.toUpperCase().replace(/[^A-Z ]/g, ' ').split(/\s+/).filter((x) => x && !['THE', 'AND', 'OF', 'PVT', 'LTD'].includes(x))
+  const v = (w.length >= 2 ? w.map((x) => x[0]).join('') : (w[0] ?? '').slice(0, 3)).slice(0, 6)
+  return v.length >= 2 ? v : 'HC'
+}
+/** sample requests + the ones made on this browser's product page (/signup), with the decisions taken here */
+function signupsAll(s = load()): CpSignup[] {
+  const days = signupSettings(s).trialDays
+  const base = (o: Partial<CpSignup> & Pick<CpSignup, 'id' | 'organisation' | 'contact_name' | 'email' | 'phone'>): CpSignup => ({
+    created_at: iso(), city: null, plan: 'clinic', trial_days: days, slug: slugify(o.organisation), code: initials(o.organisation), status: 'pending',
+    hospital_id: null, terms_version: '2026-10-02', decided_at: null, decided_by_name: null, reason: null, ...o })
+  const raw = read<{ organisation: string; name: string; email: string; phone: string; city?: string; plan?: string; terms_version?: string; created_at?: string }[]>(SIGNUPS, [])
+  const fromForm = raw.map((r, i) => base({ id: `demo-signup-${r.created_at ?? i}`, created_at: r.created_at ?? iso(), organisation: r.organisation.trim(), contact_name: r.name.trim(),
+    email: r.email.trim().toLowerCase(), phone: r.phone.replace(/\D/g, '').slice(-10), city: r.city?.trim() || null, plan: r.plan || 'clinic', terms_version: r.terms_version ?? '2026-10-02' }))
+  const sample = [
+    base({ id: 'demo-signup-1', created_at: iso(Date.now() - 3 * 36e5), organisation: 'Sunrise Care Clinic', contact_name: 'Dr. Meera Jha', email: 'meera@sunriseclinic.in', phone: '9876543210', city: 'Purnia' }),
+    base({ id: 'demo-signup-2', created_at: iso(Date.now() - 26 * 36e5), organisation: 'Kosi Multispeciality Hospital', contact_name: 'Rakesh Singh', email: 'admin@kosihospital.in', phone: '9431012345', city: 'Saharsa', plan: 'hospital' }),
+    base({ id: 'demo-signup-3', created_at: iso(Date.now() - 5 * 864e5), organisation: 'Test', contact_name: 'asdf', email: 'asdf@mailinator.com', phone: '9000000000', status: 'rejected', reason: 'Not a real hospital', decided_at: iso(Date.now() - 4 * 864e5), decided_by_name: 'Aman Sinha' }),
+  ]
+  const hospitals = new Map(rowsAll(s).map((h) => [h.id, h]))
+  return [...fromForm, ...sample].map((r) => {
+    const x = { ...r, ...s.signupDecisions?.[r.id] }
+    return x.hospital_id ? { ...x, owner_joined: hospitals.get(x.hospital_id)?.owner_joined ?? false } : x
+  }).sort((a, b) => Number(b.status === 'pending') - Number(a.status === 'pending') || b.created_at.localeCompare(a.created_at))
 }
 
 /** demo hospitals keep it in their billing store (so the hospital app shows the closing banner); created ones here */

@@ -7,6 +7,7 @@ import { demoCp } from './demo'
 import type {
   BillingAction, BillingConfig, CpAudit, CpHospital, CpHospitalDetail, CpLead, CpMe, CpMember, CpOverview, CpPayment,
   HospitalEdit, LeadStatus, MemberSave, NewHospital, CpHealth, CpIncident, IncidentSave, IncidentNotice, RetentionConfig,
+  CpSignup, SignupSettings,
 } from './types'
 
 export interface CpApi {
@@ -41,6 +42,11 @@ export interface CpApi {
   retention(): Promise<RetentionConfig>
   saveRetention(p: Partial<RetentionConfig>): Promise<RetentionConfig>
   runRetention(): Promise<Record<string, number>>
+  // phase 8.2 — self-service free-trial sign-ups
+  signups(): Promise<CpSignup[]>
+  decideSignup(id: string, action: 'approve' | 'reject', reason?: string): Promise<CpSignup>
+  signupSettings(): Promise<SignupSettings>
+  saveSignupSettings(p: Partial<SignupSettings>): Promise<SignupSettings>
 }
 
 /** Postgres / PostgREST error → a sentence for people */
@@ -114,6 +120,10 @@ const db: CpApi = {
   retention: () => rpc('cp_retention'),
   saveRetention: (p) => rpc('cp_save_retention', { p }),
   runRetention: () => rpc('run_retention'),
+  signups: () => rpc('cp_signups'),
+  decideSignup: (id, action, reason) => rpc('cp_signup_decide', { p_id: id, p_action: action, p_reason: reason ?? null }),
+  signupSettings: () => rpc('cp_signup_settings'),
+  saveSignupSettings: (p) => rpc('cp_save_signup_settings', { p }),
 }
 
 export const isDemo = !supabase
