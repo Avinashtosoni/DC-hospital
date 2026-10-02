@@ -124,6 +124,28 @@ begin
 end $$;
 
 
+-- ------------------------------------------------------------------ module locks
+-- tenants.modules maps a settings module to who manages it: 'hospital' (the owner) or 'provider' (the Hospital Comrade
+-- team; the module is hidden from the hospital). Modules: general, appearance, dashboard, notifications, forms, security,
+-- data, cms. An unlisted module is provider-managed; the primary hospital (single installs) lists every one as 'hospital'.
+create or replace function public.module_locked(p_module text)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare v text;
+begin
+  if public.provider_mode() is not null then return false; end if;   -- the team can always change it
+  select modules ->> p_module into v from public.tenants where id = public.current_tenant();
+  return coalesce(v, 'provider') <> 'hospital';
+end $$;
+
+create or replace function public.module_guard(p_module text)
+returns void language plpgsql stable security definer set search_path = public as $$
+begin
+  if public.module_locked(p_module) then
+    raise exception 'MODULE_LOCKED: This setting is managed for your hospital by the platform team. Contact support to change it.'
+      using errcode = '42501';
+  end if;
+end $$;
+
 -- ------------------------------------------------------------------ this hospital's settings / content / secrets
 -- SECURITY DEFINER functions skip RLS, so they read singletons through these helpers instead of "where key = …"
 create or replace function public.tenant_setting(p_key text)

@@ -254,6 +254,7 @@ describe('definer functions stay inside the hospital', () => {
   })
 
   test('message templates reach only their hospital; the cron runs every hospital, an owner only their own', async () => {
+    await db.as(null, `update public.tenants set modules = modules || '{"notifications": "hospital"}' where id = $1`, [B])   // B runs its own messaging here
     const mk = async (who: string, name: string) => {
       const [t] = await db.as<{ id: string }>(who, `insert into public.notification_templates (name, text, audience, schedule, enabled) values ($1, 'Hello', 'everyone', 'daily', true) returning id`, [name])
       await db.as(null, `update public.notification_templates set next_run_at = now() - interval '1 minute' where id = $1`, [t.id])
@@ -277,6 +278,7 @@ describe('definer functions stay inside the hospital', () => {
     expect(bad).toEqual([])
     expect(await db.one<{ n: number }>(null, `select public.queue_appointment_reminders() n`)).toBeTruthy()
     await expect(db.as(B_OWNER, `select public.notify_cron_setup(false)`)).rejects.toThrow(/managed by the platform/)
+    await db.as(null, `update public.tenants set modules = modules - 'notifications' where id = $1`, [B])
   })
 
   test('the WhatsApp bot only sees patients of the hospital it answers for', async () => {
@@ -284,5 +286,48 @@ describe('definer functions stay inside the hospital', () => {
     expect(r.p).toMatchObject({ full_name: 'Sunita Devi' })
     const [a] = await asH<{ p: unknown }>('service', {}, `select public.bot_patient('9800000001') p`)
     expect(a.p).toBeNull()
+  })
+})
+
+// locked modules are hidden in the app AND refused by the database (phase 1.4)
+describe('module locks', () => {
+  const setModules = (m: Record<string, string>) => db.as(null, `update public.tenants set modules = $2::jsonb where id = $1`, [B, JSON.stringify(m)])
+  const appData = async () => (await db.one<{ data: Record<string, unknown> }>(null, `select data from public.app_settings where tenant_id = $1 and key = 'app'`, [B])).data
+
+  test('a new hospital: every module is managed by the platform until it is switched over', async () => {
+    await setModules({})
+    expect((await db.one<{ l: boolean }>(B_OWNER, `select public.module_locked('general') l`)).l).toBe(true)
+    // the primary hospital (single installs) manages everything itself
+    expect((await db.one<{ l: boolean }>(USER.owner, `select public.module_locked('general') l`)).l).toBe(false)
+  })
+
+  test("the owner's save keeps locked sections as they were; unlocked ones change", async () => {
+    await setModules({ dashboard: 'hospital' })
+    await db.as(null, `update public.app_settings set data = '{"appearance": {"theme": "teal"}, "dashboard": {"showGreeting": true}}'::jsonb where tenant_id = $1 and key = 'app'`, [B])
+    await db.as(B_OWNER, `update public.app_settings set data = '{"appearance": {"theme": "rose"}, "dashboard": {"showGreeting": false}, "security": {"idleTimeoutMinutes": 1}}'::jsonb where key = 'app'`)
+    expect(await appData()).toEqual({ appearance: { theme: 'teal' }, dashboard: { showGreeting: false } })
+    // website settings row: billing & booking always belong to the owner, brand / contacts only when unlocked
+    await db.as(B_OWNER, `insert into public.site_content (key, data) values ('settings', '{"name": "Renamed", "billing": {"gstin": "X"}}'::jsonb)`)
+    expect((await db.one<{ data: unknown }>(null, `select data from public.site_content where tenant_id = $1 and key = 'settings'`, [B])).data).toEqual({ billing: { gstin: 'X' } })
+    await expect(db.as(B_OWNER, `delete from public.site_content where key = 'settings'`)).rejects.toThrow(/MODULE_LOCKED/)
+  })
+
+  test('website pages, forms, message templates, credentials and demo tools refuse a locked hospital', async () => {
+    await setModules({})
+    await expect(db.as(B_OWNER, `update public.site_content set data = '{"name": "x"}'::jsonb where key = 'brand'`)).rejects.toThrow(/MODULE_LOCKED/)
+    await expect(db.as(B_OWNER, `insert into public.site_forms (name, slug, fields) values ('Hack', 'hack', '[]'::jsonb)`)).rejects.toThrow(/MODULE_LOCKED/)
+    await expect(db.as(B_OWNER, `insert into public.notification_templates (name, text) values ('Hi', 'Hello')`)).rejects.toThrow(/MODULE_LOCKED/)
+    await expect(db.as(B_OWNER, `select public.set_app_secret('msg91_auth_key', 'abc')`)).rejects.toThrow(/MODULE_LOCKED/)
+    // unlocked → allowed
+    await setModules({ cms: 'hospital' })
+    await db.as(B_OWNER, `update public.site_content set data = '{"name": "City Hospital+"}'::jsonb where key = 'brand'`)
+  })
+
+  test('the platform team is never locked out (support / admin modes)', async () => {
+    await setModules({})
+    await asH(P_SUPPORT, { 'x-tenant-id': B }, `update public.app_settings set data = data || '{"appearance": {"theme": "support"}}'::jsonb where key = 'app'`)
+    expect((await appData()).appearance).toEqual({ theme: 'support' })
+    await asH(P_ADMIN, { 'x-tenant-id': B, 'x-provider-mode': 'admin' }, `insert into public.notification_templates (name, text) values ('Platform', 'Hello')`)
+    await setModules({})
   })
 })

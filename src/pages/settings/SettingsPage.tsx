@@ -1,4 +1,6 @@
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
+import { useModuleLocks, type ModuleKey } from '../../tenancy/modules'
+import { platformName } from '../../lib/supabase'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -25,16 +27,16 @@ import { UsersTab } from './UsersTab'
 import type { TabCtx } from './shared'
 
 type TabId = 'general' | 'appearance' | 'dashboard' | 'users' | 'notifications' | 'billing' | 'forms' | 'security' | 'data' | 'account'
-const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ className?: string }>; ownerOnly: boolean }[] = [
-  { id: 'general', label: 'General & brand', hint: 'Logo, name, contacts, formats', icon: Building2, ownerOnly: true },
-  { id: 'appearance', label: 'Appearance', hint: 'Theme, layout, modules, banner', icon: Palette, ownerOnly: true },
-  { id: 'dashboard', label: 'Dashboard', hint: 'Widgets for each role', icon: LayoutDashboard, ownerOnly: true },
+const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ className?: string }>; ownerOnly: boolean; module?: ModuleKey }[] = [
+  { id: 'general', label: 'General & brand', hint: 'Logo, name, contacts, formats', icon: Building2, ownerOnly: true, module: 'general' },
+  { id: 'appearance', label: 'Appearance', hint: 'Theme, layout, modules, banner', icon: Palette, ownerOnly: true, module: 'appearance' },
+  { id: 'dashboard', label: 'Dashboard', hint: 'Widgets for each role', icon: LayoutDashboard, ownerOnly: true, module: 'dashboard' },
   { id: 'users', label: 'Users & accounts', hint: 'Create, edit, disable sign-ins', icon: UserCog, ownerOnly: true },
-  { id: 'notifications', label: 'Notifications & APIs', hint: 'SMS, WhatsApp, email, push, cron', icon: BellRing, ownerOnly: true },
+  { id: 'notifications', label: 'Notifications & APIs', hint: 'SMS, WhatsApp, email, push, cron', icon: BellRing, ownerOnly: true, module: 'notifications' },
   { id: 'billing', label: 'Billing & booking', hint: 'GST letterhead, online booking', icon: Receipt, ownerOnly: true },
-  { id: 'forms', label: 'Website forms', hint: 'Contact, reviews, custom forms', icon: ClipboardList, ownerOnly: true },
-  { id: 'security', label: 'Security & access', hint: 'Timeout, sign-in, roles', icon: ShieldCheck, ownerOnly: true },
-  { id: 'data', label: 'Data & backup', hint: 'Export, import, system', icon: Database, ownerOnly: true },
+  { id: 'forms', label: 'Website forms', hint: 'Contact, reviews, custom forms', icon: ClipboardList, ownerOnly: true, module: 'forms' },
+  { id: 'security', label: 'Security & access', hint: 'Timeout, sign-in, roles', icon: ShieldCheck, ownerOnly: true, module: 'security' },
+  { id: 'data', label: 'Data & backup', hint: 'Export, import, system', icon: Database, ownerOnly: true, module: 'data' },
   { id: 'account', label: 'My account', hint: 'Profile and your access', icon: CircleUserRound, ownerOnly: false },
 ]
 
@@ -54,7 +56,9 @@ function useLivePreview(draft: AppSettings | null | undefined, dirty: boolean) {
 export default function SettingsPage() {
   const { user } = useAuth()
   const isOwner = user?.role === 'owner'
-  const tabs = TABS.filter((t) => isOwner || !t.ownerOnly)
+  const locked = useModuleLocks()
+  // locked modules are managed by the platform team and hidden from the hospital
+  const tabs = TABS.filter((t) => (isOwner || !t.ownerOnly) && !locked(t.module))
   const [params, setParams] = useSearchParams()
   const tab = (tabs.find((t) => t.id === params.get('tab'))?.id ?? tabs[0].id) as TabId
   const qc = useQueryClient()
@@ -137,11 +141,13 @@ export default function SettingsPage() {
 
   const ready = !!site && !!app
   const ctx: TabCtx | null = ready ? { site: site!, app: app!, savedApp, editSite, editApp, dirty } : null
-  const current = TABS.find((t) => t.id === tab)!
+  const current = tabs.find((t) => t.id === tab)!
   return (
     <div className="w-full">
       {leavePrompt}
-      <PageHeader title="Settings" description="Brand, appearance, dashboards, messaging credentials and hospital-wide preferences." />
+      <PageHeader title="Settings" description={TABS.some((t) => t.module && locked(t.module))
+        ? `Hospital-wide preferences. Some settings (brand, website, messaging…) are managed for you by ${platformName}.`
+        : 'Brand, appearance, dashboards, messaging credentials and hospital-wide preferences.'} />
       <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">
         <nav aria-label="Settings sections" className="scrollbar-thin -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 lg:sticky lg:top-4 lg:mx-0 lg:flex-col lg:self-start lg:overflow-visible lg:px-0">
           {tabs.map((t) => (

@@ -291,6 +291,7 @@ declare v_count int;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo logins live in the main hospital
+  perform public.module_guard('data');
   update auth.users set encrypted_password = extensions.crypt(encode(extensions.gen_random_bytes(24), 'hex'), extensions.gen_salt('bf')),
                         banned_until = 'infinity'
   where public.is_demo_id(id) and id <> auth.uid();
@@ -309,6 +310,7 @@ declare v_total int := 0; v_n int; t text; v_id uuid;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo rows live in the main hospital
+  perform public.module_guard('data');
   perform set_config('app.actor_name', 'Go-live cleanup', true);
   foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
                            'doctor_leaves', 'site_enquiries', 'site_forms', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']

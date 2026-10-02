@@ -11,6 +11,7 @@ import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
 import { isSupabaseConfigured, appEnv } from '../../lib/supabase'
 import { ProviderBanner } from '../../tenancy/ProviderBanner'
+import { useNavLocked } from '../../tenancy/modules'
 import { useTable } from '../../hooks/useData'
 import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
@@ -61,6 +62,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { settings } = useAppSettings()
   const tr = usePortalT()
   const unread = useUnreadNotices()
+  const navLocked = useNavLocked()
   if (!user) return null
   const style = settings.appearance.sidebar
   const light = style === 'light'
@@ -75,7 +77,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <div className="relative px-5 py-5"><Logo light={!light} /></div>
       <nav className={cn('relative flex-1 space-y-5 overflow-y-auto px-3 pb-6', light ? 'scrollbar-thin' : 'scrollbar-dark')}>
         {NAV.map((section) => {
-          const items = section.items.filter((i) => i.roles.includes(user.role) && (user.role === 'owner' || !hidden.has(i.path)))
+          const items = section.items.filter((i) => i.roles.includes(user.role) && (user.role === 'owner' || !hidden.has(i.path)) && !navLocked(i.path))
           if (!items.length) return null
           return (
             <div key={section.title}>

@@ -98,6 +98,7 @@ begin
   if not public.has_role('owner') then
     raise exception 'Only the hospital owner can change credentials';
   end if;
+  perform public.module_guard('notifications');
   if p_key !~ '^[a-z0-9_]{2,64}$' then
     raise exception 'Invalid credential name';
   end if;

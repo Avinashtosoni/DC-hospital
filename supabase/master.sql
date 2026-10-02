@@ -761,6 +761,28 @@ begin
 end $$;
 
 
+-- ------------------------------------------------------------------ module locks
+-- tenants.modules maps a settings module to who manages it: 'hospital' (the owner) or 'provider' (the Hospital Comrade
+-- team; the module is hidden from the hospital). Modules: general, appearance, dashboard, notifications, forms, security,
+-- data, cms. An unlisted module is provider-managed; the primary hospital (single installs) lists every one as 'hospital'.
+create or replace function public.module_locked(p_module text)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare v text;
+begin
+  if public.provider_mode() is not null then return false; end if;   -- the team can always change it
+  select modules ->> p_module into v from public.tenants where id = public.current_tenant();
+  return coalesce(v, 'provider') <> 'hospital';
+end $$;
+
+create or replace function public.module_guard(p_module text)
+returns void language plpgsql stable security definer set search_path = public as $$
+begin
+  if public.module_locked(p_module) then
+    raise exception 'MODULE_LOCKED: This setting is managed for your hospital by the platform team. Contact support to change it.'
+      using errcode = '42501';
+  end if;
+end $$;
+
 -- ------------------------------------------------------------------ this hospital's settings / content / secrets
 -- SECURITY DEFINER functions skip RLS, so they read singletons through these helpers instead of "where key = …"
 create or replace function public.tenant_setting(p_key text)
@@ -4723,6 +4745,7 @@ begin
   if not public.has_role('owner') then
     raise exception 'Only the hospital owner can change credentials';
   end if;
+  perform public.module_guard('notifications');
   if p_key !~ '^[a-z0-9_]{2,64}$' then
     raise exception 'Invalid credential name';
   end if;
@@ -5306,6 +5329,7 @@ declare v_count int;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo logins live in the main hospital
+  perform public.module_guard('data');
   update auth.users set encrypted_password = extensions.crypt(encode(extensions.gen_random_bytes(24), 'hex'), extensions.gen_salt('bf')),
                         banned_until = 'infinity'
   where public.is_demo_id(id) and id <> auth.uid();
@@ -5324,6 +5348,7 @@ declare v_total int := 0; v_n int; t text; v_id uuid;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
   if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo rows live in the main hospital
+  perform public.module_guard('data');
   perform set_config('app.actor_name', 'Go-live cleanup', true);
   foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
                            'doctor_leaves', 'site_enquiries', 'site_forms', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
@@ -6355,6 +6380,7 @@ returns int language plpgsql volatile security definer set search_path = public 
 declare t public.notification_templates;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can send messages'; end if;
+  perform public.module_guard('notifications');
   select * into t from public.notification_templates where id = p_id and tenant_id = public.current_tenant();
   if not found then raise exception 'Message not found'; end if;
   return public.notify_run_template(t);
@@ -6460,6 +6486,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare j record;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can change automatic delivery'; end if;
+  perform public.module_guard('notifications');
   -- one scheduler serves every hospital, using the main hospital's notify address and key
   if public.current_tenant() is distinct from public.primary_tenant() then
     raise exception 'Automatic delivery is managed by the platform — it already runs for your hospital.';
@@ -6945,6 +6972,82 @@ grant execute on function public.current_tenant(), public.provider_role(), publi
 grant execute on function public.resolve_tenant(text, text) to anon, authenticated;
 grant execute on function public.my_context(), public.provider_tenants(), public.provider_log(text, text, jsonb) to authenticated;
 revoke all on function public.my_context(), public.provider_tenants(), public.provider_log(text, text, jsonb) from public, anon;
+
+-- ------------------------------------------------------------------ module locks (phase 1.4)
+-- Locked modules are hidden in the app; these triggers make sure a hospital user can't change them through the API
+-- either. They only act on direct API writes (current_user = authenticated): RPCs check module_guard() themselves,
+-- and the platform (SQL editor, service role, provider modes) is never blocked.
+
+-- settings sections inside the shared rows: app_settings 'app' and site_content 'settings'
+create or replace function public.locked_paths(p_table text)
+returns text[] language plpgsql stable set search_path = public as $$
+declare
+  m record; out text[] := '{}';
+  map jsonb := case p_table
+    when 'app_settings' then '{"appearance": ["appearance", "modules", "announcement"], "dashboard": ["dashboard"],
+                               "general": ["locale"], "security": ["security"], "notifications": ["notifications"]}'::jsonb
+    else '{"general": ["name", "tagline", "address", "phone", "appointmentsPhone", "whatsapp", "email", "siteUrl", "brand"],
+           "security": ["portal"],
+           "cms": ["about", "topBar", "emergency", "hours", "directions", "map", "socials", "cta", "pages", "seoDescription"]}'::jsonb
+  end;
+begin
+  for m in select key, value from jsonb_each(map) loop
+    if public.module_locked(m.key) then
+      out := out || array(select jsonb_array_elements_text(m.value));
+    end if;
+  end loop;
+  return out;
+end $$;
+
+-- a locked section keeps its saved value (the owner's save of the other sections still goes through)
+create or replace function public.keep_locked_sections()
+returns trigger language plpgsql set search_path = public as $$
+declare k text; v_paths text[];
+begin
+  if current_user <> 'authenticated' then return coalesce(new, old); end if;
+  if tg_table_name = 'site_content' and coalesce(new.key, old.key) <> 'settings' then
+    perform public.module_guard('cms');                      -- the website pages belong to the CMS module
+    return coalesce(new, old);
+  end if;
+  if tg_table_name = 'app_settings' and coalesce(new.key, old.key) <> 'app' then return coalesce(new, old); end if;
+  v_paths := public.locked_paths(tg_table_name);
+  if cardinality(v_paths) = 0 then return coalesce(new, old); end if;
+  if tg_op = 'DELETE' then
+    raise exception 'MODULE_LOCKED: Some of these settings are managed for your hospital by the platform team.' using errcode = '42501';
+  end if;
+  foreach k in array v_paths loop
+    if tg_op = 'UPDATE' and old.data ? k then
+      new.data := jsonb_set(new.data, array[k], old.data -> k);
+    else
+      new.data := new.data - k;
+    end if;
+  end loop;
+  return new;
+end $$;
+
+drop trigger if exists trg_app_settings_locked on public.app_settings;
+create trigger trg_app_settings_locked before insert or update or delete on public.app_settings
+  for each row execute function public.keep_locked_sections();
+drop trigger if exists trg_site_content_locked on public.site_content;
+create trigger trg_site_content_locked before insert or update or delete on public.site_content
+  for each row execute function public.keep_locked_sections();
+
+-- whole tables that belong to one module
+create or replace function public.guard_locked_table()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if current_user = 'authenticated' then perform public.module_guard(tg_argv[0]); end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists trg_site_forms_locked on public.site_forms;
+create trigger trg_site_forms_locked before insert or update or delete on public.site_forms
+  for each row execute function public.guard_locked_table('forms');
+drop trigger if exists trg_notification_templates_locked on public.notification_templates;
+create trigger trg_notification_templates_locked before insert or update or delete on public.notification_templates
+  for each row execute function public.guard_locked_table('notifications');
+
+revoke all on function public.keep_locked_sections(), public.guard_locked_table() from public, anon, authenticated;
+grant execute on function public.module_locked(text) to anon, authenticated;
 
 commit;
 

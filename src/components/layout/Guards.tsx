@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useNavLocked } from '../../tenancy/modules'
 import { Navigate, useLocation } from 'react-router-dom'
 import { ShieldOff } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
@@ -33,7 +34,8 @@ export function RequireAuth({ children, guestHome, guestFallback }: {
 
 export function RequireNav({ path, children }: { path: string; children: ReactNode }) {
   const { user } = useAuth()
-  if (!user || !canSee(path, user.role)) return <Forbidden />
+  const navLocked = useNavLocked()
+  if (!user || !canSee(path, user.role) || navLocked(path)) return <Forbidden />
   return <>{children}</>
 }
 

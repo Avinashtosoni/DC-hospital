@@ -27,6 +27,7 @@ import { useDebounced } from '../components/ResourcePage'
 import { useAuth } from '../auth/AuthProvider'
 import { can } from '../auth/permissions'
 import { useFormLists, useSiteSettings } from '../site/cms/content'
+import { useModuleLocks } from '../tenancy/modules'
 import { COLOR_CLASS, CONTACT_FORM_ID, type FormColor, type FormField, type FormSettings } from '../forms/schema'
 import { ago, cn, downloadCsv } from '../lib/utils'
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges'
@@ -340,6 +341,7 @@ export default function EnquiriesPage() {
 
   // ---------------------------------------------------------------- render
   const isOwner = user?.role === 'owner'
+  const formsLocked = useModuleLocks()('forms')
   return (
     <LabelCtx.Provider value={lookup}>
     <div className="-mx-1 sm:mx-0">
@@ -348,7 +350,7 @@ export default function EnquiriesPage() {
         <div className="flex items-start justify-between gap-3 lg:contents">
         <div className="min-w-0 lg:w-60 lg:shrink-0">
           <h1 className="font-display text-xl font-bold tracking-tight text-brand-950 sm:text-2xl">Enquiries</h1>
-          <p className="text-xs text-slate-500">Messages from your website forms{isOwner && <> · <Link to="/settings?tab=forms" className="font-medium text-brand-700 hover:underline">Manage forms</Link></>}</p>
+          <p className="text-xs text-slate-500">Messages from your website forms{isOwner && !formsLocked && <> · <Link to="/settings?tab=forms" className="font-medium text-brand-700 hover:underline">Manage forms</Link></>}</p>
         </div>
         <div className="flex gap-1 lg:order-last lg:shrink-0">
           <Button variant="outline" size="sm" icon={<Download className="h-4 w-4" />} onClick={exportCsv} loading={exporting} disabled={!total}>Export</Button>

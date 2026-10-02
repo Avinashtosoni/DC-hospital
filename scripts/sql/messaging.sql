@@ -405,6 +405,7 @@ returns int language plpgsql volatile security definer set search_path = public 
 declare t public.notification_templates;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can send messages'; end if;
+  perform public.module_guard('notifications');
   select * into t from public.notification_templates where id = p_id and tenant_id = public.current_tenant();
   if not found then raise exception 'Message not found'; end if;
   return public.notify_run_template(t);
@@ -510,6 +511,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare j record;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can change automatic delivery'; end if;
+  perform public.module_guard('notifications');
   -- one scheduler serves every hospital, using the main hospital's notify address and key
   if public.current_tenant() is distinct from public.primary_tenant() then
     raise exception 'Automatic delivery is managed by the platform — it already runs for your hospital.';

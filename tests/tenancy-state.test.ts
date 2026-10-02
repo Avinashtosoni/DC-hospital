@@ -42,3 +42,14 @@ describe('tenancy state (multi-hospital mode)', () => {
     expect(slugHint('?hospital=')).toBe(null)
   })
 })
+
+describe('module locks (what the app hides)', async () => {
+  const { moduleLocked } = await import('../src/tenancy/modules')
+  test('single installs / demo mode: nothing is locked; new hospitals: everything until switched over; providers: never', () => {
+    expect(moduleLocked(null, 'cms')).toBe(false)
+    expect(moduleLocked(ctx({ tenant: { ...B, modules: {} } }), 'cms')).toBe(true)
+    expect(moduleLocked(ctx({ tenant: { ...B, modules: { cms: 'hospital' } } }), 'cms')).toBe(false)
+    expect(moduleLocked(ctx({ tenant: { ...B, modules: { cms: 'provider' } } }), 'cms')).toBe(true)
+    expect(moduleLocked(ctx({ tenant: { ...B, modules: {} }, provider_role: 'support', provider_mode: 'support' }), 'cms')).toBe(false)
+  })
+})

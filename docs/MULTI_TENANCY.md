@@ -60,7 +60,13 @@ settings and sender identity. The Hospital Comrade team works through **provider
       hospital's website is signed out with a clear message. Providers get a banner with a hospital switcher and (admins)
       a mode switch — switching is logged and reloads the app. Sign-ups send `tenant_id`. `PLATFORM_NAME` /
       `PLATFORM_DOMAIN` runtime variables. Single mode and demo mode make no extra requests.
-- [ ] **1.4 Module locks**: hide locked tabs/menu/routes; database triggers stop owners writing locked settings
+- [x] **1.4 Module locks**: `tenants.modules` → `hospital` | `provider` for general, appearance, dashboard,
+      notifications, forms, security, data, cms (unlisted = provider-managed; the primary hospital has all `hospital`).
+      Locked = hidden: Settings tabs, the Website CMS menu item + route, "Manage forms" link (`src/tenancy/modules.ts`).
+      Database: `module_locked()` / `module_guard()`; owner saves keep locked sections of `app_settings` 'app' and
+      `site_content` 'settings' unchanged (billing & booking always save); CMS pages, `site_forms`,
+      `notification_templates`, credentials, cron setup, "send now" and demo tools refuse a locked hospital.
+      Providers (any mode) are never locked. Switching modules per hospital comes with the provider panel (phase 5).
 - [ ] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store
 - [ ] **1.6 Edge functions**: `notify` / `whatsapp-bot` read settings & secrets of the message's hospital
 - [ ] **1.7 Verify**: SQL + E2E across hospitals and providers, upgrade path, docs
@@ -69,7 +75,7 @@ settings and sender identity. The Hospital Comrade team works through **provider
 2 Per-hospital website & domains · 3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel ·
 6 Owner billing page · 7 Ops & compliance · 8 Launch
 
-> Until 1.4 – 1.6 are done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
+> Until 1.5 – 1.6 are done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
 > primary hospital automatically). `supabase/upgrade-2026-10.sql` is for existing single-hospital databases; a
 > multi-hospital launch starts from a fresh `supabase/production.sql`.
 >
