@@ -25,6 +25,9 @@ services:
       - PLATFORM_GRIEVANCE_OFFICER=${PLATFORM_GRIEVANCE_OFFICER:-}
       - PLATFORM_JURISDICTION=${PLATFORM_JURISDICTION:-}
       - SENTRY_DSN=${SENTRY_DSN:-}
+      - CSP_MODE=${CSP_MODE:-enforce}
+      - HSTS=${HSTS:-on}
+      - CSP_SCRIPT_EXTRA=${CSP_SCRIPT_EXTRA:-}
     # Coolify's proxy routes to container port 80 — no host port needed.
     # For local use without Coolify, uncomment:
     # ports:

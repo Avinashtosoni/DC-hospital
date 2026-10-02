@@ -51,6 +51,29 @@ if [ "$TEN" = "multi" ] && [ -f "$INDEX" ] && grep -q '<!-- seo:start' "$INDEX";
   echo "[dc-hospital] index.html: neutral title / link-preview text for multi-hospital mode"
 fi
 
+# Content-Security-Policy + HSTS (nginx snippets included by docker/nginx.conf)
+#   CSP_MODE=enforce (default) | report-only (browser console only, nothing blocked) | off
+#   CSP_SCRIPT_EXTRA="https://www.googletagmanager.com …" adds script hosts · HSTS=on (default) | off
+SNIP_DIR="${NGINX_SNIPPETS_DIR:-/etc/nginx/snippets}"
+if [ -d "$SNIP_DIR" ] && [ -w "$SNIP_DIR" ]; then
+  SCRIPT_EXTRA="$(printf '%s' "${CSP_SCRIPT_EXTRA:-}" | tr -cd 'a-zA-Z0-9:/.* _-')"
+  CSP="default-src 'self'; script-src 'self' https://checkout.razorpay.com https://*.razorpay.com https://www.gstatic.com${SCRIPT_EXTRA:+ $SCRIPT_EXTRA}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; frame-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https:"
+  case "${CSP_MODE:-enforce}" in
+    report-only) CSP_HEADER="Content-Security-Policy-Report-Only" ;;
+    off) CSP_HEADER="" ;;
+    *) CSP_HEADER="Content-Security-Policy" ;;
+  esac
+  snippet() {
+    {
+      if [ -n "$CSP_HEADER" ]; then printf 'add_header %s "%s; frame-ancestors %s; upgrade-insecure-requests" always;\n' "$CSP_HEADER" "$CSP" "$2"; fi
+      if [ "${HSTS:-on}" != "off" ]; then printf 'add_header Strict-Transport-Security "max-age=31536000" always;\n'; fi
+    } > "$1"
+  }
+  snippet "$SNIP_DIR/security-headers.conf" "'self'"
+  snippet "$SNIP_DIR/security-headers-panel.conf" "'none'"
+  echo "[dc-hospital] security headers: CSP=${CSP_HEADER:-off} HSTS=${HSTS:-on}"
+fi
+
 if [ -n "$URL" ] && [ -n "$KEY" ]; then
   echo "[dc-hospital] Supabase configured: ${URL}"
 elif [ -n "$REQ" ] && [ "$REQ" != "false" ] && [ "$REQ" != "0" ]; then

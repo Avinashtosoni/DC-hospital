@@ -125,3 +125,31 @@ describe('self-service sign-up', () => {
     expect((await call<any>(P_ADMIN, 'run_retention')).signups).toMatchObject({ closed: 0 })
   })
 })
+
+describe('launch check (phase 8.3)', () => {
+  test('admins only; flags demo logins, one admin, missing seller details and unscheduled jobs', async () => {
+    await fails(call(P_SUPPORT, 'cp_launch_check'), /\(admin\)/)
+    await fails(call('anon', 'cp_launch_check'), /permission denied/)
+    const r = await call<{ checks: { id: string; status: string; detail: string }[] }>(P_ADMIN, 'cp_launch_check')
+    const by = Object.fromEntries(r.checks.map((c) => [c.id, c]))
+    expect(by.demo_logins.status).toBe('fail')                // master.sql ships the sample accounts
+    expect(by.demo_logins.detail).toContain('owner@dchospital.com')
+    expect(by.admins.status).toBe('warn')                     // one admin in this test database
+    expect(by.seller).toMatchObject({ status: 'fail', detail: expect.stringContaining('GSTIN') })
+    expect(by.jobs.status).toBe('fail')                       // PGlite has no pg_cron
+    expect(by.rls.status).toBe('ok')
+    expect(by.isolation.status).toBe('ok')
+    expect(by.signup.status).toBe('ok')                       // platformUrl was set earlier
+    expect(Object.keys(by)).toEqual(['demo_logins', 'demo_hospital', 'admins', 'seller', 'jobs', 'pg_net', 'rls', 'isolation', 'retention', 'signup', 'messages', 'primary_owner'])
+  })
+  test('on production.sql the sample logins are gone', async () => {
+    const prod = await freshDb('production')
+    await prod.as(null, `insert into auth.users (id, email, encrypted_password, raw_user_meta_data) values ($1, 'boss@hc.in', 'x', '{}'::jsonb)`, [P_ADMIN])
+    await prod.as(null, `select set_config('app.tenant_move', 'on', false)`)
+    await prod.as(null, `update public.profiles set tenant_id = null where id = $1`, [P_ADMIN])
+    await prod.as(null, `insert into public.provider_users (user_id, role) values ($1, 'admin')`, [P_ADMIN])
+    const r = (await prod.one<{ r: { checks: { id: string; status: string }[] } }>(P_ADMIN, `select public.cp_launch_check() as r`)).r
+    const by = Object.fromEntries(r.checks.map((c) => [c.id, c.status]))
+    expect(by).toMatchObject({ demo_logins: 'ok', demo_hospital: 'ok', rls: 'ok', isolation: 'ok' })
+  }, 240_000)
+})

@@ -34,9 +34,13 @@ LABEL org.opencontainers.image.title="DC Hospital Management System" \
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/40-runtime-env.sh /docker-entrypoint.d/40-runtime-env.sh
+# CSP + HSTS defaults (rewritten at start from CSP_MODE / HSTS)
+COPY docker/security-headers.conf /etc/nginx/snippets/security-headers.conf
+COPY docker/security-headers.conf /etc/nginx/snippets/security-headers-panel.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 RUN chmod +x /docker-entrypoint.d/40-runtime-env.sh \
+ && sed -i "s/frame-ancestors 'self'/frame-ancestors 'none'/" /etc/nginx/snippets/security-headers-panel.conf \
  && chown -R nginx:nginx /usr/share/nginx/html
 
 ENV VITE_SUPABASE_URL="" \

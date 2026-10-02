@@ -10,12 +10,16 @@ import { I18nProvider } from './i18n'
 import { PwaPrompt } from './pwa/PwaPrompt'
 import { ErrorBoundary, RouteError, reloadForChunkError } from './components/ErrorBoundary'
 import { appEnv, backendMissing } from './lib/supabase'
+import { initMonitoring } from './lib/monitoring'
 import { bootTenancy } from './tenancy/boot'
 import { TenantScreen } from './tenancy/TenantScreens'
 import './index.css'
 
 // staging copies must never show up in search results
 if (appEnv === 'staging') { const m = document.createElement('meta'); m.name = 'robots'; m.content = 'noindex, nofollow'; document.head.appendChild(m) }
+
+// optional error reporting (SENTRY_DSN) — nothing happens without it
+initMonitoring('app')
 
 // stale JS chunk after a deploy (lazy import or Vite preload) → reload once
 window.addEventListener('vite:preloadError', (e) => { if (reloadForChunkError((e as Event & { payload?: unknown }).payload ?? 'Failed to fetch dynamically imported module')) e.preventDefault() })

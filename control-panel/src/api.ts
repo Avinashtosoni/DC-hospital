@@ -7,7 +7,7 @@ import { demoCp } from './demo'
 import type {
   BillingAction, BillingConfig, CpAudit, CpHospital, CpHospitalDetail, CpLead, CpMe, CpMember, CpOverview, CpPayment,
   HospitalEdit, LeadStatus, MemberSave, NewHospital, CpHealth, CpIncident, IncidentSave, IncidentNotice, RetentionConfig,
-  CpSignup, SignupSettings,
+  CpSignup, SignupSettings, LaunchReport,
 } from './types'
 
 export interface CpApi {
@@ -47,6 +47,8 @@ export interface CpApi {
   decideSignup(id: string, action: 'approve' | 'reject', reason?: string): Promise<CpSignup>
   signupSettings(): Promise<SignupSettings>
   saveSignupSettings(p: Partial<SignupSettings>): Promise<SignupSettings>
+  // phase 8.3
+  launchCheck(): Promise<LaunchReport>
 }
 
 /** Postgres / PostgREST error → a sentence for people */
@@ -124,6 +126,7 @@ const db: CpApi = {
   decideSignup: (id, action, reason) => rpc('cp_signup_decide', { p_id: id, p_action: action, p_reason: reason ?? null }),
   signupSettings: () => rpc('cp_signup_settings'),
   saveSignupSettings: (p) => rpc('cp_save_signup_settings', { p }),
+  launchCheck: () => rpc('cp_launch_check'),
 }
 
 export const isDemo = !supabase

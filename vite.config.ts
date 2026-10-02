@@ -5,8 +5,9 @@ import fs from 'node:fs'
 import type { Plugin } from 'vite'
 
 /** Stamps a build id into dist/sw.js (so each deploy ships a new service worker) and writes dist/version.json. */
+const BUILD_ID = process.env.SOURCE_COMMIT?.slice(0, 12) || Date.now().toString(36)
 function pwaStamp(): Plugin {
-  const id = process.env.SOURCE_COMMIT?.slice(0, 12) || Date.now().toString(36)
+  const id = BUILD_ID
   return {
     name: 'dch-pwa-stamp',
     apply: 'build',
@@ -35,6 +36,8 @@ function controlPanelFallback(): Plugin {
 
 export default defineConfig({
   plugins: [react(), pwaStamp(), controlPanelFallback()],
+  // the build id also tags error reports (src/lib/monitoring.ts)
+  define: { __APP_BUILD__: JSON.stringify(BUILD_ID) },
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: { host: '0.0.0.0', port: 5173, allowedHosts: true },
   build: {

@@ -11,7 +11,7 @@ import type { PaymentRow } from '../../src/billing/types'
 import { BILLING_DEFAULTS, type BillingConfig } from '../../src/platform/billing'
 import { DEMO_PROVIDERS, DEMO_TENANT_EDITS_KEY, DEMO_TENANTS, type DemoProvider, type DemoTenantEdit } from '../../src/tenancy/demo'
 import type { CpApi } from './api'
-import type { CpAudit, CpHealth, CpHospital, CpHospitalDetail, CpIncident, CpLead, CpMe, CpMember, CpOverview, CpPayment, CpSignup, ModuleMap, ProviderRole, RetentionConfig, SignupSettings } from './types'
+import type { CpAudit, CpHealth, CpHospital, CpHospitalDetail, CpIncident, CpLead, CpMe, CpMember, CpOverview, CpPayment, CpSignup, LaunchCheck, ModuleMap, ProviderRole, RetentionConfig, SignupSettings } from './types'
 import { RETENTION_DEFAULTS, RETENTION_KEYS, RETENTION_MIN, SIGNUP_DEFAULTS } from './types'
 
 const KEY = 'dch:cp:v1'
@@ -625,6 +625,31 @@ export const demoCp: CpApi = {
     save(s)
     log('settings:signup', null, null, clean as Record<string, unknown>)
     return demoCp.signupSettings()
+  },
+
+  /** same items as cp_launch_check(); the demo is, by design, not ready for launch */
+  async launchCheck() {
+    await wait(350)
+    need(['admin'])
+    const s = load(), cfg = config(s), su = signupSettings(s)
+    const missing = (['name', 'gstin', 'address', 'email'] as const).filter((k) => !cfg.seller[k])
+    const admins = team(s).filter((m) => m.active && m.role === 'admin').length
+    const last = retention(s).last_run?.at
+    const checks: LaunchCheck[] = [
+      { id: 'demo_logins', title: 'No demo logins', status: 'fail', detail: 'Demo mode: the sample accounts (Demo@123) are built in. A live install uses production.sql, which has none.' },
+      { id: 'demo_hospital', title: 'No sample hospital', status: 'warn', detail: 'The City Care sample clinic is installed — close and delete it before you invite customers.' },
+      { id: 'admins', title: 'Platform admins', status: admins >= 2 ? 'ok' : admins === 1 ? 'warn' : 'fail', detail: admins >= 2 ? `${admins} active admins.` : 'Only one admin — add a second one (Team) so the platform is never locked out.' },
+      { id: 'seller', title: 'Invoice details (seller)', status: missing.length ? 'fail' : 'ok', detail: missing.length ? `Missing: ${missing.map((k) => (k === 'gstin' ? 'GSTIN' : k === 'name' ? 'legal name' : k === 'email' ? 'e-mail' : k)).join(', ')} — Platform settings → Seller.` : `Printed on invoices as ${cfg.seller.name}, GSTIN ${cfg.seller.gstin}.` },
+      { id: 'jobs', title: 'Scheduled jobs', status: 'fail', detail: 'Demo mode has no database scheduler — on Supabase, pg_cron runs message delivery, reminders and the nightly clean-up.' },
+      { id: 'pg_net', title: 'Outgoing calls (pg_net)', status: 'fail', detail: 'Demo mode: no database.' },
+      { id: 'rls', title: 'Row-level security', status: 'ok', detail: 'Every table is protected (checked on the real database).' },
+      { id: 'isolation', title: 'Hospital isolation', status: 'ok', detail: 'Every per-hospital table has the tenant_isolation policy.' },
+      { id: 'retention', title: 'Nightly clean-up', status: last && Date.now() - Date.parse(last) < 2 * 864e5 ? 'ok' : 'warn', detail: last ? `Last ran ${new Date(last).toLocaleString('en-IN')}.` : 'Has never run yet — try “Run now” in Platform settings.' },
+      { id: 'signup', title: 'Free-trial sign-up', status: su.enabled && !su.platformUrl ? 'warn' : 'ok', detail: !su.enabled ? 'Closed — people use the contact form.' : !su.platformUrl ? 'Open, but the product website address is empty — set it in Sign-ups.' : `Open (${su.mode === 'instant' ? 'created instantly' : 'reviewed first'}, ${su.trialDays} days).` },
+      { id: 'messages', title: 'Messages delivered', status: 'ok', detail: 'No messages in the last 24 hours.' },
+      { id: 'primary_owner', title: 'Main hospital owner', status: 'ok', detail: 'The main hospital has an owner account.' },
+    ]
+    return { at: iso(), checks }
   },
 }
 

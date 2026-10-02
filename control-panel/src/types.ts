@@ -213,3 +213,7 @@ export interface SignupSettings {
   pending?: number
 }
 export const SIGNUP_DEFAULTS: SignupSettings = { enabled: true, mode: 'approve', trialDays: 14, plan: 'clinic', maxPerDay: 25, unclaimedDays: 14, platformUrl: '' }
+
+// ------------------------------------------------------------------ phase 8.3 — launch checklist
+export interface LaunchCheck { id: string; title: string; status: 'ok' | 'warn' | 'fail'; detail: string }
+export interface LaunchReport { at: string; checks: LaunchCheck[] }

@@ -8,6 +8,7 @@
  */
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { useRouteError } from 'react-router-dom'
+import { reportError } from '../lib/monitoring'
 
 const RELOAD_KEY = 'dch:chunk-reload'
 export const isChunkError = (e: unknown) =>
@@ -55,6 +56,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: s
   componentDidCatch(error: unknown, info: ErrorInfo) {
     if (reloadForChunkError(error)) return
     console.error('[dc-hospital] screen crashed', error, info.componentStack)
+    reportError(error, { source: 'screen' })
   }
   componentDidUpdate(prev: { resetKey?: string }) {
     if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null })
@@ -68,5 +70,6 @@ export function RouteError() {
   const error = useRouteError()
   if (reloadForChunkError(error)) return null
   console.error('[dc-hospital] route error', error)
+  reportError(error, { source: 'route' })
   return <Fallback error={error} full />
 }

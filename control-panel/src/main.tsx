@@ -10,6 +10,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import '../../src/index.css'
 import { App } from './App'
+import { initMonitoring } from '../../src/lib/monitoring'
+
+initMonitoring('control-panel')
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } } })
 

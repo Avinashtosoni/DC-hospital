@@ -207,6 +207,8 @@ const controlPanelSql = readFileSync(resolve(root, 'scripts/sql/control_panel.sq
 const complianceSql = readFileSync(resolve(root, 'scripts/sql/compliance.sql'), 'utf8')
 // phase 8 — self-service free-trial sign-up (after the panel: reuses hospital_create / cp_require)
 const signupSql = readFileSync(resolve(root, 'scripts/sql/signup.sql'), 'utf8')
+// phase 8.3 — the control panel's launch checklist (last: reads every other part's settings)
+const launchSql = readFileSync(resolve(root, 'scripts/sql/launch.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
@@ -279,6 +281,8 @@ ${controlPanelSql}
 ${complianceSql}
 
 ${signupSql}
+
+${launchSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -348,6 +352,8 @@ ${complianceSql}
 
 ${signupSql}
 
+${launchSql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
@@ -386,7 +392,7 @@ let nextUpgrade = upgrade
 const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
 for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
-  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql]] as const) {
+  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql]] as const) {
   const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
   // the tenancy core goes first (every later section may call current_tenant())

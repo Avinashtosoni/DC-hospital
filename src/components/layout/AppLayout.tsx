@@ -18,6 +18,8 @@ import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
 import { isFresh, noticeState, sortNotices, useNoticeReads, visibleTo } from '../../notices/board'
 import { PushForeground, PushToggle } from '../PushToggle'
+import { setMonitoringContext } from '../../lib/monitoring'
+import { siteTenant } from '../../tenancy/state'
 
 /** Patients get the portal in their language; staff screens stay English. */
 function usePortalT() {
@@ -252,6 +254,8 @@ export function AppLayout() {
   const { settings } = useAppSettings()
   const site = useSiteSettings()
   useDashboardChrome()
+  // error reports carry the hospital's short name and the role — never who the person is
+  useEffect(() => { setMonitoringContext({ tenant: siteTenant()?.slug, role: user?.role }) }, [user?.role])
   useEffect(() => {
     const item = NAV.flatMap((s) => s.items).filter((i) => i.path === '/' ? loc.pathname === '/' : loc.pathname.startsWith(i.path)).sort((x, y) => y.path.length - x.path.length)[0]
     const brand = site.brand?.shortName || site.name

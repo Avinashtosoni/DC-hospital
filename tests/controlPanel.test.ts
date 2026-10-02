@@ -150,3 +150,15 @@ describe('control panel phase 8.2 sign-ups (demo)', () => {
     expect(await cp.saveSignupSettings({ mode: 'instant', trialDays: 30, enabled: false })).toMatchObject({ mode: 'instant', trialDays: 30, enabled: false })
   }, 20_000)
 })
+
+describe('control panel phase 8.3 launch checklist (demo)', () => {
+  test('admin only; the demo is honestly not ready', async () => {
+    await as('support')
+    await expect(cp.launchCheck()).rejects.toThrow(/\(admin\)/)
+    await as('admin')
+    const r = await cp.launchCheck()
+    const by = Object.fromEntries(r.checks.map((c) => [c.id, c.status]))
+    expect(by).toMatchObject({ demo_logins: 'fail', seller: 'fail', rls: 'ok', isolation: 'ok' })
+    expect(r.checks).toHaveLength(12)
+  }, 20_000)
+})
