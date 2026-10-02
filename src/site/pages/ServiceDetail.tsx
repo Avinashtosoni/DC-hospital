@@ -138,7 +138,7 @@ export default function ServiceDetail() {
               <p className="mt-3 text-sm text-slate-600">Our specialist team rotates for this service. Call us and we’ll book you with the right doctor.</p>
             </Reveal>
           )}
-          <Reveal className="mt-10 flex justify-center"><Link to="/find-a-doctor" className="btn-ghost">Browse all doctors<ArrowRight className="h-4 w-4" /></Link></Reveal>
+          {c.pages.doctors !== false && <Reveal className="mt-10 flex justify-center"><Link to="/find-a-doctor" className="btn-ghost">Browse all doctors<ArrowRight className="h-4 w-4" /></Link></Reveal>}
         </div>
       </section>
 

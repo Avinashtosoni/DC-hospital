@@ -9,7 +9,7 @@ import { CtaBand, FeatureIcon, PageHero, SectionHeader } from '../ui'
 const initialsOf = (n: string) => n.replace(/^Dr\.?\s+/i, '').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase()
 
 export default function About() {
-  const { about: a, home, doctors } = useSite()
+  const { about: a, home, doctors, settings: { pages } } = useSite()
   useSeo(a.seo.title, a.seo.description)
   const STATS = home.stats
   const leaders = a.leadership.people
@@ -45,7 +45,9 @@ export default function About() {
         }
       >
         <div className="flex flex-wrap gap-3">
-          <Link to="/find-a-doctor" className="btn-peri">Meet our doctors<ArrowRight className="h-4 w-4" /></Link>
+          {pages.doctors !== false
+            ? <Link to="/find-a-doctor" className="btn-peri">Meet our doctors<ArrowRight className="h-4 w-4" /></Link>
+            : <Link to="/book" className="btn-peri">Book an appointment<ArrowRight className="h-4 w-4" /></Link>}
           <Link to="/services" className="btn-ghost">Explore services</Link>
         </div>
       </PageHero>

@@ -7103,6 +7103,58 @@ begin
 end $$;
 revoke all on function public.seed_hospital_defaults(uuid) from public, anon, authenticated;
 
+-- ------------------------------------------------------------------ product page leads (phase 2.2)
+-- "Talk to us" form on the Hospital Comrade product page (the platform domain). Platform-level: no tenant_id, only
+-- Hospital Comrade admins can read or update them; visitors can only add one through submit_platform_lead().
+create table if not exists public.platform_leads (
+  id            uuid primary key default gen_random_uuid(),
+  created_at    timestamptz not null default now(),
+  name          text not null check (char_length(name) between 2 and 100),
+  organisation  text not null check (char_length(organisation) between 2 and 150),
+  phone         text not null check (phone ~ '^\+?[0-9]{10,13}$'),
+  email         text check (email is null or char_length(email) <= 150),
+  city          text check (city is null or char_length(city) <= 80),
+  plan          text check (plan is null or plan in ('clinic', 'hospital', 'enterprise', 'custom', 'unsure')),
+  message       text check (message is null or char_length(message) <= 2000),
+  source        text check (source is null or char_length(source) <= 255),
+  status        text not null default 'new' check (status in ('new', 'contacted', 'won', 'lost')),
+  notes         text
+);
+create index if not exists platform_leads_created_idx on public.platform_leads (created_at desc);
+alter table public.platform_leads enable row level security;
+revoke all on public.platform_leads from anon, authenticated;
+grant select, update, delete on public.platform_leads to authenticated;
+grant all on public.platform_leads to service_role;
+drop policy if exists platform_leads_admin on public.platform_leads;
+create policy platform_leads_admin on public.platform_leads for all to authenticated
+  using (public.provider_role() = 'admin') with check (public.provider_role() = 'admin');
+
+create or replace function public.submit_platform_lead(
+  p_name text, p_organisation text, p_phone text, p_email text default null, p_city text default null,
+  p_plan text default null, p_message text default null, p_source text default null)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare v_phone text := regexp_replace(coalesce(p_phone, ''), '[^0-9+]', '', 'g');
+        v_email text := nullif(lower(trim(coalesce(p_email, ''))), '');
+begin
+  if char_length(trim(coalesce(p_name, ''))) < 2 then raise exception 'Please enter your name.'; end if;
+  if char_length(trim(coalesce(p_organisation, ''))) < 2 then raise exception 'Please enter your hospital or clinic name.'; end if;
+  if v_phone !~ '^\+?[0-9]{10,13}$' then raise exception 'Please enter a valid mobile number.'; end if;
+  if v_email is not null and v_email !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then raise exception 'Please enter a valid email or leave it empty.'; end if;
+  -- spam guard: one request per number every 10 minutes, and a ceiling for the whole form
+  if exists (select 1 from public.platform_leads where phone = v_phone and created_at > now() - interval '10 minutes') then
+    return;   -- already received — quietly accept the repeat
+  end if;
+  if (select count(*) from public.platform_leads where created_at > now() - interval '1 hour') >= 60 then
+    raise exception 'We are receiving a lot of requests right now. Please try again in a few minutes.';
+  end if;
+  insert into public.platform_leads (name, organisation, phone, email, city, plan, message, source)
+  values (left(trim(p_name), 100), left(trim(p_organisation), 150), v_phone, left(v_email, 150), nullif(left(trim(coalesce(p_city, '')), 80), ''),
+          case when p_plan in ('clinic', 'hospital', 'enterprise', 'custom', 'unsure') then p_plan end,
+          nullif(left(trim(coalesce(p_message, '')), 2000), ''), left(p_source, 255));
+end $$;
+revoke all on function public.submit_platform_lead(text, text, text, text, text, text, text, text) from public;
+grant execute on function public.submit_platform_lead(text, text, text, text, text, text, text, text) to anon, authenticated;
+
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / Demo@123

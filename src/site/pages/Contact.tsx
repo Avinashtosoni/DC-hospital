@@ -61,7 +61,7 @@ export default function Contact() {
               <FormRenderer key={formQ.data.updated_at} form={formQ.data} idPrefix="c" fallbackSuccessText={pg.successText}
                 title={<h2 id="form-title" className="font-display text-2xl font-bold text-peri-900 sm:text-3xl">{pg.formTitle}</h2>}
                 note={<p className="mt-2 text-sm text-slate-500">{pg.formNote}</p>}
-                successActions={<Link to="/find-a-doctor" className="btn-peri">Find a doctor<ArrowRight className="h-4 w-4" /></Link>} />
+                successActions={c.pages.doctors !== false ? <Link to="/find-a-doctor" className="btn-peri">Find a doctor<ArrowRight className="h-4 w-4" /></Link> : <Link to="/book" className="btn-peri">Book an appointment<ArrowRight className="h-4 w-4" /></Link>} />
             ) : (
               <div className="relative flex min-h-[320px] flex-col items-center justify-center text-center">
                 <h2 id="form-title" className="font-display text-2xl font-bold text-peri-900">{formQ.isError ? 'The form could not be loaded' : 'Talk to us directly'}</h2>

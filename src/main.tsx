@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -19,6 +19,9 @@ if (appEnv === 'staging') { const m = document.createElement('meta'); m.name = '
 
 // stale JS chunk after a deploy (lazy import or Vite preload) → reload once
 window.addEventListener('vite:preloadError', (e) => { if (reloadForChunkError((e as Event & { payload?: unknown }).payload ?? 'Failed to fetch dynamically imported module')) e.preventDefault() })
+
+// Hospital Comrade product page (platform domain) — its own small chunk, never loaded on hospital sites
+const PlatformLanding = lazy(() => import('./platform/PlatformLanding'))
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
@@ -60,7 +63,10 @@ const root = ReactDOM.createRoot(document.getElementById('root')!)
   root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        {backendMissing ? <SetupError /> : boot && !boot.ok ? <TenantScreen result={boot} /> : <RouterProvider router={router} />}
+        {backendMissing ? <SetupError />
+          : boot && !boot.ok ? <TenantScreen result={boot} />
+          : boot?.platform ? <Suspense fallback={null}><PlatformLanding /></Suspense>
+          : <RouterProvider router={router} />}
       </QueryClientProvider>
     </React.StrictMode>,
   )
