@@ -176,6 +176,8 @@ export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretS
     }
     if (w.provider === 'meta') { if (!w.phoneNumberId) out.push('Phone number ID is required'); if (!has('meta_access_token')) out.push('Meta access token is not saved') }
     if (w.provider === 'twilio') { if (!w.twilioAccountSid) out.push('Twilio Account SID is required'); if (!w.twilioFrom) out.push('Twilio WhatsApp sender is required'); if (!has('twilio_auth_token')) out.push('Twilio auth token is not saved (shared with SMS)') }
+    if (w.provider === 'aisensy' && !has('aisensy_api_key')) out.push('AiSensy API key is not saved')
+    if (w.provider === 'msg91') { if (!w.msg91Number) out.push('MSG91 integrated WhatsApp number is required'); if (!has('msg91_auth_key')) out.push('MSG91 auth key is not saved (shared with SMS)') }
     if (w.provider === 'interakt' && !has('interakt_api_key')) out.push('Interakt API key is not saved')
     if (w.provider === 'webhook' && !/^https:\/\//.test(w.webhookUrl)) out.push('Webhook URL must start with https://')
   }

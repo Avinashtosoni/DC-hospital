@@ -82,7 +82,7 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
 export type EmailProvider = 'resend' | 'sendgrid' | 'smtp'
 export type SmsProvider = 'msg91' | 'twilio' | 'fast2sms' | 'webhook'
 /** openwa = self-hosted OpenWA / WA CRM gateway (WhatsApp Web session, free text, no templates) */
-export type WhatsappProvider = 'openwa' | 'meta' | 'twilio' | 'interakt' | 'webhook'
+export type WhatsappProvider = 'openwa' | 'meta' | 'aisensy' | 'msg91' | 'twilio' | 'interakt' | 'webhook'
 
 export interface NotificationSettings {
   email: { enabled: boolean; provider: EmailProvider; fromName: string; fromEmail: string; replyTo: string; smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string }
@@ -92,6 +92,10 @@ export interface NotificationSettings {
     openwaUrl: string; openwaSession: string
     /** How a mobile number becomes a chat ID. {phone} = 10-digit number. Default 91{phone}@c.us */
     chatIdFormat: string
+    /** MSG91 WhatsApp: integrated number (with country code) and optional template namespace */
+    msg91Number: string; msg91Namespace: string
+    /** AiSensy: API campaign used by "Send test" (one variable: the hospital name) */
+    aisensyTestCampaign: string
     /** answer incoming chats with the booking bot (supabase/functions/whatsapp-bot) */
     botEnabled: boolean }
   /** Firebase Cloud Messaging: the web-app config (public) — the service-account JSON is a write-only secret */
@@ -112,6 +116,7 @@ export const SECRET_FIELDS: Record<string, { label: string; placeholder: string 
   fast2sms_api_key: { label: 'Fast2SMS API key', placeholder: 'API authorization key' },
   sms_webhook_secret: { label: 'Webhook bearer token (optional)', placeholder: 'Sent as Authorization: Bearer …' },
   meta_access_token: { label: 'Meta permanent access token', placeholder: 'EAAG…' },
+  aisensy_api_key: { label: 'AiSensy API key', placeholder: 'Manage → API key → copy (long eyJ… token)' },
   interakt_api_key: { label: 'Interakt API key', placeholder: 'Base64 key from Interakt → Settings → Developer' },
   whatsapp_webhook_secret: { label: 'Webhook bearer token (optional)', placeholder: 'Sent as Authorization: Bearer …' },
   whatsapp_verify_token: { label: 'Chatbot webhook verify token', placeholder: 'Any long random text — paste the same in Meta → Webhooks' },
@@ -164,7 +169,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   notifications: {
     email: { enabled: false, provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
     sms: { enabled: false, provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
-    whatsapp: { enabled: false, provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', botEnabled: false },
+    whatsapp: { enabled: false, provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', msg91Number: '', msg91Namespace: '', aisensyTestCampaign: '', botEnabled: false },
     push: { enabled: false, apiKey: '', authDomain: '', projectId: '', messagingSenderId: '', appId: '', vapidKey: '' },
     rates: { sms: 0.25, whatsapp: 0.8, email: 0.05, push: 0 },
     events: {

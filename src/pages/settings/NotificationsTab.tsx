@@ -88,7 +88,7 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
   return (
     <div className="space-y-4">
       <Segmented size="sm" value={cfg.provider} onChange={(v) => set((s) => { s.provider = v })}
-        options={[{ value: 'openwa', label: 'WA CRM / OpenWA' }, { value: 'meta', label: 'Meta Cloud API' }, { value: 'interakt', label: 'Interakt' }, { value: 'twilio', label: 'Twilio' }, { value: 'webhook', label: 'Custom webhook' }]} />
+        options={[{ value: 'openwa', label: 'WA CRM / OpenWA' }, { value: 'meta', label: 'Meta Cloud API' }, { value: 'aisensy', label: 'AiSensy' }, { value: 'msg91', label: 'MSG91' }, { value: 'interakt', label: 'Interakt' }, { value: 'twilio', label: 'Twilio' }, { value: 'webhook', label: 'Custom webhook' }]} />
       {cfg.provider === 'openwa' && <OpenwaFields cfg={cfg} set={set} secrets={secrets} />}
       {cfg.provider === 'meta' && <>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -96,6 +96,18 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
           <Field label="WhatsApp Business Account ID" hint="Optional, for reference"><Input value={cfg.businessAccountId} onChange={(e) => set((s) => { s.businessAccountId = e.target.value.trim() })} className="font-mono text-xs" /></Field>
         </div>
         <SecretInput name="meta_access_token" secrets={secrets} />
+      </>}
+      {cfg.provider === 'aisensy' && <>
+        <SecretInput name="aisensy_api_key" secrets={secrets} />
+        <Field label="Test campaign name" hint="An API campaign whose template has one variable — the hospital name. Used by Send test."><Input value={cfg.aisensyTestCampaign ?? ''} onChange={(e) => set((s) => { s.aisensyTestCampaign = e.target.value })} placeholder="hc_test" /></Field>
+        <p className="text-xs text-slate-500">AiSensy sends every message through a live <b>API campaign</b>. Create one per message (Campaigns → Launch → API campaign) and put its <b>campaign name</b> in the WhatsApp template field of <b>Message templates</b> below, with the variables in order.</p>
+      </>}
+      {cfg.provider === 'msg91' && <>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Integrated WhatsApp number" hint="With country code, no +"><Input value={cfg.msg91Number ?? ''} onChange={(e) => set((s) => { s.msg91Number = e.target.value.replace(/[^\d]/g, '') })} placeholder="919876543210" /></Field>
+          <Field label="Template namespace" hint="Optional — shown with your templates in MSG91"><Input value={cfg.msg91Namespace ?? ''} onChange={(e) => set((s) => { s.msg91Namespace = e.target.value.trim() })} className="font-mono text-xs" /></Field>
+        </div>
+        <SecretInput name="msg91_auth_key" secrets={secrets} />
       </>}
       {cfg.provider === 'interakt' && <SecretInput name="interakt_api_key" secrets={secrets} />}
       {cfg.provider === 'twilio' && <>
@@ -109,12 +121,14 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
         <Field label="Webhook URL" hint="We POST JSON: { channel, to, event, message, subject, vars }"><Input value={cfg.webhookUrl} onChange={(e) => set((s) => { s.webhookUrl = e.target.value.trim() })} placeholder="https://…" /></Field>
         <SecretInput name="whatsapp_webhook_secret" secrets={secrets} />
       </>}
-      {(cfg.provider === 'meta' || cfg.provider === 'interakt') && (
+      {(cfg.provider === 'meta' || cfg.provider === 'interakt' || cfg.provider === 'msg91') && (
         <Field label="Template language code" hint="Must match the language your templates were approved in"><Input value={cfg.language} onChange={(e) => set((s) => { s.language = e.target.value.trim() })} placeholder="en" className="w-32" /></Field>
       )}
       {cfg.provider !== 'openwa' && <p className="text-xs text-slate-500">WhatsApp only allows free text inside a 24-hour chat window. For appointment and billing messages, get a <b>utility template</b> approved and enter its name in <b>Message templates</b>. The OTP uses an <b>authentication</b> template.</p>}
       {cfg.provider === 'meta' && <Help href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started">Meta Cloud API setup guide</Help>}
       {cfg.provider === 'interakt' && <Help href="https://app.interakt.ai/settings/developer-setting">Interakt → Developer settings</Help>}
+      {cfg.provider === 'aisensy' && <Help href="https://app.aisensy.com/">Open AiSensy</Help>}
+      {cfg.provider === 'msg91' && <Help href="https://control.msg91.com/app/">MSG91 → WhatsApp</Help>}
     </div>
   )
 }
@@ -283,7 +297,7 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="DLT / MSG91 template ID" hint="Required for MSG91; Fast2SMS DLT message ID"><Input value={t.smsTemplateId} onChange={(e) => set((x) => { x.smsTemplateId = e.target.value.trim() })} className="font-mono text-xs" placeholder="e.g. 65f1c2…" /></Field>
-          <Field label="WhatsApp template name" hint="Approved template (Meta / Interakt). Empty = free text"><Input value={t.waTemplate} onChange={(e) => set((x) => { x.waTemplate = e.target.value.trim() })} className="font-mono text-xs" placeholder="appointment_confirmed" /></Field>
+          <Field label="WhatsApp template name" hint="Approved template (Meta / MSG91 / Interakt) or AiSensy campaign name. Empty = free text"><Input value={t.waTemplate} onChange={(e) => set((x) => { x.waTemplate = e.target.value.trim() })} className="font-mono text-xs" placeholder="appointment_confirmed" /></Field>
           <Field label="Template variables, in order" className="sm:col-span-2" hint="Fills WhatsApp {{1}}, {{2}}… and Fast2SMS DLT variables. Comma-separated token names.">
             <Input value={t.waParams} onChange={(e) => set((x) => { x.waParams = e.target.value.replace(/\s/g, '') })} className="font-mono text-xs" placeholder="name,doctor,date,time" />
           </Field>
@@ -480,7 +494,7 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
             <SecretInput name="openwa_webhook_secret" secrets={secrets} />
           </>}
           {w.provider === 'twilio' && <p>In Twilio → Messaging → WhatsApp sender → “When a message comes in”, paste the URL (HTTP POST). Requests are checked with your Twilio auth token.</p>}
-          {(w.provider === 'interakt' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>WA CRM / OpenWA</b>, <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
+          {(w.provider === 'interakt' || w.provider === 'aisensy' || w.provider === 'msg91' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>WA CRM / OpenWA</b>, <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
           <p className="text-xs text-slate-500">Bookings from the bot use the same slot rules as the website (holidays, leave, notice period) and are marked <b>source: WhatsApp</b>. The patient’s WhatsApp number is their verification, so no OTP is needed. Chats reset after 30 minutes of silence.</p>
         </div>
         <BotSimulator />

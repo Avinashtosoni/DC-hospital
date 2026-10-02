@@ -14,7 +14,7 @@ export interface Ctx {
 export interface Result { ok: boolean; ref?: string; error?: string }
 
 /** Errors that will not fix themselves on retry (bad config) → mark failed immediately. */
-export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the API key|session was not found|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
+export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the (API|auth) key|cannot send free-text|session was not found|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
 /** Wait before retry n (1-based): 2, 4, 8 … minutes. */
 export const retryDelayMs = (attempts: number) => 2 ** Math.max(1, attempts) * 60_000
 
@@ -180,9 +180,86 @@ async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
       if (!r.ok) throw new Error(await err(r))
       return { ok: true, ref: (await r.json()).id }
     }
+    case 'aisensy': return aisensy(m, c)
+    case 'msg91': return msg91Whatsapp(m, c)
     case 'webhook': return webhook(cfg.webhookUrl, c.secrets.whatsapp_webhook_secret, m)
     default: throw new Error('Choose a WhatsApp provider')
   }
+}
+
+const isOtp = (event: string) => event === 'otp' || event === 'password_otp'
+
+/** AiSensy: every message is an "API campaign" (Campaigns → Launch → API campaign) bound to one approved template.
+ *  Put the campaign name in the event's WhatsApp template field. Free text (chatbot replies) is not possible. */
+async function aisensy(m: Msg, c: Ctx): Promise<Result> {
+  const cfg = c.n.whatsapp ?? {}
+  const tpl = c.n.templates?.[m.event] ?? {}
+  need(c.secrets.aisensy_api_key, 'AiSensy API key')
+  if (m.event === 'bot') throw new Error('AiSensy cannot send free-text chatbot replies — use WA CRM / OpenWA, Meta Cloud API or Twilio for the chatbot')
+  let campaign: string, values: string[]
+  if (m.event === 'test') {
+    need(cfg.aisensyTestCampaign, 'AiSensy test campaign name')
+    campaign = cfg.aisensyTestCampaign; values = [m.vars.hospital || c.hospital]
+  } else {
+    if (!tpl.waTemplate) throw new Error(`AiSensy needs an approved template (API campaign name) for "${m.event}"`)
+    campaign = tpl.waTemplate; values = params(tpl.waParams, m.vars)
+  }
+  const r = await fetch('https://backend.aisensy.com/campaign/t1/api/v2', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      apiKey: c.secrets.aisensy_api_key, campaignName: campaign, destination: `91${m.recipient.replace(/\D/g, '').slice(-10)}`,
+      userName: m.vars.name || 'Patient', source: c.hospital, templateParams: values,
+      // authentication (OTP) templates also need the code on the copy-code button
+      ...(isOtp(m.event) && m.vars.code ? { buttons: [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: m.vars.code }] }] } : {}),
+    }),
+  })
+  if (r.status === 401 || r.status === 403) throw new Error(`AiSensy rejected the API key (${r.status})`)
+  if (!r.ok) throw new Error(`AiSensy: ${String(await err(r)).slice(0, 200)}`)
+  const j = await r.json().catch(() => ({}))
+  if (j.success === false || j.success === 'false') throw new Error(`AiSensy: ${j.message || 'request rejected'}`)
+  return { ok: true, ref: j.submitted_message_id ?? j.messageId ?? j.id ?? `campaign ${campaign}` }
+}
+
+/** MSG91 WhatsApp: approved templates through the bulk endpoint (body_1…n variables), free text (test / chatbot,
+ *  inside the 24-hour window) through the single-message endpoint. The auth key is shared with MSG91 SMS. */
+async function msg91Whatsapp(m: Msg, c: Ctx): Promise<Result> {
+  const cfg = c.n.whatsapp ?? {}
+  const tpl = c.n.templates?.[m.event] ?? {}
+  need(c.secrets.msg91_auth_key, 'MSG91 auth key'); need(cfg.msg91Number, 'MSG91 integrated WhatsApp number')
+  const from = String(cfg.msg91Number).replace(/\D/g, '')
+  const to = `91${m.recipient.replace(/\D/g, '').slice(-10)}`
+  const headers = { authkey: c.secrets.msg91_auth_key, 'content-type': 'application/json', accept: 'application/json' }
+  const freeText = m.event === 'test' || m.event === 'bot'
+  if (!freeText && !tpl.waTemplate) throw new Error(`MSG91 WhatsApp needs an approved template name for "${m.event}"`)
+  const r = freeText
+    ? await fetch('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/', {
+      method: 'POST', headers, body: JSON.stringify({ integrated_number: from, recipient_number: to, content_type: 'text', text: m.body }),
+    })
+    : await fetch('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        integrated_number: from, content_type: 'template',
+        payload: {
+          messaging_product: 'whatsapp', type: 'template',
+          template: {
+            name: tpl.waTemplate, language: { code: cfg.language || 'en', policy: 'deterministic' },
+            ...(cfg.msg91Namespace ? { namespace: cfg.msg91Namespace } : {}),
+            to_and_components: [{
+              to: [to],
+              components: Object.fromEntries([
+                ...params(tpl.waParams, m.vars).map((value, i) => [`body_${i + 1}`, { type: 'text', value }]),
+                ...(isOtp(m.event) && m.vars.code ? [['button_1', { subtype: 'url', type: 'text', value: m.vars.code }]] : []),
+              ]),
+            }],
+          },
+        },
+      }),
+    })
+  if (r.status === 401) throw new Error('MSG91 rejected the auth key (401)')
+  if (!r.ok) throw new Error(`MSG91 WhatsApp: ${String(await err(r)).slice(0, 200)}`)
+  const j = await r.json().catch(() => ({}))
+  if (j.hasError || j.status === 'fail' || j.type === 'error') throw new Error(`MSG91 WhatsApp: ${String(j.errors ?? j.message ?? 'request rejected').slice(0, 200)}`)
+  return { ok: true, ref: j.request_id ?? j.data?.request_id ?? j.message ?? 'accepted' }
 }
 
 // ------------------------------------------------------------------ Email
