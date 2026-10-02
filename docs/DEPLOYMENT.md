@@ -43,8 +43,13 @@ Optional: deploy production from **release tags** (`v1.4.0`) instead of `main` �
 | `PLATFORM_NAME` | `Hospital Comrade` (default) | SaaS brand shown on platform screens (multi mode) |
 | `PLATFORM_DOMAIN` | `hospital.digitalcomrade.in` (default) | The platform's own domain — shows the Hospital Comrade product page (demo and multi mode); change it here when the domain changes |
 | `APP_ENV` | `production` (default) / `staging` | staging badge + `noindex` |
+| `PLATFORM_LEGAL_NAME`, `PLATFORM_ADDRESS`, `PLATFORM_EMAIL`, `PLATFORM_PHONE`, `PLATFORM_GRIEVANCE_OFFICER`, `PLATFORM_JURISDICTION` | — | company shown on the platform's legal pages (`/legal/*`) |
+| `SENTRY_DSN` | — | optional error reporting (Sentry-compatible; messages scrubbed of personal data) |
+| `CSP_MODE` | `enforce` (default) / `report-only` / `off` | Content-Security-Policy header (`CSP_SCRIPT_EXTRA` adds script hosts) |
+| `HSTS` | `on` (default) / `off` | Strict-Transport-Security header |
 
 All of them are read when the container starts (`/env.js`), so changing one only needs a restart, not a rebuild.
+Going live with paying hospitals: follow [GO_LIVE.md](GO_LIVE.md) and run `npm run preflight -- https://<domain>`.
 
 ## Database & Edge Functions
 

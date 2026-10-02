@@ -8,6 +8,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -b",
     "sql:build": "tsx scripts/build-master-sql.ts",
+    "preflight": "tsx scripts/preflight.ts",
     "test": "vitest run",
     "test:edge": "npx --yes deno@2 test --no-lock --no-config --allow-env --allow-read tests/edge/",
     "check": "tsc -b && npm run sql:build && vitest run"

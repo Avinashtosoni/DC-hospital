@@ -14,6 +14,7 @@ import { useByIds, useCount, useLookup, useTable, useUpdate, useWindow } from '.
 import { useMe } from '../../hooks/useScope'
 import { Avatar, Badge, Button, Card, CardHeader, StatCard, StatusBadge } from '../../components/ui'
 import { Donut, Greeting, ListCard, ListRow, QuickAction, RevenueChart, SimpleBar, monthBuckets } from './widgets'
+import { SetupChecklist } from './SetupChecklist'
 import { fmtDate, fmtTime, money, moneyCompact, num, today, titleCase, ago, cn } from '../../lib/utils'
 import { invoiceBalance } from '../../lib/billing'
 import { downloadLabReport } from '../../lib/pdf'
@@ -141,6 +142,7 @@ function OwnerDashboard() {
         <Link to="/reports"><Button variant="outline" icon={<TrendingUp className="h-4 w-4" />}>Reports</Button></Link>
         <Link to="/appointments?new=1"><Button icon={<CalendarPlus className="h-4 w-4" />}>New appointment</Button></Link>
       </Greeting>
+      <div className="mb-6 empty:hidden"><SetupChecklist /></div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Revenue (this month)" value={money(fin.thisMonth?.revenue)} icon={<IndianRupee className="h-5 w-5" />} loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.revenue} prev={fin.lastMonth.revenue} />} />
         <StatCard label="Total patients" value={num(patients.count)} icon={<Users className="h-5 w-5" />} tone="blue" loading={patients.isLoading} hint={`+${newPatients} in last 30 days`} />

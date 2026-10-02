@@ -5392,7 +5392,7 @@ begin
   out := out || jsonb_build_object('id', 'jobs', 'title', 'Scheduled jobs', 'status', case when not v_cron then 'fail' when cardinality(v_miss) = 0 then 'ok' else 'fail' end,
     'detail', case when not v_cron then 'pg_cron is not enabled (Supabase → Database → Extensions).'
                    when cardinality(v_miss) = 0 then 'Message delivery, reminders and the nightly clean-up are scheduled.'
-                   else 'Not scheduled: ' || array_to_string(v_miss, ', ') || ' — switch automatic delivery off and on in the main hospital''s Settings → Messaging.' end);
+                   else 'Not scheduled: ' || array_to_string(v_miss, ', ') || ' — switch automatic delivery off and on once in the main hospital''s Settings → Notifications.' end);
 
   -- 6. pg_net (the database calls the notify / billing functions)
   out := out || jsonb_build_object('id', 'pg_net', 'title', 'Outgoing calls (pg_net)', 'status', case when exists (select 1 from pg_extension where extname = 'pg_net') then 'ok' else 'fail' end,

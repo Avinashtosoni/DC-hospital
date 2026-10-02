@@ -133,6 +133,10 @@ browser storage.
 
 ## Going live
 
+> **Hospital Comrade (many hospitals, paid plans):** follow [docs/GO_LIVE.md](docs/GO_LIVE.md) — Mumbai Supabase project,
+> Coolify variables, payments, backups, then `npm run preflight -- https://<domain>` and the control panel's launch
+> checklist. What changed: [CHANGELOG.md](CHANGELOG.md).
+
 Demo logins use a public password (`Demo@123`), so **never run a real hospital on `master.sql`'s demo accounts**.
 
 * **New project (recommended):** open `supabase/production.sql`, change the ✏️ owner e-mail, run it, then *Create account* in the app with that e-mail — you are the Owner. It has the full schema and security but **no demo accounts or data**.
@@ -369,4 +373,5 @@ tests/             database (PGlite), provider contract and chatbot tests
 - `npm run sql:build`: regenerate `supabase/master.sql` and `supabase/production.sql`
 - `npm test`: run the database, notification-provider and chatbot tests (Postgres runs in-process via PGlite — no Docker needed)
 - `npm run check`: typecheck + SQL build + tests (what CI runs, minus the build)
+- `npm run preflight -- https://<domain>`: go-live checks against a deployed platform (headers, backend, legal pages, functions)
 - `docker build -t dc-hospital .`: build the production image

@@ -243,8 +243,15 @@ Privacy rights for patients (copy of data, health-tips consent, correction / era
 full data export ZIP for owners (never locked), close → notice period → purge with password re-confirmation,
 incident register (72-hour Board clock), system health and nightly retention. Runbook: [OPERATIONS.md](OPERATIONS.md).
 
-### Later phases
-8 Launch
+### Phase 8 — launch ✅
+Legal pages on the platform domain (`/legal/terms`, `privacy`, `refunds`, `delivery`, `dpa`, `contact`; company details
+from `PLATFORM_*` env), self-service free trial on `/signup` (open / closed, review first or instant, trial days — panel
+→ Sign-ups), CSP + HSTS, the panel's launch checklist (`cp_launch_check`), optional privacy-safe error reporting
+(`SENTRY_DSN`), an encrypted nightly backup Action, `npm run preflight` and the owner's setup checklist.
+Runbook: [GO_LIVE.md](GO_LIVE.md).
+
+### Later
+Help centre, support inbox, landing SEO / marketing pages, public status page.
 
 ## Going multi-hospital (runbook)
 
