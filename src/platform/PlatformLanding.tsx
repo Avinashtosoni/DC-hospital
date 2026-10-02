@@ -3,10 +3,12 @@ import {
   ArrowRight, BarChart3, BedDouble, CalendarCheck, Check, CheckCircle2, FileText, FlaskConical, Globe, Loader2, Menu,
   MessageCircle, Receipt, ShieldCheck, Sparkles, Stethoscope, Users, X,
 } from 'lucide-react'
-import { platformDomain, platformName } from '../lib/supabase'
+import { platformCompany, platformDomain, platformName } from '../lib/supabase'
 import { cn } from '../lib/utils'
 import { PLANS, type Plan } from './plans'
 import { leadProblem, submitLead, type Lead } from './api'
+import LegalPage, { platformHref } from './LegalPage'
+import { legalDocs } from './legal'
 
 /**
  * The Hospital Comrade product page — shown on the platform's own domain (PLATFORM_DOMAIN) when no hospital is
@@ -44,7 +46,15 @@ const FAQS = [
   { q: 'What does the demo contain?', a: 'Two sample hospitals with fake patients and bills. Every role has a one-click demo login, and nothing you change affects anyone else.' },
 ]
 
+/** the platform domain's pages: / (product), /legal/:slug */
 export default function PlatformLanding() {
+  const path = typeof location === 'undefined' ? '/' : location.pathname
+  const legal = path.match(/^\/legal\/([a-z]+)\/?$/)
+  if (legal) return <LegalPage slug={legal[1]} />
+  return <ProductPage />
+}
+
+function ProductPage() {
   useEffect(() => {
     document.title = `${platformName} · Hospital & clinic management software with your own website`
     const m = document.querySelector<HTMLMetaElement>('meta[name="description"]')
@@ -66,8 +76,11 @@ export default function PlatformLanding() {
       <footer className="border-t border-peri-200/70 py-10">
         <div className="l-container flex flex-col items-center justify-between gap-4 text-sm text-slate-500 sm:flex-row">
           <Logo />
-          <p>© {new Date().getFullYear()} {platformName} · {platformDomain}</p>
+          <nav aria-label="Legal" className="flex flex-wrap justify-center gap-x-5 gap-y-2">
+            {legalDocs().map((d) => <a key={d.slug} href={platformHref(`/legal/${d.slug}`)} className="hover:text-peri-700">{d.short === 'DPA' ? 'Data Processing Agreement' : d.short}</a>)}
+          </nav>
         </div>
+        <p className="l-container mt-6 text-center text-xs text-slate-400 sm:text-left">© {new Date().getFullYear()} {platformCompany.legalName} · {platformName} · {platformDomain}</p>
       </footer>
     </div>
   )
@@ -348,7 +361,7 @@ function Contact() {
             <Field label="Anything we should know?" className="sm:col-span-2"><textarea className="input min-h-[110px]" value={f.message} onChange={set('message')} maxLength={2000} placeholder="Number of doctors, beds, software you use today…" /></Field>
             {error && <p role="alert" className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 sm:col-span-2">{error}</p>}
             <div className="flex flex-col items-center gap-3 sm:col-span-2 sm:flex-row sm:justify-between">
-              <p className="text-xs text-slate-500">We only use these details to contact you about {platformName}.</p>
+              <p className="text-xs text-slate-500">We only use these details to contact you about {platformName} — see our <a href={platformHref('/legal/privacy')} className="underline underline-offset-2 hover:text-peri-700">Privacy Policy</a>.</p>
               <button type="submit" className="btn-peri w-full sm:w-auto" disabled={state === 'sending'}>
                 {state === 'sending' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Request a call back
               </button>

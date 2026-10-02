@@ -16,9 +16,16 @@ APPENV="$(esc "${APP_ENV:-production}")"
 PNAME="$(esc "${PLATFORM_NAME:-Hospital Comrade}")"
 PDOMAIN="$(esc "${PLATFORM_DOMAIN:-hospital.digitalcomrade.in}")"
 
+# optional: company details for the legal pages, error reporting (empty = app defaults / off)
+EXTRA=""
+for k in PLATFORM_LEGAL_NAME PLATFORM_ADDRESS PLATFORM_EMAIL PLATFORM_PHONE PLATFORM_GRIEVANCE_OFFICER PLATFORM_JURISDICTION SENTRY_DSN; do
+  eval "v=\${$k:-}"
+  if [ -n "$v" ]; then EXTRA="${EXTRA}, \"${k}\": \"$(esc "$v")\""; fi
+done
+
 cat > "$TARGET" <<JS
 // Generated at container start — do not edit.
-window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}", "TENANCY": "${TEN}", "APP_ENV": "${APPENV}", "PLATFORM_NAME": "${PNAME}", "PLATFORM_DOMAIN": "${PDOMAIN}" };
+window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}", "TENANCY": "${TEN}", "APP_ENV": "${APPENV}", "PLATFORM_NAME": "${PNAME}", "PLATFORM_DOMAIN": "${PDOMAIN}"${EXTRA} };
 JS
 
 # Multi-hospital: index.html is shared by every hospital's domain, and link previews (WhatsApp, Facebook…) don't run

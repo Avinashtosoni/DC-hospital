@@ -18,6 +18,13 @@ services:
       - APP_ENV=${APP_ENV:-production}
       - PLATFORM_NAME=${PLATFORM_NAME:-Hospital Comrade}
       - PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-hospital.digitalcomrade.in}
+      - PLATFORM_LEGAL_NAME=${PLATFORM_LEGAL_NAME:-}
+      - PLATFORM_ADDRESS=${PLATFORM_ADDRESS:-}
+      - PLATFORM_EMAIL=${PLATFORM_EMAIL:-}
+      - PLATFORM_PHONE=${PLATFORM_PHONE:-}
+      - PLATFORM_GRIEVANCE_OFFICER=${PLATFORM_GRIEVANCE_OFFICER:-}
+      - PLATFORM_JURISDICTION=${PLATFORM_JURISDICTION:-}
+      - SENTRY_DSN=${SENTRY_DSN:-}
     # Coolify's proxy routes to container port 80 — no host port needed.
     # For local use without Coolify, uncomment:
     # ports:

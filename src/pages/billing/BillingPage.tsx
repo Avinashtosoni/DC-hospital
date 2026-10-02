@@ -18,6 +18,7 @@ import { Badge, Button, EmptyState, Field, Input, PageHeader, Select, Skeleton }
 import { isPrimaryTenant, tenancyEnabled } from '../../tenancy/state'
 import { isSupabaseConfigured, platformName } from '../../lib/supabase'
 import { cn, downloadCsv } from '../../lib/utils'
+import { legalUrl } from '../../platform/legal'
 import { BILLING_DEFAULTS, rupees } from '../../platform/billing'
 import { PLAN_LABEL, PLANS } from '../../platform/plans'
 import { Section, Segmented } from '../settings/shared'
@@ -109,6 +110,7 @@ function PlanCard({ s, canPay, online, target, setTarget }: { s: BillingSummary;
                   </Button>
                 )}
                 <p className="text-center text-[11px] text-slate-500">{online === 'demo' ? 'Demo: the payment is simulated, no money moves.' : 'UPI, cards, net banking and wallets via Razorpay · GST invoice'}</p>
+                <PayTerms />
               </div>
             )}
         </div>
@@ -272,12 +274,19 @@ function WalletCard({ s, canPay, online }: { s: BillingSummary; canPay: boolean;
                 <Button className="w-full" variant="secondary" icon={<BadgeIndianRupee className="h-4 w-4" />} loading={pay.isPending} disabled={!quote.data || debounced !== amount}
                   onClick={() => pay.mutate({ kind: 'wallet', amount })}>{quote.data ? `Add ${rupees(quote.data.base_paise)} · pay ${rupees(quote.data.total_paise)}` : 'Add money'}</Button>
               )}
+              <PayTerms />
             </div>
           )}
         </div>
       </div>
     </Section>
   )
+}
+
+/** shown under every Pay button — the platform's Terms and Refund policy apply to the payment */
+function PayTerms() {
+  const a = 'underline underline-offset-2 hover:text-brand-800'
+  return <p className="text-center text-[11px] text-slate-500">By paying you agree to the <a href={legalUrl('terms')} target="_blank" rel="noreferrer" className={a}>Terms of Service</a> and <a href={legalUrl('refunds')} target="_blank" rel="noreferrer" className={a}>Refund policy</a>.</p>
 }
 
 // ------------------------------------------------------------------ invoice details

@@ -4,7 +4,8 @@ import { tenantHeaders } from '../tenancy/state'
 declare global {
   interface Window {
     /** Runtime config injected by the Docker container (docker/40-runtime-env.sh → /env.js) */
-    __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND' | 'TENANCY' | 'APP_ENV' | 'PLATFORM_NAME' | 'PLATFORM_DOMAIN', string>>
+    __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND' | 'TENANCY' | 'APP_ENV' | 'PLATFORM_NAME' | 'PLATFORM_DOMAIN'
+      | 'PLATFORM_LEGAL_NAME' | 'PLATFORM_ADDRESS' | 'PLATFORM_EMAIL' | 'PLATFORM_PHONE' | 'PLATFORM_GRIEVANCE_OFFICER' | 'PLATFORM_JURISDICTION' | 'SENTRY_DSN', string>>
   }
 }
 
@@ -25,6 +26,19 @@ export const appEnv: 'production' | 'staging' = String(runtime.APP_ENV || import
 /** SaaS brand + domain (configurable — the domain will change) */
 export const platformName = String(runtime.PLATFORM_NAME || import.meta.env.VITE_PLATFORM_NAME || 'Hospital Comrade')
 export const platformDomain = String(runtime.PLATFORM_DOMAIN || import.meta.env.VITE_PLATFORM_DOMAIN || 'hospital.digitalcomrade.in').toLowerCase()
+/** the company behind the platform — printed on the legal pages (Terms, Privacy, Refunds, DPA, Contact) */
+const envOr = (k: keyof NonNullable<Window['__ENV__']>, fallback: string) =>
+  String(runtime[k] || (import.meta.env as Record<string, string | undefined>)[`VITE_${k}`] || fallback).trim()
+export const platformCompany = {
+  legalName: envOr('PLATFORM_LEGAL_NAME', 'Digital Comrade'),
+  address: envOr('PLATFORM_ADDRESS', 'Purnia, Bihar, India'),
+  email: envOr('PLATFORM_EMAIL', `support@${platformDomain.replace(/^[^.]+\.(?=[^.]+\.[^.]+$)/, '')}`),
+  phone: envOr('PLATFORM_PHONE', ''),
+  grievanceOfficer: envOr('PLATFORM_GRIEVANCE_OFFICER', ''),
+  jurisdiction: envOr('PLATFORM_JURISDICTION', 'Purnia, Bihar'),
+}
+/** optional error reporting (phase 8) — empty = off */
+export const sentryDsn = envOr('SENTRY_DSN', '')
 /** Project URL (for showing Edge Function webhook addresses in Settings). */
 export const supabaseUrl = isSupabaseConfigured ? url! : ''
 
