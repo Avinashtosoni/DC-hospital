@@ -67,7 +67,14 @@ settings and sender identity. The Hospital Comrade team works through **provider
       `site_content` 'settings' unchanged (billing & booking always save); CMS pages, `site_forms`,
       `notification_templates`, credentials, cron setup, "send now" and demo tools refuse a locked hospital.
       Providers (any mode) are never locked. Switching modules per hospital comes with the provider panel (phase 5).
-- [ ] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store
+- [x] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store
+  - `src/tenancy/demo.ts`: DC Hospital (primary, all modules) and City Care Clinic (`?hospital=citycare`, Clinic
+    plan, trial, only Dashboard + Website forms unlocked). Each hospital has its own store, settings, website
+    content and media (`demoKey()` → `…@citycare`); City's data is built lazily on first visit (`src/data/citySeed.ts`).
+  - Hospital accounts only sign in on their own hospital's site (clear error otherwise). Platform logins
+    (`admin@` all hospitals, `support@` City only, `finance@` both, all `@hospitalcomrade.demo`) work on any site,
+    use the provider banner, can't open unassigned hospitals, and support can't change patient records.
+  - Demo mode always runs multi-hospital (no `TENANCY` needed) — single-hospital installs with Supabase are unaffected.
 - [ ] **1.6 Edge functions**: `notify` / `whatsapp-bot` read settings & secrets of the message's hospital
 - [ ] **1.7 Verify**: SQL + E2E across hospitals and providers, upgrade path, docs
 

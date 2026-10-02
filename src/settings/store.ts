@@ -5,6 +5,7 @@
  *  - Demo mode: localStorage, and "sending" is simulated.
  */
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
+import { demoKey } from '../tenancy/demo'
 import type { AppSettings, Channel, NotifyEvent } from './types'
 import { SECRET_FIELDS } from './types'
 
@@ -75,8 +76,9 @@ const remote = {
 
 // ------------------------------------------------------------------ demo mode
 const K = { settings: 'dch:app-settings:v1', secrets: 'dch:app-secrets:v1', log: 'dch:outbox:v1' }
-const read = <T,>(k: string, f: T): T => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : f } catch { return f } }
-const write = (k: string, v: unknown) => localStorage.setItem(k, JSON.stringify(v))
+// each demo hospital keeps its own settings (demoKey)
+const read = <T,>(k: string, f: T): T => { try { const v = localStorage.getItem(demoKey(k)); return v ? JSON.parse(v) as T : f } catch { return f } }
+const write = (k: string, v: unknown) => localStorage.setItem(demoKey(k), JSON.stringify(v))
 const pause = (ms = 250) => new Promise((r) => setTimeout(r, ms))
 let actorName = 'You'
 export const setSettingsActor = (name: string) => { actorName = name }

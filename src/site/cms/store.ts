@@ -4,6 +4,7 @@
  *  - Demo mode:     browser localStorage (same API, so the CMS behaves identically)
  */
 import { isSupabaseConfigured, supabase } from '../../lib/supabase'
+import { activeDemoTenant, CITY_SITE_SETTINGS, demoKey } from '../../tenancy/demo'
 import type { ContentKey } from './types'
 
 export interface ContentRow { key: ContentKey; data: unknown; updated_at: string; updated_by_name?: string | null }
@@ -91,9 +92,12 @@ const supabaseStore: CmsStore = {
 
 // ------------------------------------------------------------------ localStorage (demo mode)
 const K = { content: 'dch:cms:v1', revisions: 'dch:cms-rev:v1', media: 'dch:cms-media:v1' }
-const read = <T,>(k: string, fallback: T): T => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : fallback } catch { return fallback } }
+// each demo hospital keeps its own website content (demoKey); a new one starts with its name and contacts
+const read = <T,>(k: string, fallback: T): T => { try { const v = localStorage.getItem(demoKey(k)); return v ? JSON.parse(v) as T : k === K.content ? demoStartContent() as T : fallback } catch { return fallback } }
+const demoStartContent = (): ContentRows => (activeDemoTenant().is_primary ? {}
+  : { settings: { key: 'settings', data: CITY_SITE_SETTINGS as never, updated_at: '2026-01-01T00:00:00.000Z', updated_by_name: 'Hospital Comrade' } })
 const write = (k: string, v: unknown) => {
-  try { localStorage.setItem(k, JSON.stringify(v)) } catch (e) {
+  try { localStorage.setItem(demoKey(k), JSON.stringify(v)) } catch (e) {
     if (e instanceof DOMException && /quota/i.test(e.name + e.message)) throw new Error('Browser storage is full. In demo mode images are stored in the browser — remove unused media or connect Supabase.')
     throw e
   }

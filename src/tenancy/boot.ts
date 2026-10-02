@@ -1,5 +1,6 @@
 import { supabase, tenancyMode } from '../lib/supabase'
 import { enableTenancy, setSiteTenant, slugHint, type TenantInfo } from './state'
+import { DEMO_TENANTS, demoTenantBySlug } from './demo'
 
 export type BootResult =
   | { ok: true; tenant: TenantInfo | null }
@@ -10,7 +11,16 @@ export type BootResult =
  * Multi mode: the domain (or `?hospital=slug` on unmapped hosts) picks the hospital.
  */
 export async function bootTenancy(host = location.hostname): Promise<BootResult> {
-  if (tenancyMode !== 'multi' || !supabase) { enableTenancy(false); return { ok: true, tenant: null } }
+  // demo mode (no database): two demo hospitals in the browser — ?hospital=citycare opens the second one
+  if (!supabase) {
+    enableTenancy(true)
+    const slug = slugHint()
+    const t = slug ? demoTenantBySlug(slug) : DEMO_TENANTS[0]
+    if (!t) return { ok: false, reason: 'not_found' }
+    setSiteTenant(t)
+    return { ok: true, tenant: t }
+  }
+  if (tenancyMode !== 'multi') { enableTenancy(false); return { ok: true, tenant: null } }
   enableTenancy(true)
   try {
     const { data, error } = await supabase.rpc('resolve_tenant', { p_host: host, p_slug: slugHint() })

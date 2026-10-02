@@ -10,6 +10,9 @@ import { Button } from '../components/ui'
 import { Logo } from '../components/layout/AppLayout'
 import { FormError, IconInput, PasswordInput, friendlyAuthError } from '../components/auth/AuthFields'
 import { DEMO_PASSWORD, DEMO_USERS } from '../data/seed'
+import { CITY_USERS } from '../data/citySeed'
+import { activeDemoTenant, DEMO_PROVIDERS, DEMO_TENANTS } from '../tenancy/demo'
+import { PROVIDER_ROLE_LABEL } from '../tenancy/state'
 import { ROLE_LABEL, type Role } from '../types'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { cn } from '../lib/utils'
@@ -118,6 +121,8 @@ export default function Login() {
   const submit = async (e: FormEvent) => { e.preventDefault(); setLoading(true); await doLogin(email, password); setLoading(false) }
   const quick = async (em: string) => { setEmail(em); setPassword(DEMO_PASSWORD); setPending(em); await doLogin(em, DEMO_PASSWORD); setPending(null) }
   const busy = loading || !!pending
+  // demo mode: the logins of the hospital this website belongs to (?hospital=citycare → City Care Clinic)
+  const demoUsers = isSupabaseConfigured || activeDemoTenant().is_primary ? DEMO_USERS : CITY_USERS
 
   return (
     <AuthShell>
@@ -168,7 +173,7 @@ export default function Login() {
         </button>
         {demoOpen && <div className="animate-fade-in px-4 pb-4">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {DEMO_USERS.map((u) => {
+            {demoUsers.map((u) => {
               const Icon = ROLE_ICON[u.role]
               return (
                 <button key={u.email} type="button" onClick={() => quick(u.email)} disabled={busy}
@@ -180,6 +185,7 @@ export default function Login() {
               )
             })}
           </div>
+          {!isSupabaseConfigured && <MultiHospitalDemo busy={busy} pending={pending} onPick={quick} />}
           <p className="mt-3 text-center text-xs text-slate-500">
             Password for all demo accounts: <code className="rounded bg-white px-1.5 py-0.5 text-slate-700 ring-1 ring-slate-200">{DEMO_PASSWORD}</code>
             {isSupabaseConfigured ? ' · Supabase' : ' · local demo data'}
@@ -187,5 +193,34 @@ export default function Login() {
         </div>}
       </div>}
     </AuthShell>
+  )
+}
+
+/** demo mode only: the second hospital and the Hospital Comrade team logins */
+function MultiHospitalDemo({ busy, pending, onPick }: { busy: boolean; pending: string | null; onPick: (email: string) => void }) {
+  const here = activeDemoTenant()
+  const other = DEMO_TENANTS.find((t) => t.id !== here.id)!
+  return (
+    <div className="mt-4 border-t border-brand-100 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-700">Multi-hospital demo</span>
+        {/* a full page load: the website's hospital is decided before the app starts */}
+        <a href={`/login?hospital=${other.slug}`} className="text-xs font-semibold text-brand-700 hover:text-brand-900 hover:underline">
+          {other.is_primary ? `Back to ${other.name}` : `Open ${other.name} (second hospital)`} →
+        </a>
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        You are on <b className="font-semibold text-slate-700">{here.name}</b>&apos;s site — its accounts only work here. Platform team logins work on any hospital:
+      </p>
+      <div className="mt-2 grid grid-cols-3 gap-2">
+        {DEMO_PROVIDERS.map((p) => (
+          <button key={p.email} type="button" onClick={() => onPick(p.email)} disabled={busy}
+            className={cn('flex flex-col items-start gap-1 rounded-xl border border-brand-200 bg-brand-950 p-2.5 text-left text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-brand-900 disabled:pointer-events-none disabled:opacity-60', pending === p.email && 'animate-pulse')}>
+            <span className="text-[11px] font-semibold">{PROVIDER_ROLE_LABEL[p.role]}</span>
+            <span className="w-full truncate text-[10px] text-brand-200">{p.tenants === null ? 'All hospitals' : `${p.tenants.length} hospital${p.tenants.length > 1 ? 's' : ''}`}</span>
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }

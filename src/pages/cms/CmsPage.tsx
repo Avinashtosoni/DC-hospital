@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
+import { demoKey } from '../../tenancy/demo'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -27,7 +28,7 @@ const HIST_LIMIT = 50
 const HIST_GAP = 600 // ms — keystrokes closer together than this become one undo step
 const DRAFTS_KEY = 'dch:cms-drafts:v1'
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-const readDrafts = (): Drafts => { try { return JSON.parse(sessionStorage.getItem(DRAFTS_KEY) ?? '{}') } catch { return {} } }
+const readDrafts = (): Drafts => { try { return JSON.parse(sessionStorage.getItem(demoKey(DRAFTS_KEY)) ?? '{}') } catch { return {} } }
 
 export default function CmsPage() {
   const { user } = useAuth()
@@ -46,7 +47,7 @@ export default function CmsPage() {
 
   // ---- drafts (kept in sessionStorage so switching dashboard pages doesn't lose work)
   const setDrafts = useCallback((fn: (d: Drafts) => Drafts) => {
-    setDraftsState((d) => { const n = fn(d); try { sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(n)) } catch { /* quota */ } return n })
+    setDraftsState((d) => { const n = fn(d); try { sessionStorage.setItem(demoKey(DRAFTS_KEY), JSON.stringify(n)) } catch { /* quota */ } return n })
   }, [])
   const dirtyKeys = useMemo(() => (Object.keys(drafts) as ContentKey[]).filter((k) => !same(drafts[k], saved[k])), [drafts, saved])
   const isDirty = (k: ContentKey) => dirtyKeys.includes(k)

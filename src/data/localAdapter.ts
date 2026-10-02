@@ -5,11 +5,16 @@ import type { DB, Profile, TableName } from '../types'
 import { TABLES } from '../types'
 import type { AuthAdapter, DataAdapter, InviteInfo, NewRow, Row, SignUpInput } from './adapter'
 import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from './seed'
+import { CITY_USERS } from './citySeed'
 import { auditSummary, diffRows, isAudited } from '../lib/audit'
 import { CONTACT_FORM_ID } from '../forms/schema'
 import { nextRun } from '../settings/schedule'
+import { buildCitySeed } from './citySeed'
+import { activeDemoTenant, DEMO_PROVIDERS, DEMO_TENANTS, demoKey, demoTenantById, providerAppRole, providerCan, providerProfile, providerTenants } from '../tenancy/demo'
+import { activeTenantId, providerChoice, type MyContext, type ProviderRole } from '../tenancy/state'
 
-const DB_KEY = 'dch:db:v3'
+/** each demo hospital has its own store (see src/tenancy/demo.ts) */
+const dbKey = () => demoKey('dch:db:v3')
 const USERS_KEY = 'dch:auth-users:v1'
 const SESSION_KEY = 'dch:session:v1'
 
@@ -26,17 +31,20 @@ const localDates = {
 }
 
 let cache: Store | null = null
+let cacheKey = ''
+const seedFor = () => (activeDemoTenant().is_primary ? buildSeed(localDates) : buildCitySeed(localDates)) as Store
 
 function load(): Store {
-  if (cache) return cache
-  const raw = localStorage.getItem(DB_KEY)
+  if (cache && cacheKey === dbKey()) return cache
+  cache = null; cacheKey = dbKey()                    // a provider switched hospital → that hospital's store
+  const raw = localStorage.getItem(cacheKey)
   if (raw) {
     try {
       cache = JSON.parse(raw) as Store
       // tables added after this browser was seeded get their demo rows now
       const missing = TABLES.filter((t) => !cache![t])
       if (missing.length) {
-        const fresh = buildSeed(localDates) as Store
+        const fresh = seedFor()
         for (const t of missing) (cache as Record<string, unknown[]>)[t] = fresh[t] ?? []
         persist()
       }
@@ -49,11 +57,37 @@ function load(): Store {
       return cache
     } catch { /* fallthrough to reseed */ }
   }
-  cache = buildSeed(localDates) as Store
+  cache = seedFor()
   persist()
   return cache
 }
-function persist() { if (cache) localStorage.setItem(DB_KEY, JSON.stringify(cache)) }
+function persist() { if (cache) localStorage.setItem(dbKey(), JSON.stringify(cache)) }
+
+// ------------------------------------------------------------------ who is signed in (hospital user or provider)
+/** the provider behind the session, with the mode they work in (admins can switch; others have one) */
+function sessionProvider(): { p: (typeof DEMO_PROVIDERS)[number]; mode: ProviderRole } | null {
+  const p = DEMO_PROVIDERS.find((x) => x.id === localStorage.getItem(SESSION_KEY))
+  if (!p) return null
+  const chosen = providerChoice().mode
+  return { p, mode: p.role === 'admin' ? chosen ?? 'admin' : p.role }
+}
+/** the signed-in person as this hospital sees them (providers act as owner / accountant) */
+function currentProfile(): Profile | undefined {
+  const sp = sessionProvider()
+  if (sp) return providerCan(sp.p, activeTenantId() ?? '') ? providerProfile(sp.p, sp.mode) : undefined
+  return load().profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+}
+/** a provider only sees the hospitals assigned to them (same rule as current_tenant() in tenancy_core.sql) */
+function accessGuard() {
+  const sp = sessionProvider()
+  if (sp && !providerCan(sp.p, activeTenantId() ?? '')) throw new Error('Your Hospital Comrade account has no access to this hospital.')
+}
+/** Support works in hospitals but can't change patient records (same rule as provider_support_* policies) */
+const CLINICAL = ['patients', 'appointments', 'prescriptions', 'lab_tests', 'admissions', 'visit_feedback']
+function supportGuard(table: string) {
+  accessGuard()
+  if (sessionProvider()?.mode === 'support' && CLINICAL.includes(table)) throw new Error('Support mode is read-only for patient records.')
+}
 
 /** Label writes made on behalf of a system process (e.g. the public booking API) instead of the signed-in user. */
 let actorOverride: { name: string; role: string } | null = null
@@ -75,8 +109,7 @@ function audit(table: TableName, action: 'insert' | 'update' | 'delete', before:
   const changes = diffRows(before, after)
   if (action === 'update' && !Object.keys(changes).length) return
   const store = load()
-  const actorId = actorOverride ? null : localStorage.getItem(SESSION_KEY)
-  const actor = actorId ? store.profiles.find((p) => p.id === actorId) : undefined
+  const actor = actorOverride ? undefined : currentProfile()
   const row = (after ?? before) as Record<string, unknown>
   store.audit_log.unshift({
     id: uuid(), table_name: table, record_id: (row.id as string) ?? null, action, changes,
@@ -93,7 +126,7 @@ const uuid = () => crypto.randomUUID()
  *  their own upcoming visit to a free slot — every other field is locked. */
 function patientApptGuard(a: DB['appointments'], patch: Partial<DB['appointments']>) {
   const store = load()
-  const me = store.profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+  const me = currentProfile()
   if (me?.role !== 'patient') return
   const mine = store.patients.find((p) => p.profile_id === me.id)
   if (!mine || a.patient_id !== mine.id) throw new Error('You can only change your own appointments.')
@@ -112,7 +145,7 @@ function patientApptGuard(a: DB['appointments'], patch: Partial<DB['appointments
 
 /** Demo-mode mirror of the stamp triggers in scripts/sql/messaging.sql (notice author, template next run / author). */
 function stampMessaging(table: TableName, row: Record<string, unknown>, isNew: boolean, before?: Record<string, unknown>) {
-  const me = load().profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+  const me = currentProfile()
   if (table === 'notices' && isNew && !row.author_name) row.author_name = me?.full_name ?? null
   if (table === 'notification_templates') {
     const t = row as unknown as DB['notification_templates']
@@ -144,15 +177,18 @@ export const localAdapter: DataAdapter = {
   mode: 'local',
   async list(table) {
     await latency()
+    accessGuard()
     return structuredClone(load()[table]) as never
   },
   async query(table, q) {
     await latency()
+    accessGuard()
     const res = runQuery(load()[table] as never[], q)
     return { rows: structuredClone(res.rows), count: res.count } as never
   },
   async insert<T extends TableName>(table: T, row: NewRow<T>) {
     await latency()
+    if (!actorOverride) supportGuard(table)
     const now = new Date().toISOString()
     const full = { ...row, id: row.id ?? uuid(), created_at: now, updated_at: now } as unknown as Row<T>
     stampMessaging(table, full as unknown as Record<string, unknown>, true)
@@ -172,6 +208,7 @@ export const localAdapter: DataAdapter = {
     const rows = load()[table] as Row<T>[]
     const idx = rows.findIndex((r) => r.id === id)
     if (idx < 0) throw new Error('Record not found')
+    supportGuard(table)
     const before = rows[idx]
     if (table === 'appointments') patientApptGuard(before as unknown as DB['appointments'], patch as Partial<DB['appointments']>)
     const next = { ...rows[idx], ...patch, id, updated_at: new Date().toISOString() }
@@ -185,6 +222,7 @@ export const localAdapter: DataAdapter = {
   },
   async remove(table, id) {
     await latency()
+    supportGuard(table)
     const store = load() as Record<string, { id: string }[]>
     // same rule as the database (on delete restrict): clinical and billing history is never deleted along with a person
     const linked = (RESTRICT[table] ?? []).some(([child, col]) => (store[child] ?? []).some((r) => (r as unknown as Record<string, unknown>)[col] === id))
@@ -196,20 +234,35 @@ export const localAdapter: DataAdapter = {
     persist()
   },
   async reset() {
-    cache = buildSeed(localDates) as Store
+    cache = seedFor()
     persist()
     localStorage.removeItem(USERS_KEY)
   },
 }
 
 // ------------------------------------------------------------------ local auth
-interface LocalUser { email: string; password: string; profile_id: string; disabled?: boolean; last_sign_in_at?: string }
+/** one list of logins for the whole demo; `tenant` = the hospital the account belongs to (missing = DC Hospital),
+ *  providers have no hospital (their profile lives in src/tenancy/demo.ts) */
+interface LocalUser { email: string; password: string; profile_id: string; disabled?: boolean; last_sign_in_at?: string; tenant?: string; provider?: boolean }
 function users(): LocalUser[] {
-  const raw = localStorage.getItem(USERS_KEY)
-  if (raw) return JSON.parse(raw)
-  const seeded = DEMO_USERS.map((u) => ({ email: u.email, password: DEMO_PASSWORD, profile_id: u.id }))
-  localStorage.setItem(USERS_KEY, JSON.stringify(seeded))
-  return seeded
+  let list: LocalUser[] = []
+  try { list = JSON.parse(localStorage.getItem(USERS_KEY) ?? '[]') } catch { list = [] }
+  // demo logins added later (second hospital, providers) also appear in browsers seeded before them
+  const extras: LocalUser[] = [
+    ...DEMO_USERS.map((u) => ({ email: u.email, password: DEMO_PASSWORD, profile_id: u.id })),
+    ...CITY_USERS.map((u) => ({ email: u.email, password: DEMO_PASSWORD, profile_id: u.id, tenant: DEMO_TENANTS[1].id })),
+    ...DEMO_PROVIDERS.map((u) => ({ email: u.email, password: DEMO_PASSWORD, profile_id: u.id, provider: true })),
+  ]
+  const missing = extras.filter((e) => !list.some((x) => x.profile_id === e.profile_id))
+  if (missing.length) { list = [...list, ...missing]; localStorage.setItem(USERS_KEY, JSON.stringify(list)) }
+  return list
+}
+const tenantOf = (u: LocalUser) => u.tenant ?? DEMO_TENANTS[0].id
+/** logins of the hospital this tab is in */
+const hospitalUsers = () => users().filter((u) => !u.provider && tenantOf(u) === activeDemoTenant().id)
+const wrongHospital = (u: LocalUser) => {
+  const t = demoTenantById(tenantOf(u))!
+  return new Error(`This account belongs to ${t.name}. Please sign in on ${t.name}'s website (demo: add ?hospital=${t.slug} to the address).`)
 }
 const RESET_KEY = 'dch:demo-reset'
 const readReset = (): { token: string; profile_id: string; expires: number } | null => { try { return JSON.parse(localStorage.getItem(RESET_KEY) ?? 'null') } catch { return null } }
@@ -223,7 +276,7 @@ export function localSetPassword(profileId: string, password: string) {
 }
 /** demo store: the login whose e-mail AND mobile (profile or patient record) match — same rule as request_password_otp() */
 export function localFindByEmailPhone(email: string, phone10: string): string | null {
-  const u = users().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
+  const u = hospitalUsers().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
   if (!u) return null
   const store = load()
   const p10 = (v?: string | null) => (v ?? '').replace(/\D/g, '').slice(-10)
@@ -238,15 +291,24 @@ export const localAuth: AuthAdapter = {
   async getCurrent() {
     const id = localStorage.getItem(SESSION_KEY)
     if (!id) return null
-    return load().profiles.find((p) => p.id === id) ?? null
+    const sp = sessionProvider()
+    if (sp) return providerProfile(sp.p, sp.mode)
+    return load().profiles.find((p) => p.id === id) ?? null   // another hospital's account → not signed in here
   },
   async signIn(email, password) {
     await latency()
     const u = users().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
     if (!u || u.password !== password) throw new Error('Invalid email or password')
     if (u.disabled) throw new Error('This account has been disabled. Please contact the hospital.')
+    if (!u.provider && tenantOf(u) !== activeDemoTenant().id) throw wrongHospital(u)   // one account = one hospital
     u.last_sign_in_at = new Date().toISOString()
     localStorage.setItem(USERS_KEY, JSON.stringify(users().map((x) => (x.profile_id === u.profile_id ? u : x))))
+    if (u.provider) {
+      const p = DEMO_PROVIDERS.find((x) => x.id === u.profile_id)!
+      localStorage.setItem(SESSION_KEY, p.id)
+      emit()
+      return providerProfile(p, p.role)
+    }
     const profile = load().profiles.find((p) => p.id === u.profile_id)
     if (!profile) throw new Error('Profile not found for this account')
     localStorage.setItem(SESSION_KEY, profile.id)
@@ -272,12 +334,12 @@ export const localAuth: AuthAdapter = {
     } else {
       const nextMrn = Math.max(100000, ...store.patients.map((p) => Number(p.mrn.replace(/\D/g, '')) || 0)) + 1
       store.patients.unshift({
-        id: uuid(), profile_id: profile.id, mrn: `DCH-${nextMrn}`, full_name, email, phone: phone ?? null,
+        id: uuid(), profile_id: profile.id, mrn: `${activeDemoTenant().code}-${nextMrn}`, full_name, email, phone: phone ?? null,
         gender: 'other', status: 'outpatient', created_at: now, updated_at: now,
       })
     }
     persist()
-    list.push({ email, password, profile_id: profile.id })
+    list.push({ email, password, profile_id: profile.id, tenant: activeDemoTenant().id })
     localStorage.setItem(USERS_KEY, JSON.stringify(list))
     localStorage.setItem(SESSION_KEY, profile.id)
     emit()
@@ -300,7 +362,7 @@ export const localAuth: AuthAdapter = {
   // demo mode: no e-mail is sent — the reset link is handed back so it can be opened right away
   async requestPasswordReset(email, redirectTo) {
     await latency()
-    const u = users().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
+    const u = hospitalUsers().find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
     if (!u) return {}
     const token = crypto.randomUUID()
     localStorage.setItem(RESET_KEY, JSON.stringify({ token, profile_id: u.profile_id, expires: Date.now() + 3600e3 }))
@@ -363,7 +425,7 @@ export async function localSubmitFeedback(apptId: string, input: { rating: numbe
 // ------------------------------------------------------------------ user administration (demo twins of admin_* in messaging.sql)
 const ROLES = ['owner', 'doctor', 'receptionist', 'accountant', 'staff', 'patient']
 function adminGuard() {
-  const me = load().profiles.find((p) => p.id === localStorage.getItem(SESSION_KEY))
+  const me = currentProfile()
   if (me?.role !== 'owner') throw new Error('Only the hospital owner can manage user accounts')
   return me
 }
@@ -384,14 +446,14 @@ export const localAdmin = {
     audit('profiles', 'insert', null, profile as unknown as Record<string, unknown>)
     if (input.role === 'patient') {
       const nextMrn = Math.max(100000, ...store.patients.map((p) => Number(p.mrn.replace(/\D/g, '')) || 0)) + 1
-      store.patients.unshift({ id: uuid(), profile_id: profile.id, mrn: `DCH-${nextMrn}`, full_name: profile.full_name, email, phone: profile.phone, gender: 'other', status: 'outpatient', created_at: now, updated_at: now })
+      store.patients.unshift({ id: uuid(), profile_id: profile.id, mrn: `${activeDemoTenant().code}-${nextMrn}`, full_name: profile.full_name, email, phone: profile.phone, gender: 'other', status: 'outpatient', created_at: now, updated_at: now })
     } else {
       const linked = (input.role === 'doctor' ? store.doctors : store.staff) as { email?: string | null; profile_id?: string | null }[]
       const match = linked.find((r) => r.email?.toLowerCase() === email && !r.profile_id)
       if (match) match.profile_id = profile.id
     }
     persist()
-    list.push({ email, password: input.password || crypto.randomUUID(), profile_id: profile.id })
+    list.push({ email, password: input.password || crypto.randomUUID(), profile_id: profile.id, tenant: activeDemoTenant().id })
     localStorage.setItem(USERS_KEY, JSON.stringify(list))
     return profile.id
   },
@@ -467,4 +529,25 @@ export function localTemplateRecipients(t: DB['notification_templates']): { prof
 export function localMarkTemplateRun(id: string, count: number) {
   const t = load().notification_templates.find((x) => x.id === id)
   if (t) { t.last_run_at = new Date().toISOString(); t.last_run_count = count; persist() }
+}
+
+// ------------------------------------------------------------------ demo twins of my_context() / provider_tenants()
+export function localMyContext(): MyContext {
+  const t = activeDemoTenant()
+  const tenant = { id: t.id, slug: t.slug, name: t.name, status: t.status, plan: t.plan, modules: t.modules, is_primary: t.is_primary }
+  const sp = sessionProvider()
+  if (sp) {
+    const ok = providerCan(sp.p, t.id)
+    return { tenant: ok ? tenant : null, role: ok ? providerAppRole(sp.mode) : null, provider_role: sp.p.role, provider_mode: sp.mode }
+  }
+  const u = users().find((x) => x.profile_id === localStorage.getItem(SESSION_KEY))
+  const home = u ? demoTenantById(tenantOf(u)) : undefined
+  return {
+    tenant: home ? { id: home.id, slug: home.slug, name: home.name, status: home.status, plan: home.plan, modules: home.modules, is_primary: home.is_primary } : null,
+    role: currentProfile()?.role ?? null, provider_role: null, provider_mode: null,
+  }
+}
+export function localProviderTenants() {
+  const sp = sessionProvider()
+  return sp ? providerTenants(sp.p).map((t) => ({ id: t.id, slug: t.slug, name: t.name, status: t.status, plan: t.plan, modules: t.modules, is_primary: t.is_primary, domain: t.domain })) : []
 }
