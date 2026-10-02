@@ -84,10 +84,13 @@ export type SmsProvider = 'msg91' | 'twilio' | 'fast2sms' | 'webhook'
 /** openwa = self-hosted OpenWA / WA CRM gateway (WhatsApp Web session, free text, no templates) */
 export type WhatsappProvider = 'openwa' | 'meta' | 'aisensy' | 'msg91' | 'twilio' | 'interakt' | 'webhook'
 
+/** own = the hospital's own provider account (below); platform = Hospital Comrade's shared account (phase 3) */
+export type MessagingSource = 'own' | 'platform'
+
 export interface NotificationSettings {
-  email: { enabled: boolean; provider: EmailProvider; fromName: string; fromEmail: string; replyTo: string; smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string }
-  sms: { enabled: boolean; provider: SmsProvider; senderId: string; dltEntityId: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string }
-  whatsapp: { enabled: boolean; provider: WhatsappProvider; phoneNumberId: string; businessAccountId: string; language: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string
+  email: { enabled: boolean; source: MessagingSource; provider: EmailProvider; fromName: string; fromEmail: string; replyTo: string; smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string }
+  sms: { enabled: boolean; source: MessagingSource; provider: SmsProvider; senderId: string; dltEntityId: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string }
+  whatsapp: { enabled: boolean; source: MessagingSource; provider: WhatsappProvider; phoneNumberId: string; businessAccountId: string; language: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string
     /** OpenWA / WA CRM: gateway origin (e.g. https://wacrm.example.in) and the WhatsApp session ID */
     openwaUrl: string; openwaSession: string
     /** How a mobile number becomes a chat ID. {phone} = 10-digit number. Default 91{phone}@c.us */
@@ -167,9 +170,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   locale: { dateFormat: 'dd MMM yyyy', timeFormat: '12h', weekStartsOn: 1 },
   security: { idleTimeoutMinutes: 0 },
   notifications: {
-    email: { enabled: false, provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
-    sms: { enabled: false, provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
-    whatsapp: { enabled: false, provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', msg91Number: '', msg91Namespace: '', aisensyTestCampaign: '', botEnabled: false },
+    email: { enabled: false, source: 'own', provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
+    sms: { enabled: false, source: 'own', provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
+    whatsapp: { enabled: false, source: 'own', provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', msg91Number: '', msg91Namespace: '', aisensyTestCampaign: '', botEnabled: false },
     push: { enabled: false, apiKey: '', authDomain: '', projectId: '', messagingSenderId: '', appId: '', vapidKey: '' },
     rates: { sms: 0.25, whatsapp: 0.8, email: 0.05, push: 0 },
     events: {

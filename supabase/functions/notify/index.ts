@@ -17,9 +17,15 @@
 // Multi-hospital: every message goes out with the settings, credentials, templates and push devices of *its own*
 // hospital (notification_outbox.tenant_id). One scheduler flushes every hospital's queue; a staff member's
 // "deliver now" flushes only their hospital's; a test uses the hospital the caller is working in. See ../_shared/tenant.ts.
+//
+// Hospital Comrade messaging (phase 3): a channel set to source "platform" goes out through the platform's shared
+// account (PLATFORM_* secrets, template IDs from public.platform_settings) with the hospital's own name / sender ID —
+// see ../_shared/platform.ts. Every outcome is counted per hospital in public.message_usage, and the monthly allowance
+// in tenants.messaging.limits is enforced (OTPs always go out). { "ping": true } also reports which shared accounts exist.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { deliver, isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
+import { isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
+import { deliverRouted, platformCtx, platformStatus, sourceOf, usageMonth, type Meter, type Source } from '../_shared/platform.ts'
 import { corsHeaders, groupByTenant, resolveCaller, type Caller } from '../_shared/tenant.ts'
 
 const cors = corsHeaders()
@@ -35,21 +41,24 @@ const userClient = (jwt: string, headers: Record<string, string>) => createClien
 const caller = (req: Request): Promise<Caller> => resolveCaller(req, { serviceKey: SERVICE_KEY, admin, userClient })
 
 /** everything needed to deliver one hospital's messages (the service role skips RLS → filter on tenant_id) */
-async function loadCtx(tenant: string, events: string[] = []): Promise<Ctx> {
+interface Setup { own: Ctx; platform: Ctx; meter: Meter }
+async function loadCtx(tenant: string, events: string[] = []): Promise<Setup> {
   const tplIds = [...new Set(events.filter((e) => e.startsWith('tpl:')).map((e) => e.slice(4)))]
-  const [{ data: s }, { data: sec }, { data: site }, { data: tpls }, { data: t }] = await Promise.all([
+  const [{ data: s }, { data: sec }, { data: site }, { data: tpls }, { data: t }, { data: plat }, { data: usage }] = await Promise.all([
     admin.from('app_settings').select('data').eq('tenant_id', tenant).eq('key', 'app').maybeSingle(),
     admin.from('app_secrets').select('key, value').eq('tenant_id', tenant),
     admin.from('site_content').select('data').eq('tenant_id', tenant).eq('key', 'settings').maybeSingle(),
     tplIds.length ? admin.from('notification_templates').select('id, wa_template, wa_params, sms_template_id').eq('tenant_id', tenant).in('id', tplIds) : Promise.resolve({ data: [] as any[] }),
-    admin.from('tenants').select('name').eq('id', tenant).maybeSingle(),
+    admin.from('tenants').select('name, messaging').eq('id', tenant).maybeSingle(),
+    admin.from('platform_settings').select('data').eq('key', 'messaging').maybeSingle(),
+    admin.from('message_usage').select('channel, sent').eq('tenant_id', tenant).eq('month', usageMonth()).eq('source', 'platform'),
   ])
   const n = (s?.data as any)?.notifications ?? {}
   // custom messages look like built-in events to the providers (approved WhatsApp template, DLT ID)
   n.templates = { ...(n.templates ?? {}) }
   for (const t of (tpls ?? []) as any[]) n.templates[`tpl:${t.id}`] = { waTemplate: t.wa_template ?? '', waParams: t.wa_params ?? '', smsTemplateId: t.sms_template_id ?? '' }
   const siteUrl = String((site?.data as any)?.siteUrl ?? '')
-  return {
+  const own: Ctx = {
     n,
     secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])),
     hospital: (site?.data as any)?.name || t?.name || 'DC Hospital',
@@ -63,38 +72,61 @@ async function loadCtx(tenant: string, events: string[] = []): Promise<Ctx> {
       forget: async (tokens) => { await admin.from('push_tokens').delete().eq('tenant_id', tenant).in('token', tokens) },
     },
   }
+  const tm = ((t as any)?.messaging ?? {}) as Meter['tenant']
+  return {
+    own,
+    platform: platformCtx(own, (k) => Deno.env.get(k), { platform: (plat?.data as any) ?? null, tenant: tm, replyTo: String((site?.data as any)?.email ?? '') }),
+    meter: { tenant: tm, used: Object.fromEntries(((usage ?? []) as any[]).map((r) => [r.channel, Number(r.sent) || 0])) },
+  }
+}
+
+/** add one batch's outcomes to public.message_usage (best effort — never blocks delivery) */
+async function recordUsage(tenant: string, counts: Map<string, { sent: number; failed: number }>) {
+  for (const [key, v] of counts) {
+    const [channel, source] = key.split(':')
+    await admin.rpc('record_message_usage', { p_tenant: tenant, p_channel: channel, p_source: source, p_sent: v.sent, p_failed: v.failed }).then(() => {}, () => {})
+  }
+}
+const tally = (counts: Map<string, { sent: number; failed: number }>, channel: string, source: Source, ok: boolean) => {
+  const k = `${channel}:${source}`; const v = counts.get(k) ?? { sent: 0, failed: 0 }
+  ok ? v.sent++ : v.failed++; counts.set(k, v)
 }
 
 /** deliver claimed rows, each with its own hospital's settings and credentials */
 async function deliverRows(rows: any[]) {
   let sent = 0, failed = 0
   for (const [tenant, list] of groupByTenant(rows)) {
-    let c: Ctx
+    let c: Setup
     try { c = await loadCtx(tenant, list.map((r) => r.event)) }
     catch (e) {   // settings unreadable → try again later (counts as an attempt)
       for (const row of list) await finish(row, { ok: false, error: `Could not load the hospital's settings: ${(e as Error).message}` })
       failed += list.length
       continue
     }
+    const counts = new Map<string, { sent: number; failed: number }>()
     for (const row of list) {
-      const r = await deliver({ id: row.id, event: row.event, channel: row.channel, recipient: row.recipient, subject: row.subject, body: row.body, vars: row.vars ?? {} }, c)
+      const r = await deliverRouted({ id: row.id, event: row.event, channel: row.channel, recipient: row.recipient, subject: row.subject, body: row.body, vars: row.vars ?? {} }, c.own, c.platform, c.meter)
       r.ok ? sent++ : failed++
-      await finish(row, r)
+      const final = await finish(row, r)
+      if (final) tally(counts, row.channel, r.source, r.ok)
     }
+    await recordUsage(tenant, counts)
   }
   return { processed: rows.length, sent, failed }
 }
 
-async function finish(row: any, r: { ok: boolean; error?: string; ref?: string }) {
+/** returns true when the message reached a final state (sent, or failed for good) — those are the ones metered */
+async function finish(row: any, r: { ok: boolean; error?: string; ref?: string; source?: Source }) {
   const giveUp = !r.ok && (row.attempts >= 3 || isPermanent(r.error))
   await admin.from('notification_outbox').update({
-    status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending',
+    status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending', source: r.source ?? null,
     error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null,
     // retry later with backoff (2, 4, 8 min after this attempt — not after the message was created)
     ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
     // never keep one-time codes around
     ...((row.event === 'otp' || row.event === 'password_otp') && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
   }).eq('id', row.id)
+  return r.ok || giveUp
 }
 
 // ------------------------------------------------------------------ handler
@@ -103,7 +135,7 @@ Deno.serve(async (req) => {
   let body: any = {}
   try { body = await req.json() } catch { /* empty */ }
 
-  if (body.ping) return json({ ok: true, message: 'notify function is deployed and reachable' })
+  if (body.ping) return json({ ok: true, message: 'notify function is deployed and reachable', platform: platformStatus((k) => Deno.env.get(k)) })
 
   if (body.test) {
     // owner only
@@ -112,7 +144,9 @@ Deno.serve(async (req) => {
     const channel = body.test.channel as Channel
     const to = channel === 'push' ? who.id! : String(body.test.to ?? '').trim()
     if (!['sms', 'whatsapp', 'email', 'push'].includes(channel) || !to) return json({ ok: false, message: 'channel and to are required' }, 400)
-    const c = await loadCtx(who.tenant)
+    const setup = await loadCtx(who.tenant)
+    const source = sourceOf(setup.own.n, channel)
+    const c = source === 'platform' ? setup.platform : setup.own
     const m: Msg = { event: 'test', channel, recipient: channel === 'email' || channel === 'push' ? to : to.replace(/\D/g, '').slice(-10),
       subject: channel === 'push' ? `Test notification from ${c.hospital}` : `Test email from ${c.hospital}`,
       body: `This is a test message from ${c.hospital}. If you received it, ${channel.toUpperCase()} notifications are working.`, vars: { hospital: c.hospital } }
@@ -122,10 +156,12 @@ Deno.serve(async (req) => {
       st = await openwaStatus(c)
       if (!st.ok) return json({ ok: false, message: st.error })
     }
-    const r = await deliver(m, c)
+    const r = await deliverRouted(m, setup.own, setup.platform, setup.meter)
     if (r.ok && st?.phone) r.ref = `${r.ref} · from ${st.phone}`
-    await admin.from('notification_outbox').insert({ tenant_id: who.tenant, event: 'test', channel, recipient: m.recipient, subject: m.subject, body: m.body, status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null })
-    return json({ ok: r.ok, message: r.ok ? `Sent via ${c.n[channel]?.provider ?? 'Firebase'}${r.ref ? ` · ${r.ref}` : ''}` : r.error, provider_ref: r.ref ?? null })
+    await admin.from('notification_outbox').insert({ tenant_id: who.tenant, event: 'test', channel, recipient: m.recipient, subject: m.subject, body: m.body, status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null, source })
+    const counts = new Map<string, { sent: number; failed: number }>(); tally(counts, channel, source, r.ok); await recordUsage(who.tenant, counts)
+    const via = source === 'platform' ? `Hospital Comrade (${c.n[channel]?.provider})` : (c.n[channel]?.provider ?? 'Firebase')
+    return json({ ok: r.ok, message: r.ok ? `Sent via ${via}${r.ref ? ` · ${r.ref}` : ''}` : r.error, provider_ref: r.ref ?? null, source })
   }
 
   if (body.flush) {

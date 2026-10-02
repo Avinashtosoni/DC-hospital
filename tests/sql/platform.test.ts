@@ -50,3 +50,58 @@ describe('product page leads', () => {
     expect((await db.one<{ status: string }>(null, `select status from public.platform_leads where phone = '9876500002'`)).status).toBe('contacted')
   })
 })
+
+// ------------------------------------------------------------------ phase 3 — Hospital Comrade messaging
+describe('Hospital Comrade messaging (phase 3)', () => {
+  const MAIN = 'a0000000-0000-4000-8000-000000000001'
+  const NEW = 'f3000000-0000-4000-8000-000000000003'
+
+  test('a new hospital starts with full settings on Hospital Comrade messaging; re-seeding keeps its changes', async () => {
+    await db.as(null, `insert into public.tenants (id, slug, name, code) values ($1, 'phase3', 'Phase Three Clinic', 'PTC')`, [NEW])
+    await db.as(null, `select public.seed_hospital_defaults($1)`, [NEW])
+    const { data } = await db.one<{ data: any }>(null, `select data from public.app_settings where tenant_id = $1 and key = 'app'`, [NEW])
+    for (const ch of ['sms', 'whatsapp', 'email']) expect(data.notifications[ch]).toMatchObject({ source: 'platform', enabled: true })
+    expect(data.notifications.push.enabled).toBe(false)
+    expect(Object.keys(data.notifications.events).length).toBeGreaterThan(10)        // events + wording → messages get queued
+    expect(data.notifications.templates.appointment_booked.text).toContain('{name}')
+    await db.as(null, `update public.app_settings set data = jsonb_set(data, '{notifications,sms,source}', '"own"') where tenant_id = $1 and key = 'app'`, [NEW])
+    await db.as(null, `select public.seed_hospital_defaults($1)`, [NEW])
+    expect((await db.one<{ s: string }>(null, `select data #>> '{notifications,sms,source}' s from public.app_settings where tenant_id = $1 and key = 'app'`, [NEW])).s).toBe('own')
+    // the primary hospital is untouched (its own accounts, as before)
+    expect(await db.as(null, `select 1 from public.app_settings where tenant_id = $1 and data #>> '{notifications,sms,source}' = 'platform'`, [MAIN])).toHaveLength(0)
+  })
+
+  test('message usage: only the notify function writes it; it adds up; owner and accountant read their own hospital only', async () => {
+    await expect(db.as(USER.owner, `select public.record_message_usage($1, 'sms', 'platform', 1, 0)`, [MAIN])).rejects.toThrow(/permission denied/)
+    await expect(db.as(USER.owner, `insert into public.message_usage (month, channel, sent) values (current_date, 'sms', 5)`)).rejects.toThrow(/permission denied/)
+    await db.as(null, `select public.record_message_usage($1, 'sms', 'platform', 3, 1)`, [MAIN])
+    await db.as(null, `select public.record_message_usage($1, 'sms', 'platform', 2, 0)`, [MAIN])
+    await db.as(null, `select public.record_message_usage($1, 'whatsapp', 'own', 4, 0)`, [MAIN])
+    await db.as(null, `select public.record_message_usage($1, 'sms', 'platform', 9, 0)`, [NEW])
+    await db.as(null, `select public.record_message_usage($1, 'email', 'platform', 0, 0)`, [MAIN])      // nothing to add → no row
+    const mine = await db.as<{ channel: string; source: string; sent: number; failed: number }>(USER.owner, `select channel, source, sent, failed from public.message_usage order by channel`)
+    expect(mine).toEqual([{ channel: 'sms', source: 'platform', sent: 5, failed: 1 }, { channel: 'whatsapp', source: 'own', sent: 4, failed: 0 }])
+    expect(await db.as(USER.accountant, `select 1 from public.message_usage`)).toHaveLength(2)
+    expect(await db.as(USER.receptionist, `select 1 from public.message_usage`)).toHaveLength(0)
+    expect(await db.as(USER.patient, `select 1 from public.message_usage`)).toHaveLength(0)
+    const month = await db.one<{ m: string }>(null, `select month::text m from public.message_usage limit 1`)
+    expect(month.m).toMatch(/^\d{4}-\d{2}-01$/)
+  })
+
+  test('platform settings: Hospital Comrade admins only; a hospital cannot change its own sender identity or allowance', async () => {
+    await expect(db.as('anon', `select * from public.platform_settings`)).rejects.toThrow(/permission denied/)
+    expect(await db.as(USER.owner, `select * from public.platform_settings`)).toHaveLength(0)
+    expect(await db.as(SUPPORT, `select * from public.platform_settings`)).toHaveLength(0)
+    await db.as(USER.owner, `update public.platform_settings set data = '{"templates":{"otp":{"smsTemplateId":"HACK"}}}'::jsonb where key = 'messaging'`)
+    expect((await db.one<{ data: any }>(null, `select data from public.platform_settings where key = 'messaging'`)).data).toEqual({ templates: {} })
+    await db.as(ADMIN, `update public.platform_settings set data = '{"templates":{"otp":{"smsTemplateId":"1707-OTP"}}}'::jsonb where key = 'messaging'`)
+    expect((await db.as<{ data: any }>(ADMIN, `select data from public.platform_settings where key = 'messaging'`))[0].data.templates.otp.smsTemplateId).toBe('1707-OTP')
+    // tenants.messaging (sender ID, allowance): readable by the hospital, changeable only by a platform admin
+    await db.as(USER.owner, `update public.tenants set messaging = '{"limits":{"sms":999999}}'::jsonb where id = $1`, [MAIN])
+    expect((await db.one<{ m: any }>(null, `select messaging m from public.tenants where id = $1`, [MAIN])).m).toEqual({})
+    await db.query(`select set_config('request.headers', $1, false)`, [JSON.stringify({ 'x-tenant-id': MAIN, 'x-provider-mode': 'admin' })])
+    try { await db.as(ADMIN, `update public.tenants set messaging = '{"smsSenderId":"DCHOSP","limits":{"sms":500}}'::jsonb where id = $1`, [MAIN]) }
+    finally { await db.query(`select set_config('request.headers', '', false)`) }
+    expect((await db.as<{ m: any }>(USER.owner, `select messaging m from public.tenants where id = $1`, [MAIN]))[0].m).toEqual({ smsSenderId: 'DCHOSP', limits: { sms: 500 } })
+  })
+})

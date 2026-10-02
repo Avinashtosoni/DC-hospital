@@ -38,7 +38,8 @@ const db: Record<string, any[]> = {
     { tenant_id: DC, key: 'settings', data: { name: 'DC Hospital' } },
     { tenant_id: CITY, key: 'settings', data: { name: 'City Care Clinic', phone: '+91 612 400 1100' } },
   ],
-  notification_templates: [], push_tokens: [], wa_sessions: [], notification_outbox: [],
+  notification_templates: [], push_tokens: [], wa_sessions: [], notification_outbox: [], message_usage: [],
+  platform_settings: [{ key: 'messaging', data: { templates: {} } }],
   tenant_domains: [{ domain: 'dchospital.example', tenant_id: DC, is_primary: true, method: 'manual' }],
 }
 /** signed-in users → what my_context() says for them (providers depend on the x-tenant-id they send) */
@@ -88,6 +89,13 @@ async function supabase(url: URL, init: RequestInit & { headers: Headers }): Pro
     if (fn === 'claim_notifications' || fn === 'claim_notifications_for') {
       const rows = body?.p_tenant ? claimRows.filter((r) => r.tenant_id === body.p_tenant) : claimRows
       return reply(rows, h)
+    }
+    if (fn === 'record_message_usage') {
+      const month = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 7) + '-01'
+      let row = db.message_usage.find((r) => r.tenant_id === body.p_tenant && r.month === month && r.channel === body.p_channel && r.source === body.p_source)
+      if (!row) db.message_usage.push(row = { tenant_id: body.p_tenant, month, channel: body.p_channel, source: body.p_source, sent: 0, failed: 0 })
+      row.sent += body.p_sent; row.failed += body.p_failed
+      return reply(null, h)
     }
     if (fn === 'public_doctors') {
       const t = h.get('x-tenant-id')
@@ -321,4 +329,70 @@ Deno.test('domains: Cloudflare custom hostname — add, check until active, make
   assertEquals(db.tenant_domains.filter((x) => x.tenant_id === CITY), [])
   // DC Hospital's address was never touched
   assertEquals(db.tenant_domains.map((x) => x.domain), ['dchospital.example'])
+})
+
+// ------------------------------------------------------------------ Hospital Comrade messaging (phase 3)
+Deno.test('a hospital on Hospital Comrade messaging sends through the shared account with its own sender ID; usage is metered', async () => {
+  reset()
+  Deno.env.set('PLATFORM_SMS_PROVIDER', 'fast2sms'); Deno.env.set('PLATFORM_FAST2SMS_API_KEY', 'platform-f2s'); Deno.env.set('PLATFORM_SMS_SENDER_ID', 'HSPCMR')
+  const city = db.app_settings.find((r) => r.tenant_id === CITY)!
+  const before = structuredClone(city.data)
+  city.data.notifications.sms = { enabled: true, source: 'platform', provider: 'webhook', webhookUrl: 'https://hooks.city.test/sms' }
+  city.data.notifications.templates = { appointment_booked: { text: 'x', waParams: 'name' } }
+  db.platform_settings[0].data = { templates: { appointment_booked: { smsTemplateId: 'PLAT-1' } } }
+  const tenant = db.tenants.find((t) => t.id === CITY)!
+  tenant.messaging = { smsSenderId: 'citycl', templates: { appointment_booked: { smsTemplateId: 'CITY-7' } } }
+  db.message_usage = []
+  try {
+    db.notification_outbox = [outRow('p1', CITY, '9810000021'), outRow('p2', DC, '9810000022')].map((r) => ({ ...r, status: 'sending' }))
+    claimRows = db.notification_outbox.map((r) => ({ ...r }))
+    assertEquals(await (await post(notify, { flush: true }, SERVICE)).json(), { processed: 2, sent: 2, failed: 0 })
+    // City: the platform's Fast2SMS key, City's own DLT header + template; nothing to City's own webhook
+    const f2s = sent.filter((s) => s.url === 'https://www.fast2sms.com/dev/bulkV2')
+    assertEquals(f2s.length, 1)
+    assertEquals(f2s[0].body.sender_id, 'CITYCL'); assertEquals(f2s[0].body.message, 'CITY-7'); assertEquals(f2s[0].body.numbers, '9810000021')
+    assertEquals(calls.length > 0, true)
+    assert(!sent.some((s) => s.url === 'https://hooks.city.test/sms'))
+    // DC stays on its own account
+    assertEquals(sent.filter((s) => s.url === 'https://hooks.dc.test/sms').map((s) => s.auth), ['Bearer dc-secret'])
+    assertEquals(db.notification_outbox.map((r) => [r.id, r.source]), [['p1', 'platform'], ['p2', 'own']])
+    const usage = db.message_usage.map((r) => [r.tenant_id, r.channel, r.source, r.sent]).sort()
+    assertEquals(usage, [[CITY, 'sms', 'platform', 1], [DC, 'sms', 'own', 1]].sort())
+    // ping says which shared accounts exist — never a key
+    const ping = await (await post(notify, { ping: true })).json()
+    assertEquals(ping.platform, { sms: 'fast2sms', whatsapp: null, email: null })
+    assert(!JSON.stringify(ping).includes('platform-f2s'))
+  } finally {
+    city.data = before; delete tenant.messaging; db.platform_settings[0].data = { templates: {} }
+    for (const k of ['PLATFORM_SMS_PROVIDER', 'PLATFORM_FAST2SMS_API_KEY', 'PLATFORM_SMS_SENDER_ID']) Deno.env.delete(k)
+  }
+})
+
+Deno.test('the monthly allowance stops platform messages (OTPs still go out); a missing shared account fails for good', async () => {
+  reset()
+  Deno.env.set('PLATFORM_SMS_PROVIDER', 'fast2sms'); Deno.env.set('PLATFORM_FAST2SMS_API_KEY', 'platform-f2s')
+  const city = db.app_settings.find((r) => r.tenant_id === CITY)!
+  const before = structuredClone(city.data)
+  city.data.notifications.sms = { enabled: true, source: 'platform' }
+  city.data.notifications.whatsapp = { enabled: true, source: 'platform' }
+  const tenant = db.tenants.find((t) => t.id === CITY)!
+  tenant.messaging = { limits: { sms: 5 } }
+  const month = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 7) + '-01'
+  db.message_usage = [{ tenant_id: CITY, month, channel: 'sms', source: 'platform', sent: 5, failed: 0 }]
+  try {
+    db.notification_outbox = [outRow('q1', CITY, '9810000031'), { ...outRow('q2', CITY, '9810000032'), event: 'otp', vars: { code: '123456' } },
+      { ...outRow('q3', CITY, '9810000033'), channel: 'whatsapp' }].map((r) => ({ ...r, status: 'sending' }))
+    claimRows = db.notification_outbox.map((r) => ({ ...r }))
+    assertEquals(await (await post(notify, { flush: true }, SERVICE)).json(), { processed: 3, sent: 1, failed: 2 })
+    const byId = Object.fromEntries(db.notification_outbox.map((r) => [r.id, r]))
+    assertEquals(byId.q1.status, 'failed'); assert(/allowance \(5\) is used up/.test(byId.q1.error))
+    assertEquals(byId.q2.status, 'sent')            // OTP is exempt
+    assertEquals(byId.q3.status, 'failed'); assert(/WhatsApp is not configured/.test(byId.q3.error))
+    assertEquals(sent.filter((s) => s.url.includes('fast2sms')).length, 1)
+    const sms = db.message_usage.find((r) => r.tenant_id === CITY && r.channel === 'sms')!
+    assertEquals([sms.sent, sms.failed], [6, 1])
+  } finally {
+    city.data = before; delete tenant.messaging; db.message_usage = []
+    for (const k of ['PLATFORM_SMS_PROVIDER', 'PLATFORM_FAST2SMS_API_KEY']) Deno.env.delete(k)
+  }
 })

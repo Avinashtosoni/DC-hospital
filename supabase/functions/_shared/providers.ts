@@ -14,7 +14,7 @@ export interface Ctx {
 export interface Result { ok: boolean; ref?: string; error?: string }
 
 /** Errors that will not fix themselves on retry (bad config) → mark failed immediately. */
-export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the (API|auth) key|cannot send free-text|session was not found|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
+export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the (API|auth) key|cannot send free-text|allowance .* is used up|session was not found|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
 /** Wait before retry n (1-based): 2, 4, 8 … minutes. */
 export const retryDelayMs = (attempts: number) => 2 ** Math.max(1, attempts) * 60_000
 

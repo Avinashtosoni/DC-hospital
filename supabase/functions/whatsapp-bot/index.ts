@@ -64,7 +64,8 @@ async function loadSetup(tenant: TenantRow): Promise<Setup> {
     tenant,
     ctx: { n, secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])), hospital: siteData.name || tenant.name || 'DC Hospital' },
     // a suspended hospital's bot stays quiet
-    bot: !!n.whatsapp?.botEnabled && tenant.status !== 'suspended',
+    // the chatbot answers on the hospital's own number — never on Hospital Comrade's shared WhatsApp account
+    bot: !!n.whatsapp?.botEnabled && n.whatsapp?.source !== 'platform' && tenant.status !== 'suspended',
     site: siteData,
   }
 }

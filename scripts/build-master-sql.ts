@@ -190,6 +190,13 @@ const formRows = DEFAULT_FORMS.map((f) => `  (${[f.id, f.slug, f.name, f.descrip
 // a new hospital gets the same built-in forms (seed_hospital_defaults in tenancy.sql)
 tenancySql = tenancySql.replace('@@DEFAULT_FORM_VALUES@@', formRows)
 if (tenancySql.includes('@@DEFAULT_FORM_VALUES@@')) throw new Error('default forms placeholder missing')
+// a new hospital's settings (phase 3): the app defaults, with SMS / WhatsApp / e-mail on Hospital Comrade messaging
+const newHospitalSettings = JSON.parse(JSON.stringify(DEFAULT_APP_SETTINGS))
+for (const ch of ['sms', 'whatsapp', 'email'] as const) Object.assign(newHospitalSettings.notifications[ch], { source: 'platform', enabled: true })
+const newHospitalJson = JSON.stringify(newHospitalSettings)
+if (newHospitalJson.includes('$json$') || newHospitalJson.includes('$$')) throw new Error('new hospital settings contain $json$')
+tenancySql = tenancySql.replace('@@NEW_HOSPITAL_SETTINGS@@', newHospitalJson)
+if (tenancySql.includes('@@NEW_HOSPITAL_SETTINGS@@')) throw new Error('new hospital settings placeholder missing')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 

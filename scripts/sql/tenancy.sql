@@ -408,6 +408,11 @@ begin
     'booking', jsonb_build_object('showDemoOtp', false),
     'billing', jsonb_build_object('legalName', t.name, 'gstin', '', 'regNo', '', 'pan', '', 'upiId', '')))
   on conflict (tenant_id, key) do nothing;
+  -- default settings (phase 3): without this row nothing is ever queued for the hospital. SMS, WhatsApp and e-mail
+  -- start on Hospital Comrade messaging (included in the plan); the owner can switch any channel to their own account.
+  insert into public.app_settings (tenant_id, key, data)
+  values (p_tenant, 'app', $json$@@NEW_HOSPITAL_SETTINGS@@$json$::jsonb)
+  on conflict (tenant_id, key) do nothing;
 end $$;
 revoke all on function public.seed_hospital_defaults(uuid) from public, anon, authenticated;
 
@@ -462,3 +467,37 @@ begin
 end $$;
 revoke all on function public.submit_platform_lead(text, text, text, text, text, text, text, text) from public;
 grant execute on function public.submit_platform_lead(text, text, text, text, text, text, text, text) to anon, authenticated;
+
+-- ------------------------------------------------------------------ Hospital Comrade messaging (phase 3)
+-- Platform-wide settings, no tenant_id. 'messaging' = approved template / DLT IDs for the shared accounts:
+--   { "templates": { "<event>": { "waTemplate": "…", "waParams": "name,date", "smsTemplateId": "…" } } }
+-- (the shared accounts' credentials are Edge Function secrets — PLATFORM_* — never stored here).
+-- Only Hospital Comrade admins read or change it; the notify function reads it with the service role.
+create table if not exists public.platform_settings (
+  key         text primary key,
+  data        jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now(),
+  updated_by  uuid
+);
+alter table public.platform_settings enable row level security;
+revoke all on public.platform_settings from anon, authenticated;
+grant select, insert, update on public.platform_settings to authenticated;
+grant all on public.platform_settings to service_role;
+drop policy if exists platform_settings_admin on public.platform_settings;
+create policy platform_settings_admin on public.platform_settings for all to authenticated
+  using (public.provider_role() = 'admin') with check (public.provider_role() = 'admin');
+insert into public.platform_settings (key, data) values ('messaging', '{"templates": {}}'::jsonb) on conflict (key) do nothing;
+
+-- the notify function adds each batch's outcome (service role only)
+create or replace function public.record_message_usage(p_tenant uuid, p_channel text, p_source text, p_sent int, p_failed int)
+returns void language plpgsql volatile security definer set search_path = public as $$
+begin
+  if coalesce(p_sent, 0) = 0 and coalesce(p_failed, 0) = 0 then return; end if;
+  insert into public.message_usage (tenant_id, month, channel, source, sent, failed)
+  values (p_tenant, date_trunc('month', now() at time zone 'Asia/Kolkata')::date, p_channel, coalesce(p_source, 'own'),
+          greatest(coalesce(p_sent, 0), 0), greatest(coalesce(p_failed, 0), 0))
+  on conflict (tenant_id, month, channel, source) do update
+    set sent = public.message_usage.sent + excluded.sent, failed = public.message_usage.failed + excluded.failed, updated_at = now();
+end $$;
+revoke all on function public.record_message_usage(uuid, text, text, int, int) from public, anon, authenticated;
+grant execute on function public.record_message_usage(uuid, text, text, int, int) to service_role;

@@ -78,6 +78,33 @@ alter table public.notification_outbox add column if not exists profile_id uuid;
 alter table public.notification_outbox add column if not exists template_id uuid;
 create index if not exists notification_outbox_usage_idx on public.notification_outbox (created_at, channel);
 grant select (profile_id, template_id) on public.notification_outbox to authenticated;
+-- phase 3: which account delivered it — the hospital's own, or Hospital Comrade's shared one (null = own, older rows)
+alter table public.notification_outbox add column if not exists source text;
+alter table public.notification_outbox drop constraint if exists notification_outbox_source_check;
+alter table public.notification_outbox add constraint notification_outbox_source_check check (source is null or source in ('own', 'platform'));
+grant select (source) on public.notification_outbox to authenticated;
+
+-- ------------------------------------------------------------------ message usage (phase 3)
+-- Delivered / failed messages per hospital, calendar month (India time), channel and account. Written only by the
+-- notify Edge Function (record_message_usage, service role); kept even after the outbox is cleaned up, so it is the
+-- basis for the platform message allowance now and the prepaid wallet later. The owner and accountant can read it.
+create table if not exists public.message_usage (
+  tenant_id   uuid not null default public.current_tenant() references public.tenants (id) on delete cascade,
+  month       date not null,
+  channel     text not null check (channel in ('sms', 'whatsapp', 'email', 'push')),
+  source      text not null default 'own' check (source in ('own', 'platform')),
+  sent        int not null default 0,
+  failed      int not null default 0,
+  updated_at  timestamptz not null default now(),
+  primary key (tenant_id, month, channel, source)
+);
+alter table public.message_usage enable row level security;
+revoke all on public.message_usage from anon, authenticated;
+grant select on public.message_usage to authenticated;
+grant all on public.message_usage to service_role;
+drop policy if exists message_usage_read on public.message_usage;
+create policy message_usage_read on public.message_usage for select to authenticated
+  using (public.has_role('owner') or public.has_role('accountant'));
 
 -- ------------------------------------------------------------------ push devices (FCM registration tokens)
 create table if not exists public.push_tokens (

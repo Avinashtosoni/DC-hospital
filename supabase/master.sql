@@ -679,6 +679,9 @@ alter table public.tenant_domains add column if not exists dns_target   text;   
 alter table public.tenant_domains add column if not exists verification jsonb;         -- TXT / HTTP ownership + certificate validation records
 alter table public.tenant_domains add column if not exists last_error   text;
 alter table public.tenant_domains add column if not exists checked_at   timestamptz;
+-- phase 3 — the hospital on Hospital Comrade's shared messaging accounts (set by a Hospital Comrade admin):
+--   { "smsSenderId": "CITYCL", "templates": { "<event>": { "smsTemplateId": "…" } }, "limits": { "sms": 1000, "whatsapp": 1000, "email": null } }
+alter table public.tenants add column if not exists messaging jsonb not null default '{}'::jsonb;
 -- one primary (canonical) address per hospital
 create unique index if not exists tenant_domains_one_primary on public.tenant_domains (tenant_id) where is_primary;
 
@@ -6040,6 +6043,33 @@ alter table public.notification_outbox add column if not exists profile_id uuid;
 alter table public.notification_outbox add column if not exists template_id uuid;
 create index if not exists notification_outbox_usage_idx on public.notification_outbox (created_at, channel);
 grant select (profile_id, template_id) on public.notification_outbox to authenticated;
+-- phase 3: which account delivered it — the hospital's own, or Hospital Comrade's shared one (null = own, older rows)
+alter table public.notification_outbox add column if not exists source text;
+alter table public.notification_outbox drop constraint if exists notification_outbox_source_check;
+alter table public.notification_outbox add constraint notification_outbox_source_check check (source is null or source in ('own', 'platform'));
+grant select (source) on public.notification_outbox to authenticated;
+
+-- ------------------------------------------------------------------ message usage (phase 3)
+-- Delivered / failed messages per hospital, calendar month (India time), channel and account. Written only by the
+-- notify Edge Function (record_message_usage, service role); kept even after the outbox is cleaned up, so it is the
+-- basis for the platform message allowance now and the prepaid wallet later. The owner and accountant can read it.
+create table if not exists public.message_usage (
+  tenant_id   uuid not null default public.current_tenant() references public.tenants (id) on delete cascade,
+  month       date not null,
+  channel     text not null check (channel in ('sms', 'whatsapp', 'email', 'push')),
+  source      text not null default 'own' check (source in ('own', 'platform')),
+  sent        int not null default 0,
+  failed      int not null default 0,
+  updated_at  timestamptz not null default now(),
+  primary key (tenant_id, month, channel, source)
+);
+alter table public.message_usage enable row level security;
+revoke all on public.message_usage from anon, authenticated;
+grant select on public.message_usage to authenticated;
+grant all on public.message_usage to service_role;
+drop policy if exists message_usage_read on public.message_usage;
+create policy message_usage_read on public.message_usage for select to authenticated
+  using (public.has_role('owner') or public.has_role('accountant'));
 
 -- ------------------------------------------------------------------ push devices (FCM registration tokens)
 create table if not exists public.push_tokens (
@@ -7108,6 +7138,11 @@ begin
     'booking', jsonb_build_object('showDemoOtp', false),
     'billing', jsonb_build_object('legalName', t.name, 'gstin', '', 'regNo', '', 'pan', '', 'upiId', '')))
   on conflict (tenant_id, key) do nothing;
+  -- default settings (phase 3): without this row nothing is ever queued for the hospital. SMS, WhatsApp and e-mail
+  -- start on Hospital Comrade messaging (included in the plan); the owner can switch any channel to their own account.
+  insert into public.app_settings (tenant_id, key, data)
+  values (p_tenant, 'app', $json${"appearance":{"theme":"periwinkle","customColor":"#5c5c99","sidebar":"dark","size":"default","radius":"default"},"dashboard":{"hidden":[],"showGreeting":true},"modules":{"hidden":[]},"announcement":{"enabled":false,"text":"","tone":"info","audience":"staff","link":""},"locale":{"dateFormat":"dd MMM yyyy","timeFormat":"12h","weekStartsOn":1},"security":{"idleTimeoutMinutes":0},"notifications":{"email":{"enabled":true,"source":"platform","provider":"resend","fromName":"DC Hospital","fromEmail":"","replyTo":"","smtpHost":"","smtpPort":465,"smtpSecure":true,"smtpUser":""},"sms":{"enabled":true,"source":"platform","provider":"msg91","senderId":"","dltEntityId":"","twilioAccountSid":"","twilioFrom":"","webhookUrl":""},"whatsapp":{"enabled":true,"source":"platform","provider":"openwa","phoneNumberId":"","businessAccountId":"","language":"en","twilioAccountSid":"","twilioFrom":"","webhookUrl":"","openwaUrl":"","openwaSession":"","chatIdFormat":"91{phone}@c.us","msg91Number":"","msg91Namespace":"","aisensyTestCampaign":"","botEnabled":false},"push":{"enabled":false,"apiKey":"","authDomain":"","projectId":"","messagingSenderId":"","appId":"","vapidKey":""},"rates":{"sms":0.25,"whatsapp":0.8,"email":0.05,"push":0},"events":{"otp":{"sms":true,"whatsapp":true},"password_otp":{"sms":true,"whatsapp":true},"appointment_booked":{"sms":true,"whatsapp":true,"email":true},"appointment_reminder":{"sms":true,"whatsapp":true,"email":false},"appointment_rescheduled":{"sms":true,"whatsapp":true,"email":true},"appointment_cancelled":{"sms":true,"whatsapp":false,"email":true},"invoice_created":{"sms":false,"whatsapp":false,"email":true},"payment_received":{"sms":false,"whatsapp":false,"email":true},"lab_report_ready":{"sms":true,"whatsapp":true,"email":false},"feedback_request":{"sms":true,"whatsapp":true,"email":true},"staff_invite":{"sms":false,"whatsapp":true,"email":true},"account_created":{"sms":false,"whatsapp":true,"email":true,"push":false},"account_updated":{"sms":false,"whatsapp":false,"email":true,"push":true},"account_deleted":{"sms":false,"whatsapp":false,"email":true},"password_changed":{"sms":true,"whatsapp":false,"email":true,"push":true},"notice_published":{"sms":false,"whatsapp":false,"email":false,"push":true}},"templates":{"otp":{"text":"{code} is your {hospital} booking code. It is valid for 10 minutes. Do not share it with anyone.","subject":"Your booking code","waTemplate":"","waParams":"code","smsTemplateId":"","waText":"🔐 *{code}* is your {hospital} verification code.\n\nIt is valid for 10 minutes. Do not share it with anyone — our staff will never ask for it."},"password_otp":{"text":"{code} is your {hospital} password reset code. It is valid for 10 minutes. If you did not ask for it, ignore this message.","subject":"Your password reset code","waTemplate":"","waParams":"code","smsTemplateId":"","waText":"🔑 *{code}* is your {hospital} password reset code.\n\nIt is valid for 10 minutes. Didn't ask for it? Ignore this message — your password stays the same."},"appointment_booked":{"text":"Hi {name}, your appointment with {doctor} is confirmed for {date} at {time}. Ref {ref}. Please arrive 15 min early. {hospital} {hospital_phone}","subject":"Appointment confirmed — {date} at {time}","waTemplate":"","waParams":"name,doctor,date,time,ref","smsTemplateId":"","waText":"✅ *Appointment confirmed*\n\nHi {name},\n🩺 {doctor}\n🗓 {date} at {time}\n🔖 Ref: *{ref}*\n\nPlease arrive 15 minutes early with a photo ID. Pay at the reception.\n📍 {address}\n📞 {hospital_phone}\n\n— {hospital}"},"appointment_reminder":{"text":"Reminder: {name}, you have an appointment with {doctor} tomorrow, {date} at {time}. Ref {ref}. {hospital} {hospital_phone}","subject":"Reminder: your appointment tomorrow at {time}","waTemplate":"","waParams":"name,doctor,date,time","smsTemplateId":"","waText":"⏰ *Reminder*\n\nHi {name}, you have an appointment *tomorrow*.\n🩺 {doctor}\n🗓 {date} at {time}\n🔖 Ref: {ref}\n\nNeed to change it? Call {hospital_phone}.\n— {hospital}"},"appointment_rescheduled":{"text":"Hi {name}, your appointment with {doctor} has been moved to {date} at {time}. Ref {ref}. Call {hospital_phone} if this does not suit you. {hospital}","subject":"Your appointment has been rescheduled","waTemplate":"","waParams":"name,doctor,date,time","smsTemplateId":"","waText":"🔁 *Appointment rescheduled*\n\nHi {name}, your visit with {doctor} is now on\n🗓 *{date} at {time}*\n🔖 Ref: {ref}\n\nCall {hospital_phone} if this does not suit you.\n— {hospital}"},"appointment_cancelled":{"text":"Hi {name}, your appointment with {doctor} on {date} at {time} has been cancelled. Call {hospital_phone} to rebook. {hospital}","subject":"Your appointment was cancelled","waTemplate":"","waParams":"name,doctor,date,time","smsTemplateId":"","waText":"❌ *Appointment cancelled*\n\nHi {name}, your visit with {doctor} on {date} at {time} has been cancelled.\n\nTo book again, call {hospital_phone} or reply *1* here.\n— {hospital}"},"invoice_created":{"text":"Hi {name}, invoice {invoice} for {amount} has been generated at {hospital}. Due {due_date}.","subject":"Invoice {invoice} from {hospital}","waTemplate":"","waParams":"name,invoice,amount","smsTemplateId":"","waText":""},"payment_received":{"text":"Thank you {name}. We received {amount} by {method} against invoice {invoice}. {hospital}","subject":"Payment received — {amount}","waTemplate":"","waParams":"name,amount,invoice","smsTemplateId":"","waText":""},"lab_report_ready":{"text":"Hi {name}, your {test} report is ready. View it in the patient portal or collect it from the lab. {hospital} {hospital_phone}","subject":"Your {test} report is ready","waTemplate":"","waParams":"name,test","smsTemplateId":"","waText":""},"feedback_request":{"text":"Hi {name}, thank you for visiting {doctor} at {hospital}. How was your experience? Rate us in 10 seconds: {link}","subject":"How was your visit to {hospital}?","waTemplate":"","waParams":"name,doctor,link","smsTemplateId":"","waText":""},"staff_invite":{"text":"Hi {name}, you are invited to join {hospital} as {role}. Create your account here: {link} (valid 14 days)","subject":"You are invited to join {hospital}","waTemplate":"","waParams":"name,role,link","smsTemplateId":"","waText":""},"account_created":{"text":"Welcome to {hospital}, {name}! Your {role} account is ready. Sign in at {link} with {email}.","subject":"Welcome to {hospital}","waTemplate":"","waParams":"name,role,link","smsTemplateId":"","waText":"👋 *Welcome to {hospital}*\n\nHi {name}, your *{role}* account is ready.\nSign in: {link}\nE-mail: {email}","pushText":"Your {role} account is ready. Welcome aboard!"},"account_updated":{"text":"Hi {name}, your {hospital} account was updated ({changes}). If this was not you, call {hospital_phone}.","subject":"Your {hospital} account was updated","waTemplate":"","waParams":"name,changes","smsTemplateId":"","waText":"","pushText":"Your account was updated: {changes}"},"account_deleted":{"text":"Hi {name}, your {hospital} sign-in ({email}) has been removed. Your medical records are kept safely. Questions? Call {hospital_phone}.","subject":"Your {hospital} account was removed","waTemplate":"","waParams":"name,email","smsTemplateId":"","waText":""},"password_changed":{"text":"Hi {name}, your {hospital} password was changed on {time}. Not you? Reset it now: {link} or call {hospital_phone}.","subject":"Your password was changed","waTemplate":"","waParams":"name,time,link","smsTemplateId":"","waText":"","pushText":"Your password was changed on {time}. Not you? Reset it right away."},"notice_published":{"text":"{hospital} notice: {title}. {notice} — {link}","subject":"📌 {title}","waTemplate":"","waParams":"title,notice","smsTemplateId":"","waText":"📌 *{title}*\n\n{notice}\n\nRead on the notice board: {link}\n— {hospital}","pushText":"{notice}"}}}}$json$::jsonb)
+  on conflict (tenant_id, key) do nothing;
 end $$;
 revoke all on function public.seed_hospital_defaults(uuid) from public, anon, authenticated;
 
@@ -7162,6 +7197,40 @@ begin
 end $$;
 revoke all on function public.submit_platform_lead(text, text, text, text, text, text, text, text) from public;
 grant execute on function public.submit_platform_lead(text, text, text, text, text, text, text, text) to anon, authenticated;
+
+-- ------------------------------------------------------------------ Hospital Comrade messaging (phase 3)
+-- Platform-wide settings, no tenant_id. 'messaging' = approved template / DLT IDs for the shared accounts:
+--   { "templates": { "<event>": { "waTemplate": "…", "waParams": "name,date", "smsTemplateId": "…" } } }
+-- (the shared accounts' credentials are Edge Function secrets — PLATFORM_* — never stored here).
+-- Only Hospital Comrade admins read or change it; the notify function reads it with the service role.
+create table if not exists public.platform_settings (
+  key         text primary key,
+  data        jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now(),
+  updated_by  uuid
+);
+alter table public.platform_settings enable row level security;
+revoke all on public.platform_settings from anon, authenticated;
+grant select, insert, update on public.platform_settings to authenticated;
+grant all on public.platform_settings to service_role;
+drop policy if exists platform_settings_admin on public.platform_settings;
+create policy platform_settings_admin on public.platform_settings for all to authenticated
+  using (public.provider_role() = 'admin') with check (public.provider_role() = 'admin');
+insert into public.platform_settings (key, data) values ('messaging', '{"templates": {}}'::jsonb) on conflict (key) do nothing;
+
+-- the notify function adds each batch's outcome (service role only)
+create or replace function public.record_message_usage(p_tenant uuid, p_channel text, p_source text, p_sent int, p_failed int)
+returns void language plpgsql volatile security definer set search_path = public as $$
+begin
+  if coalesce(p_sent, 0) = 0 and coalesce(p_failed, 0) = 0 then return; end if;
+  insert into public.message_usage (tenant_id, month, channel, source, sent, failed)
+  values (p_tenant, date_trunc('month', now() at time zone 'Asia/Kolkata')::date, p_channel, coalesce(p_source, 'own'),
+          greatest(coalesce(p_sent, 0), 0), greatest(coalesce(p_failed, 0), 0))
+  on conflict (tenant_id, month, channel, source) do update
+    set sent = public.message_usage.sent + excluded.sent, failed = public.message_usage.failed + excluded.failed, updated_at = now();
+end $$;
+revoke all on function public.record_message_usage(uuid, text, text, int, int) from public, anon, authenticated;
+grant execute on function public.record_message_usage(uuid, text, text, int, int) to service_role;
 
 commit;
 

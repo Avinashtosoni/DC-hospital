@@ -42,6 +42,9 @@ alter table public.tenant_domains add column if not exists dns_target   text;   
 alter table public.tenant_domains add column if not exists verification jsonb;         -- TXT / HTTP ownership + certificate validation records
 alter table public.tenant_domains add column if not exists last_error   text;
 alter table public.tenant_domains add column if not exists checked_at   timestamptz;
+-- phase 3 — the hospital on Hospital Comrade's shared messaging accounts (set by a Hospital Comrade admin):
+--   { "smsSenderId": "CITYCL", "templates": { "<event>": { "smsTemplateId": "…" } }, "limits": { "sms": 1000, "whatsapp": 1000, "email": null } }
+alter table public.tenants add column if not exists messaging jsonb not null default '{}'::jsonb;
 -- one primary (canonical) address per hospital
 create unique index if not exists tenant_domains_one_primary on public.tenant_domains (tenant_id) where is_primary;
 
