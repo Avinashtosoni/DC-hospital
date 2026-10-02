@@ -161,8 +161,37 @@ settings and sender identity. The Hospital Comrade team works through **provider
   new-hospital defaults), 12 Edge Function tests (shared account with the hospital's sender ID, metering, allowance,
   missing account), browser: owner switches a channel, admin card.
 
+### Phase 4 — licence, wallet & Razorpay ✅
+- [x] **4.1 Licence** — `tenants.trial_ends_at` / `paid_until` → `tenant_license()`: **trial → active → grace (7 days,
+  everything works, banner) → read_only**; `suspended` stays manual; the primary hospital is always active; a hospital
+  with neither date keeps its hand-set status. Computed live (no cron) and returned by `resolve_tenant` / `my_context`
+  (+ dates; wallet only for owner / accountant). **Read-only is enforced in the database** by `license_guard()` on every
+  hospital table — also inside SECURITY DEFINER RPCs such as online booking (it checks the caller's `role`, not
+  `current_user`). Still allowed: reading, sign-in, password reset, devices, logs, billing, the platform team
+  (admin / finance), Edge Functions (service role). The WhatsApp bot goes quiet. `add-hospital.sql` starts a 14-day trial.
+- [x] **4.2 Wallet** — prepaid ₹ balance (`tenants.wallet_paise`, hidden from visitors / staff by column grants) +
+  `wallet_ledger` (top-up / usage / refund / adjustment, one usage row per day and channel). `record_message_usage`
+  charges platform messages beyond the plan's included ones (`plans.ts` → `platform_settings('billing')`, per-hospital
+  overrides in `tenants.billing`); `notify` stops non-OTP platform messages when the balance can't pay (OTPs may go
+  negative). Prices, GST 18 %, trial / grace days, yearly = 10 months, rates (SMS 30 p, WhatsApp 40 p, e-mail 2 p):
+  `src/platform/billing.ts` → `platform_settings('billing')` (database copy wins once installed).
+- [x] **4.3 Razorpay** — `billing` Edge Function: `order` (price from `billing_quote()`, never the browser) →
+  Standard Checkout → `verify` (HMAC of `order_id|payment_id`) → `apply_payment()`; signed webhook as backup.
+  `billing_payments` + idempotent `apply_payment()`: plan renewals extend `paid_until` (after the trial / current
+  period), top-ups credit the wallet (before GST); GST invoice numbers `HC/2026-27/000001`.
+- [x] **4.4 App** — licence banner on every staff page (trial days, renewal due, grace, read-only; patients don't see
+  it); Settings → **Plan & wallet** (owner; platform team incl. finance): plan + pay 1 / 12 months, wallet + this
+  month's usage + top-up, invoice name / GSTIN, payments + wallet history, team tools (manual payment, wallet
+  adjustment; admin: extend trial, custom price, suspend / resume). Read-only errors read as plain sentences (staff)
+  or "online requests are paused" (visitors). Demo simulates payments (no money) and can jump to grace / read-only.
+- [x] **4.5 Verified** — 232 unit / SQL tests (status transitions, guard incl. definer RPCs, charging, quotes,
+  idempotent payments, RLS, column grants, provider tools), 16 Edge Function tests (order / verify / webhook with
+  Razorpay mocked, wallet stop), browser: owner pays + tops up, admin → read-only banner.
+- Defaults to confirm: 14-day trial, 7-day grace, yearly = 10 months, rates above, included messages in `plans.ts`.
+  Proper PDF invoices and the owner's full billing page are phase 6.
+
 ### Later phases
-4 Wallet / Razorpay / license · 5 Provider panel · 6 Owner billing page · 7 Ops & compliance · 8 Launch
+5 Provider panel · 6 Owner billing page · 7 Ops & compliance · 8 Launch
 
 ## Going multi-hospital (runbook)
 
@@ -237,3 +266,14 @@ names the hospital — and the DLT template IDs; per hospital set an optional ow
 monthly allowances. India DLT: templates are registered under the platform's principal entity with a `{#var#}` for
 the hospital name. Template-only providers (AiSensy, Meta, MSG91, DLT SMS) can't send a hospital's *custom messages*
 unless a matching shared template exists; WA CRM / OpenWA sends each hospital's own wording.
+
+### Billing (Razorpay) — once
+1. Razorpay Dashboard (Hospital Comrade's own account) → API keys. Webhooks → URL
+   `https://<project>.supabase.co/functions/v1/billing?webhook=razorpay`, events `payment.captured`, `payment.failed`,
+   `order.paid`, a secret of your choice.
+2. `supabase secrets set RAZORPAY_KEY_ID=rzp_live_… RAZORPAY_KEY_SECRET=… RAZORPAY_WEBHOOK_SECRET=… PLATFORM_NAME="Hospital Comrade"`
+3. `supabase functions deploy billing --no-verify-jwt` (the webhook carries no Supabase token; the function checks
+   the caller itself). Without the keys, Plan & wallet says online payment isn't switched on — record bank / UPI
+   payments with the team tools.
+4. Prices / GST / rates / trial and grace days / seller GSTIN: `update platform_settings set data = data || '{"graceDays": 10}' where key = 'billing'`.
+   One hospital: `tenants.billing` (`price`, `included`, `ratesPaise`) or the admin tools in Plan & wallet.
