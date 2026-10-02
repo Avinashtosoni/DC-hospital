@@ -3,7 +3,9 @@
  * hospital's settings are switched onto them (keeping its own wording and identity), and the monthly allowance.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { deliverRouted, overAllowance, platformAccounts, platformCtx, platformStatus, sourceOf, usageMonth } from '../../supabase/functions/_shared/platform'
+import { deliverRouted, overAllowance, platformAccounts, platformCtx, platformStatus, sourceOf, usageMonth, walletBlocked, walletOf } from '../../supabase/functions/_shared/platform'
+import { isPermanent } from '../../supabase/functions/_shared/providers'
+import { BILLING_DEFAULTS } from '../../src/platform/billing'
 import type { Ctx } from '../../supabase/functions/_shared/providers'
 
 const envOf = (vars: Record<string, string>) => (k: string) => vars[k]
@@ -102,5 +104,32 @@ describe('allowance + metering period', () => {
   test('the month is the Indian calendar month', () => {
     expect(usageMonth(Date.parse('2026-10-31T19:00:00Z'))).toBe('2026-11-01')   // 00:30 IST on 1 Nov
     expect(usageMonth(Date.parse('2026-10-31T18:00:00Z'))).toBe('2026-10-01')
+  })
+})
+
+describe('prepaid wallet (phase 4)', () => {
+  const t = { plan: 'clinic', is_primary: false, wallet_paise: 100, billing: { ratesPaise: { sms: 40 } } }
+  test('walletOf: plan allowance + hospital overrides; the primary hospital is never charged', () => {
+    expect(walletOf(t, BILLING_DEFAULTS)).toEqual({ balance: 100, included: { sms: 100, whatsapp: 300, email: 1000 }, rates: { sms: 40, whatsapp: 40, email: 2 } })
+    expect(walletOf({ ...t, is_primary: true }, BILLING_DEFAULTS)).toBeNull()
+  })
+  test('free within the allowance; beyond it the balance must cover one message; OTPs always go', () => {
+    const w = walletOf(t, BILLING_DEFAULTS)!
+    expect(walletBlocked({ event: 'invoice_created', channel: 'sms' }, 99, { ...w, balance: 0 })).toBeNull()
+    expect(walletBlocked({ event: 'invoice_created', channel: 'sms' }, 100, w)).toBeNull()                 // 100 ≥ 40
+    const msg = walletBlocked({ event: 'invoice_created', channel: 'sms' }, 100, { ...w, balance: 39 })
+    expect(msg).toMatch(/wallet balance is too low for more SMS/); expect(isPermanent(msg!)).toBe(true)
+    expect(walletBlocked({ event: 'otp', channel: 'sms' }, 100, { ...w, balance: -500 })).toBeNull()
+  })
+  test('deliverRouted spends the local balance so a batch stops when it runs out', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"type":"success","message":"r1"}', { status: 200 })))
+    const hospital = own({ sms: { enabled: true, source: 'platform' }, templates: {} })
+    const plat = platformCtx(hospital, envOf(FULL), { platform: { templates: { appointment_booked: { smsTemplateId: 'P' } } } })
+    const meter = { used: { sms: 100 }, wallet: { balance: 80, included: { sms: 100 }, rates: { sms: 40 } } }
+    const m = { event: 'appointment_booked', channel: 'sms' as const, recipient: '9876543210', body: 'Hi', vars: {} }
+    expect((await deliverRouted(m, hospital, plat, meter)).ok).toBe(true)
+    expect((await deliverRouted(m, hospital, plat, meter)).ok).toBe(true)
+    const third = await deliverRouted(m, hospital, plat, meter)
+    expect(third.ok).toBe(false); expect(meter.wallet.balance).toBe(0); expect(meter.used.sms).toBe(102)
   })
 })

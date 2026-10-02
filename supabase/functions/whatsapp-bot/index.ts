@@ -53,19 +53,22 @@ const tenantById = async (id: string) => ((await admin.from('tenants').select(TE
 interface Setup { tenant: TenantRow; ctx: Ctx; bot: boolean; site: any }
 /** one hospital's settings and credentials (the service role skips RLS → filter on tenant_id) */
 async function loadSetup(tenant: TenantRow): Promise<Setup> {
-  const [{ data: s }, { data: sec }, { data: site }] = await Promise.all([
+  const [{ data: s }, { data: sec }, { data: site }, { data: lic }] = await Promise.all([
     admin.from('app_settings').select('data').eq('tenant_id', tenant.id).eq('key', 'app').maybeSingle(),
     admin.from('app_secrets').select('key, value').eq('tenant_id', tenant.id),
     admin.from('site_content').select('data').eq('tenant_id', tenant.id).eq('key', 'settings').maybeSingle(),
+    // the licence right now (the status column is only as fresh as the last change)
+    admin.rpc('tenant_license', { p_tenant: tenant.id }).then((r) => r, () => ({ data: null })),
   ])
+  const status = typeof lic === 'string' ? lic : tenant.status
   const n = (s?.data as any)?.notifications ?? {}
   const siteData = (site?.data as any) ?? {}
   return {
     tenant,
     ctx: { n, secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])), hospital: siteData.name || tenant.name || 'DC Hospital' },
-    // a suspended hospital's bot stays quiet
+    // a suspended or read-only (plan ended) hospital's bot stays quiet — it would book appointments
     // the chatbot answers on the hospital's own number — never on Hospital Comrade's shared WhatsApp account
-    bot: !!n.whatsapp?.botEnabled && n.whatsapp?.source !== 'platform' && tenant.status !== 'suspended',
+    bot: !!n.whatsapp?.botEnabled && n.whatsapp?.source !== 'platform' && status !== 'suspended' && status !== 'read_only',
     site: siteData,
   }
 }

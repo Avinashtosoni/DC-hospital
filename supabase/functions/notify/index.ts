@@ -25,7 +25,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
-import { deliverRouted, platformCtx, platformDetails, platformStatus, sourceOf, usageMonth, type Meter, type Source } from '../_shared/platform.ts'
+import { deliverRouted, platformCtx, platformDetails, platformStatus, sourceOf, usageMonth, walletOf, type Meter, type Source } from '../_shared/platform.ts'
 import { corsHeaders, groupByTenant, resolveCaller, type Caller } from '../_shared/tenant.ts'
 
 const cors = corsHeaders()
@@ -49,8 +49,8 @@ async function loadCtx(tenant: string, events: string[] = []): Promise<Setup> {
     admin.from('app_secrets').select('key, value').eq('tenant_id', tenant),
     admin.from('site_content').select('data').eq('tenant_id', tenant).eq('key', 'settings').maybeSingle(),
     tplIds.length ? admin.from('notification_templates').select('id, wa_template, wa_params, sms_template_id').eq('tenant_id', tenant).in('id', tplIds) : Promise.resolve({ data: [] as any[] }),
-    admin.from('tenants').select('name, messaging').eq('id', tenant).maybeSingle(),
-    admin.from('platform_settings').select('data').eq('key', 'messaging').maybeSingle(),
+    admin.from('tenants').select('name, messaging, plan, billing, wallet_paise, is_primary').eq('id', tenant).maybeSingle(),
+    admin.from('platform_settings').select('key, data').in('key', ['messaging', 'billing']),
     admin.from('message_usage').select('channel, sent').eq('tenant_id', tenant).eq('month', usageMonth()).eq('source', 'platform'),
   ])
   const n = (s?.data as any)?.notifications ?? {}
@@ -73,10 +73,11 @@ async function loadCtx(tenant: string, events: string[] = []): Promise<Setup> {
     },
   }
   const tm = ((t as any)?.messaging ?? {}) as Meter['tenant']
+  const pset = Object.fromEntries(((plat ?? []) as any[]).map((r) => [r.key, r.data])) as { messaging?: any; billing?: any }
   return {
     own,
-    platform: platformCtx(own, (k) => Deno.env.get(k), { platform: (plat?.data as any) ?? null, tenant: tm, replyTo: String((site?.data as any)?.email ?? '') }),
-    meter: { tenant: tm, used: Object.fromEntries(((usage ?? []) as any[]).map((r) => [r.channel, Number(r.sent) || 0])) },
+    platform: platformCtx(own, (k) => Deno.env.get(k), { platform: pset.messaging ?? null, tenant: tm, replyTo: String((site?.data as any)?.email ?? '') }),
+    meter: { tenant: tm, wallet: walletOf(t, pset.billing), used: Object.fromEntries(((usage ?? []) as any[]).map((r) => [r.channel, Number(r.sent) || 0])) },
   }
 }
 

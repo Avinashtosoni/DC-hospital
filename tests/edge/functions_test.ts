@@ -396,3 +396,29 @@ Deno.test('the monthly allowance stops platform messages (OTPs still go out); a 
     for (const k of ['PLATFORM_SMS_PROVIDER', 'PLATFORM_FAST2SMS_API_KEY']) Deno.env.delete(k)
   }
 })
+
+Deno.test('phase 4: beyond the included messages an empty wallet stops platform messages for good; OTPs still go', async () => {
+  reset()
+  Deno.env.set('PLATFORM_SMS_PROVIDER', 'fast2sms'); Deno.env.set('PLATFORM_FAST2SMS_API_KEY', 'platform-f2s')
+  const city = db.app_settings.find((r) => r.tenant_id === CITY)!
+  const before = structuredClone(city.data)
+  city.data.notifications.sms = { enabled: true, source: 'platform' }
+  const tenant = db.tenants.find((t) => t.id === CITY)!
+  Object.assign(tenant, { plan: 'clinic', wallet_paise: 0, billing: {} })
+  db.platform_settings.push({ key: 'billing', data: { plans: { clinic: { included: { sms: 100 } } }, ratesPaise: { sms: 30 } } })
+  const month = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 7) + '-01'
+  db.message_usage = [{ tenant_id: CITY, month, channel: 'sms', source: 'platform', sent: 100, failed: 0 }]
+  try {
+    db.notification_outbox = [outRow('w1', CITY, '9810000041'), { ...outRow('w2', CITY, '9810000042'), event: 'otp', vars: { code: '123456' } }]
+      .map((r) => ({ ...r, status: 'sending' }))
+    claimRows = db.notification_outbox.map((r) => ({ ...r }))
+    assertEquals(await (await post(notify, { flush: true }, SERVICE)).json(), { processed: 2, sent: 1, failed: 1 })
+    const byId = Object.fromEntries(db.notification_outbox.map((r) => [r.id, r]))
+    assertEquals(byId.w1.status, 'failed'); assert(/wallet balance is too low/.test(byId.w1.error))
+    assertEquals(byId.w2.status, 'sent')
+  } finally {
+    city.data = before; db.message_usage = []; db.platform_settings = db.platform_settings.filter((r) => r.key !== 'billing')
+    delete tenant.plan; delete tenant.wallet_paise; delete tenant.billing
+    for (const k of ['PLATFORM_SMS_PROVIDER', 'PLATFORM_FAST2SMS_API_KEY']) Deno.env.delete(k)
+  }
+})

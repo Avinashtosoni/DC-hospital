@@ -123,8 +123,32 @@ export function overAllowance(m: Pick<Msg, 'event' | 'channel'>, used: number, t
   return used >= Number(limit) ? `This month's Hospital Comrade ${m.channel === 'sms' ? 'SMS' : m.channel === 'whatsapp' ? 'WhatsApp' : 'e-mail'} allowance (${Number(limit).toLocaleString('en-IN')}) is used up — ask Hospital Comrade to raise it, or use your own account` : null
 }
 
+/**
+ * Prepaid wallet (phase 4): messages beyond the plan's included ones cost ratesPaise each. Debited by the database
+ * (record_message_usage); here only to stop sending when the balance can't pay — OTPs still go (may go negative).
+ */
+export interface Wallet { balance: number; included: Partial<Record<PlatformChannel, number>>; rates: Partial<Record<PlatformChannel, number>> }
+
+/** the wallet of a hospital row (tenants: plan, billing, wallet_paise, is_primary) — null = not charged (primary hospital) */
+export function walletOf(t: any, billing: any): Wallet | null {
+  if (!t || t.is_primary) return null
+  const plan = billing?.plans?.[t.plan] ?? {}
+  const num = (o: any) => Object.fromEntries(PLATFORM_CHANNELS.filter((c) => o?.[c] != null && Number.isFinite(Number(o[c]))).map((c) => [c, Number(o[c])]))
+  return { balance: Number(t.wallet_paise) || 0, included: { ...num(plan.included), ...num(t.billing?.included) }, rates: { ...num(billing?.ratesPaise), ...num(t.billing?.ratesPaise) } }
+}
+
+/** price of the next platform message on this channel, in paise (0 = still within the included messages) */
+export const nextCost = (w: Wallet, ch: PlatformChannel, used: number) => (used >= (w.included[ch] ?? 0) ? (w.rates[ch] ?? 0) : 0)
+
+/** null when the wallet can pay (or it is an OTP), otherwise the reason (matches isPermanent: "wallet") */
+export function walletBlocked(m: Pick<Msg, 'event' | 'channel'>, used: number, w?: Wallet | null): string | null {
+  if (!w || exemptFromLimit(m.event)) return null
+  const cost = nextCost(w, m.channel as PlatformChannel, used)
+  return cost > 0 && w.balance < cost ? `Hospital Comrade wallet balance is too low for more ${m.channel === 'sms' ? 'SMS' : m.channel === 'whatsapp' ? 'WhatsApp' : 'e-mail'} this month — the owner can top it up in Settings → Plan & billing` : null
+}
+
 /** Running count of this month's platform messages per channel, for one hospital (loaded once per batch). */
-export interface Meter { used: Partial<Record<PlatformChannel, number>>; tenant?: TenantMessaging | null }
+export interface Meter { used: Partial<Record<PlatformChannel, number>>; tenant?: TenantMessaging | null; wallet?: Wallet | null }
 
 /**
  * Deliver one message through the account its channel is set to: the hospital's own (`own`) or Hospital Comrade's
@@ -135,9 +159,12 @@ export async function deliverRouted(m: Msg, own: Ctx, platform: Ctx, meter?: Met
   if (source === 'own') return { ...(await deliver(m, own)), source }
   const ch = m.channel as PlatformChannel
   if (String(platform.n?.[ch]?.provider ?? '').endsWith('-missing') && (platform.n?.[ch]?.enabled || m.event === 'test')) return { ok: false, error: missingAccountError(ch), source }
-  const blocked = meter ? overAllowance(m, meter.used[ch] ?? 0, meter.tenant) : null
+  const blocked = meter ? overAllowance(m, meter.used[ch] ?? 0, meter.tenant) ?? walletBlocked(m, meter.used[ch] ?? 0, meter.wallet) : null
   if (blocked) return { ok: false, error: blocked, source }
   const r = await deliver(m, platform)
-  if (r.ok && meter) meter.used[ch] = (meter.used[ch] ?? 0) + 1
+  if (r.ok && meter) {
+    if (meter.wallet) meter.wallet.balance -= nextCost(meter.wallet, ch, meter.used[ch] ?? 0)
+    meter.used[ch] = (meter.used[ch] ?? 0) + 1
+  }
   return { ...r, source }
 }
