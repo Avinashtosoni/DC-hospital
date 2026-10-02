@@ -238,8 +238,13 @@ licence banner now lead here (old `?tab=plan` links redirect).
 - Existing installs: apply `supabase/upgrade-2026-10.sql`, then **switch automatic delivery off and on once**
   (Settings → Notifications) so the new cron job is scheduled; the hospital's e-mail channel must be on for reminders.
 
+### Phase 7 — ops & compliance ✅
+Privacy rights for patients (copy of data, health-tips consent, correction / erasure answered on `/privacy-requests`),
+full data export ZIP for owners (never locked), close → notice period → purge with password re-confirmation,
+incident register (72-hour Board clock), system health and nightly retention. Runbook: [OPERATIONS.md](OPERATIONS.md).
+
 ### Later phases
-7 Ops & compliance · 8 Launch
+8 Launch
 
 ## Going multi-hospital (runbook)
 

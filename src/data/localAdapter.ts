@@ -581,7 +581,7 @@ export function localErasePatient(patientId: string, reason: string) {
   const profileId = p.profile_id
   const anon = p as unknown as Record<string, unknown>
   Object.assign(anon, { full_name: `Erased patient ${p.mrn}`, phone: null, email: null, address: null, emergency_contact_name: null, emergency_contact_phone: null,
-    insurance_provider: null, allergies: null, profile_id: null, marketing_opt_out: true, erased_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    insurance_provider: null, profile_id: null, marketing_opt_out: true, erased_at: new Date().toISOString(), updated_at: new Date().toISOString() })
   if (phone10) s.site_enquiries = s.site_enquiries.filter((e) => (e.phone ?? '').replace(/\D/g, '').slice(-10) !== phone10)
   for (const f of s.visit_feedback) if (f.patient_id === patientId) (f as { comment?: string | null }).comment = null
   for (const a of s.audit_log) if (a.record_id === patientId || (profileId && a.record_id === profileId)) {

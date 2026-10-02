@@ -48,7 +48,8 @@ export function relDays(v?: string | null) {
 }
 
 /** the licence line under a hospital's name */
-export function licenseLine(l: { status: string; trial_ends_at: string | null; paid_until: string | null; read_only_from: string | null }) {
+export function licenseLine(l: { status: string; trial_ends_at: string | null; paid_until: string | null; read_only_from: string | null; closing_at?: string | null; purge_after?: string | null }) {
+  if (l.closing_at) return `Closing since ${date(l.closing_at)} · data deleted after ${date(l.purge_after)}`
   if (l.status === 'trial') return `Trial ends ${date(l.trial_ends_at)} (${relDays(l.trial_ends_at)})`
   if (l.status === 'active') return l.paid_until ? `Paid until ${date(l.paid_until)}` : 'Always active'
   if (l.status === 'grace') return `Read-only from ${date(l.read_only_from)} (${relDays(l.read_only_from)})`

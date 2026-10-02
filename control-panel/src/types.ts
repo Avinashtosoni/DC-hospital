@@ -30,6 +30,10 @@ export interface CpHospital {
   owner_email: string | null
   /** platform messages this month */
   messages: number
+  /** phase 7: closed by the platform — read-only now, deletable after purge_after */
+  closing_at?: string | null
+  purge_after?: string | null
+  close_reason?: string | null
 }
 
 export interface CpDomain { domain: string; is_primary: boolean; method?: string | null; status?: string | null; ssl_status?: string | null; verified_at?: string | null }
@@ -111,3 +115,65 @@ export interface NewHospital {
 export interface HospitalEdit { name?: string; code?: string; notes?: string; modules?: ModuleMap; owner_email?: string }
 export interface MemberSave { email: string; role: ProviderRole; active: boolean; hospitals: string[] }
 export type BillingAction = 'manual_payment' | 'wallet_adjust' | 'extend_trial' | 'set_plan' | 'suspend' | 'resume'
+
+// ------------------------------------------------------------------ phase 7: health, incidents, retention
+export interface CpHealth {
+  at: string
+  extensions: { pg_cron: boolean; pg_net: boolean }
+  jobs: { name: string; schedule: string; active: boolean; last_run: string | null; last_status: string | null; last_message: string | null }[]
+  /** last 24 hours, per hospital */
+  messages: { id: string; name: string; sent: number; failed: number; waiting: number; stuck: number }[]
+  recent_failures: { at: string; hospital: string; event: string; channel: string; error: string | null }[]
+  payments: { abandoned_7d: number; failed_7d: number; paid_7d: number }
+  database: { size_bytes: number | null; largest_tables: { table: string; bytes: number }[] }
+  hospitals: { id: string; name: string; closing_at: string | null; purge_after: string | null; patients: number; appointments: number; invoices: number; audit_log: number }[]
+  retention: { at: string; deleted: Record<string, number> } | null
+  privacy_open: number
+  privacy_overdue: number
+  incidents_open: number
+}
+
+export type Severity = 'low' | 'medium' | 'high' | 'critical'
+export type IncidentStatus = 'open' | 'contained' | 'resolved'
+export interface CpIncident {
+  id: string
+  created_at: string
+  updated_at: string
+  detected_at: string
+  title: string
+  description: string | null
+  severity: Severity
+  status: IncidentStatus
+  personal_data: boolean
+  affected_tenants: string[]
+  affected_people: number | null
+  board_reported_at: string | null
+  hospitals_notified_at: string | null
+  resolved_at: string | null
+  timeline: { at: string; by: string | null; note: string }[]
+  created_by_name: string | null
+  /** detected_at + 72 hours (DPDP Rules: report to the Data Protection Board) */
+  deadline: string
+  hospitals: { id: string; name: string; slug: string }[]
+}
+export interface IncidentSave {
+  id?: string
+  title?: string
+  description?: string | null
+  severity?: Severity
+  status?: IncidentStatus
+  personal_data?: boolean
+  affected_tenants?: string[]
+  affected_people?: number | null
+  detected_at?: string
+  note?: string
+  board_reported?: boolean
+}
+export interface IncidentNotice { id: string; name: string; owner_email: string | null; queued: number }
+
+export const RETENTION_KEYS = ['auditDays', 'providerAuditDays', 'outboxDays', 'otpDays', 'enquiryDays', 'leadDays', 'privacyDays', 'waSessionDays'] as const
+export type RetentionKey = (typeof RETENTION_KEYS)[number]
+export type RetentionConfig = Partial<Record<RetentionKey, number>> & { last_run?: { at: string; deleted: Record<string, number> } }
+/** same minimums as cp_save_retention() */
+export const RETENTION_MIN: Record<RetentionKey, number> = { auditDays: 365, providerAuditDays: 365, outboxDays: 30, otpDays: 1, enquiryDays: 30, leadDays: 30, privacyDays: 365, waSessionDays: 1 }
+export const RETENTION_DEFAULTS: Record<RetentionKey, number> = { auditDays: 1095, providerAuditDays: 1095, outboxDays: 400, otpDays: 7, enquiryDays: 1095, leadDays: 1095, privacyDays: 1095, waSessionDays: 30 }

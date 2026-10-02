@@ -6,7 +6,7 @@ import { supabase } from '../../src/lib/supabase'
 import { demoCp } from './demo'
 import type {
   BillingAction, BillingConfig, CpAudit, CpHospital, CpHospitalDetail, CpLead, CpMe, CpMember, CpOverview, CpPayment,
-  HospitalEdit, LeadStatus, MemberSave, NewHospital,
+  HospitalEdit, LeadStatus, MemberSave, NewHospital, CpHealth, CpIncident, IncidentSave, IncidentNotice, RetentionConfig,
 } from './types'
 
 export interface CpApi {
@@ -27,6 +27,20 @@ export interface CpApi {
   audit(tenantId?: string): Promise<CpAudit[]>
   settings(): Promise<{ billing: BillingConfig }>
   saveBillingSettings(patch: Partial<BillingConfig>): Promise<BillingConfig>
+  // phase 7 — offboarding, health, incidents, retention
+  closeHospital(id: string, reason: string, days: number): Promise<unknown>
+  reopenHospital(id: string): Promise<unknown>
+  /** re-checks the signed-in admin's password first (the database wants a sign-in from the last 10 minutes) */
+  purgeHospital(id: string, confirmSlug: string, password: string): Promise<{ purged: string; counts: Record<string, number> }>
+  /** demo only: let the notice period run out so a purge can be tried */
+  demoEndNotice?(id: string): Promise<void>
+  health(): Promise<CpHealth>
+  incidents(): Promise<CpIncident[]>
+  saveIncident(p: IncidentSave): Promise<CpIncident>
+  notifyIncident(id: string, message: string): Promise<IncidentNotice[]>
+  retention(): Promise<RetentionConfig>
+  saveRetention(p: Partial<RetentionConfig>): Promise<RetentionConfig>
+  runRetention(): Promise<Record<string, number>>
 }
 
 /** Postgres / PostgREST error → a sentence for people */
@@ -34,6 +48,7 @@ export function friendly(e: unknown): string {
   const m = e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e)
   if (/JWT|not authenticated|refresh token/i.test(m)) return 'Your session has expired — please sign in again.'
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Could not reach the server. Check your connection and try again.'
+  if (/REAUTH_REQUIRED/.test(m)) return 'Please confirm your password again — deleting a hospital needs a fresh sign-in.'
   return m.replace(/^(error:\s*)/i, '')
 }
 
@@ -81,6 +96,24 @@ const db: CpApi = {
   audit: (tenantId) => rpc('cp_audit', { p_tenant: tenantId ?? null, p_limit: 500 }),
   settings: () => rpc('cp_settings'),
   saveBillingSettings: (patch) => rpc('cp_save_billing_settings', { p: patch }),
+  closeHospital: (id, reason, days) => rpc('cp_close_hospital', { p_id: id, p_reason: reason, p_days: days }),
+  reopenHospital: (id) => rpc('cp_reopen_hospital', { p_id: id }),
+  async purgeHospital(id, confirmSlug, password) {
+    const { data } = await supabase!.auth.getUser()
+    const email = data.user?.email
+    if (!email) throw new Error('Your session has expired — please sign in again.')
+    // a fresh password sign-in puts a new "password" time in the token, which cp_purge_hospital checks
+    const { error } = await supabase!.auth.signInWithPassword({ email, password })
+    if (error) throw new Error(/invalid/i.test(error.message) ? 'Wrong password.' : error.message)
+    return rpc('cp_purge_hospital', { p_id: id, p_confirm: confirmSlug })
+  },
+  health: () => rpc('cp_health'),
+  incidents: () => rpc('cp_incidents'),
+  saveIncident: (p) => rpc('cp_save_incident', { p }),
+  notifyIncident: (id, message) => rpc('cp_notify_incident', { p_id: id, p_message: message }),
+  retention: () => rpc('cp_retention'),
+  saveRetention: (p) => rpc('cp_save_retention', { p }),
+  runRetention: () => rpc('run_retention'),
 }
 
 export const isDemo = !supabase

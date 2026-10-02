@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Ban, CalendarPlus, ExternalLink, Globe, IndianRupee, Play, Receipt, Save, Wallet } from 'lucide-react'
+import { ArrowLeft, Ban, CalendarPlus, DoorClosed, ExternalLink, Globe, IndianRupee, Play, Receipt, RotateCcw, Save, Trash2, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
-import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
+import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Modal, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
 import { PLANS } from '../../../src/platform/plans'
-import { cp, friendly } from '../api'
+import { cp, friendly, isDemo } from '../api'
 import type { BillingAction, CpHospitalDetail, ModuleMap } from '../types'
 import { appUrl, canBill, date, dateTime, ErrorBox, inr, isAdmin, LicenseBadge, licenseLine, paise, planLabel, ROLE_LABEL, ROLE_TONE, Section, useMe } from '../ui'
 import { ModuleGrid } from './HospitalsPage'
@@ -35,6 +35,7 @@ export function HospitalPage() {
                 <h1 className="font-display text-2xl font-bold tracking-tight text-brand-950">{h.name}</h1>
                 <LicenseBadge status={h.license.status} />
                 {h.is_primary && <Badge tone="violet">Original install</Badge>}
+                {h.closing_at && <Badge tone="red" dot>Closing</Badge>}
               </div>
               <p className="mt-1 text-sm text-slate-500">{planLabel(h.plan)} · {licenseLine(h.license)} · prefix {h.code} · short name {h.slug}</p>
             </div>
@@ -263,6 +264,92 @@ function SettingsTab({ h }: { h: CpHospitalDetail }) {
         <Button className="mt-4" icon={<Save className="h-4 w-4" />} loading={save.isPending && !save.variables?.modules}
           onClick={() => save.mutate({ name: d.name, code: d.code, notes: d.notes, ...(!h.owner_joined && d.owner_email !== (h.owner_email ?? '') ? { owner_email: d.owner_email } : {}) })}>Save details</Button>
       </Section>
+      {!h.is_primary && <CloseSection h={h} />}
     </div>
+  )
+}
+
+/**
+ * Offboarding (phase 7.3): close → the hospital is read-only and the owner is e-mailed a notice period (7–90 days)
+ * to download their data; reopen undoes it. After the notice period an admin can delete everything — typing the
+ * short name and re-entering their password. GST invoices are kept (tombstone) as the law requires.
+ */
+function CloseSection({ h }: { h: CpHospitalDetail }) {
+  const qc = useQueryClient()
+  const nav = useNavigate()
+  const [reason, setReason] = useState('')
+  const [days, setDays] = useState(30)
+  const [confirm, setConfirm] = useState<'close' | 'reopen' | null>(null)
+  const [purge, setPurge] = useState<{ slug: string; password: string } | null>(null)
+  const refresh = () => { for (const k of ['cp-hospital', 'cp-hospitals', 'cp-health', 'cp-overview']) qc.invalidateQueries({ queryKey: [k] }) }
+  const act = useMutation({
+    mutationFn: async (what: 'close' | 'reopen' | 'end') => {
+      if (what === 'close') return cp.closeHospital(h.id, reason, days)
+      if (what === 'reopen') return cp.reopenHospital(h.id)
+      return cp.demoEndNotice?.(h.id)
+    },
+    onSuccess: (_r, what) => {
+      setConfirm(null); refresh()
+      toast.success(what === 'close' ? 'Hospital closed — the owner has been e-mailed' : what === 'reopen' ? 'Hospital reopened' : 'Notice period ended (demo)')
+    },
+    onError: (e) => toast.error(friendly(e)),
+  })
+  const doPurge = useMutation({
+    mutationFn: () => cp.purgeHospital(h.id, purge!.slug, purge!.password),
+    onSuccess: (r) => {
+      toast.success(`${h.name} was deleted`, { description: `${Object.values(r.counts).reduce((a, b) => a + b, 0).toLocaleString('en-IN')} records removed; GST invoices kept.` })
+      qc.removeQueries({ queryKey: ['cp-hospital', h.id] }); refresh()
+      nav('/hospitals', { replace: true })
+    },
+    onError: (e) => toast.error(friendly(e)),
+  })
+  const canPurge = !!h.closing_at && !!h.purge_after && Date.parse(h.purge_after) <= Date.now()
+
+  return (
+    <Section className="lg:col-span-2 border-rose-100" title={<span className="flex items-center gap-2 text-rose-800"><DoorClosed className="h-4 w-4" />Close this hospital</span>}
+      subtitle="For a hospital that is leaving. Nothing is deleted until the notice period is over.">
+      {!h.closing_at ? (
+        <div className="grid gap-3 sm:grid-cols-[1fr_180px_auto] sm:items-end">
+          <Field label="Reason (sent to the owner)"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Owner asked to close the account" /></Field>
+          <Field label="Days to download data"><Input type="number" min={7} max={90} value={days} onChange={(e) => setDays(Number(e.target.value))} /></Field>
+          <Button variant="danger" icon={<DoorClosed className="h-4 w-4" />} disabled={reason.trim().length < 3 || days < 7 || days > 90} onClick={() => setConfirm('close')}>Close hospital</Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-900">
+            Closed on <b>{dateTime(h.closing_at)}</b>{h.close_reason ? <> — “{h.close_reason}”</> : null}. The hospital is read-only; its owner can download everything
+            from Settings → Data & backup until <b>{date(h.purge_after)}</b>.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" icon={<RotateCcw className="h-4 w-4" />} onClick={() => setConfirm('reopen')}>Reopen</Button>
+            <Button variant="danger" icon={<Trash2 className="h-4 w-4" />} disabled={!canPurge} onClick={() => setPurge({ slug: '', password: '' })}>
+              {canPurge ? 'Delete all data…' : `Delete possible from ${date(h.purge_after)}`}
+            </Button>
+            {isDemo && !canPurge && <Button variant="ghost" loading={act.isPending && act.variables === 'end'} onClick={() => act.mutate('end')}>Demo: end the notice period now</Button>}
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} loading={act.isPending}
+        title={confirm === 'close' ? `Close ${h.name}?` : `Reopen ${h.name}?`}
+        description={confirm === 'close'
+          ? `Everyone can still sign in and read, but nothing can be added or changed and online booking stops. The owner is e-mailed that all data will be deleted after ${days} days.`
+          : 'The hospital goes back to its normal licence (trial / paid dates). Nothing was deleted.'}
+        confirmLabel={confirm === 'close' ? 'Close hospital' : 'Reopen'}
+        onConfirm={() => act.mutate(confirm!)} />
+
+      <Modal open={!!purge} onClose={() => setPurge(null)} title={`Delete ${h.name} permanently?`}
+        footer={<>
+          <Button variant="ghost" onClick={() => setPurge(null)}>Cancel</Button>
+          <Button variant="danger" icon={<Trash2 className="h-4 w-4" />} loading={doPurge.isPending} disabled={purge?.slug.trim().toLowerCase() !== h.slug || !purge?.password}
+            onClick={() => doPurge.mutate()}>Delete everything</Button>
+        </>}>
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>Every patient, record, bill, message, user login and setting of this hospital is deleted. Only a tombstone (name, counts) and its paid Hospital Comrade invoices are kept for tax records. <b>This cannot be undone.</b></p>
+          <Field label={`Type the short name: ${h.slug}`}><Input value={purge?.slug ?? ''} autoComplete="off" onChange={(e) => setPurge((p) => p && { ...p, slug: e.target.value })} /></Field>
+          <Field label="Your password" hint="Confirms it is really you."><Input type="password" autoComplete="current-password" value={purge?.password ?? ''} onChange={(e) => setPurge((p) => p && { ...p, password: e.target.value })} /></Field>
+        </div>
+      </Modal>
+    </Section>
   )
 }

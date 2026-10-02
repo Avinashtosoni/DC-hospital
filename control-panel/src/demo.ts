@@ -6,12 +6,13 @@
  * - hospitals created here live only in this panel (the demo app has two fixed hospitals)
  */
 import { computeLicense } from '../../src/billing/license'
-import { demoBilling, demoLicense, demoProviderBilling } from '../../src/billing/demo'
+import { demoBilling, demoLicense, demoProviderBilling, saveDemoBilling } from '../../src/billing/demo'
 import type { PaymentRow } from '../../src/billing/types'
 import { BILLING_DEFAULTS, type BillingConfig } from '../../src/platform/billing'
 import { DEMO_PROVIDERS, DEMO_TENANT_EDITS_KEY, DEMO_TENANTS, type DemoProvider, type DemoTenantEdit } from '../../src/tenancy/demo'
 import type { CpApi } from './api'
-import type { CpAudit, CpHospital, CpHospitalDetail, CpLead, CpMe, CpMember, CpOverview, CpPayment, ModuleMap, ProviderRole } from './types'
+import type { CpAudit, CpHealth, CpHospital, CpHospitalDetail, CpIncident, CpLead, CpMe, CpMember, CpOverview, CpPayment, ModuleMap, ProviderRole, RetentionConfig } from './types'
+import { RETENTION_DEFAULTS, RETENTION_KEYS, RETENTION_MIN } from './types'
 
 const KEY = 'dch:cp:v1'
 const SESSION = 'dch:cp:session:v1'
@@ -24,6 +25,7 @@ interface Created {
   id: string; slug: string; name: string; code: string; plan: string; created_at: string; modules: ModuleMap; notes: string | null
   owner_email: string; domain: string | null; trial_ends_at: string | null; paid_until: string | null; suspended: boolean
   wallet_paise: number; price: number | null; payments: PaymentRow[]
+  closing_at?: string | null; purge_after?: string | null; close_reason?: string | null
 }
 interface Member { email: string; name: string; role: ProviderRole; active: boolean; hospitals: string[]; since: string }
 interface Store {
@@ -35,6 +37,9 @@ interface Store {
   settings: Partial<BillingConfig>
   leads: Record<string, { status?: CpLead['status']; notes?: string | null }>
   seq: number
+  incidents?: CpIncident[]
+  retention?: RetentionConfig
+  purged?: { slug: string; name: string; at: string }[]
 }
 
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
@@ -104,11 +109,13 @@ function rowsAll(s = load()): CpHospital[] {
       price: b.price ?? cfg.plans[plan as keyof BillingConfig['plans']]?.price ?? null,
       domain: t.domain, ...DEMO_COUNTS[t.slug], owner_joined: true, owner_email: x.owner_email ?? `owner@${t.email}`,
       messages: b.usage.sms + b.usage.whatsapp + b.usage.email,
+      closing_at: b.closing_at ?? null, purge_after: b.purge_after ?? null, close_reason: b.close_reason ?? null,
     }
   })
   const made = s.hospitals.map((h): CpHospital => ({
     id: h.id, slug: h.slug, name: h.name, code: h.code, plan: h.plan, is_primary: false, notes: h.notes, created_at: h.created_at, modules: h.modules,
-    license: { ...computeLicense({ status: h.suspended ? 'suspended' : 'trial', trial_ends_at: h.trial_ends_at, paid_until: h.paid_until }, cfg.graceDays), wallet_paise: h.wallet_paise },
+    license: { ...computeLicense({ status: h.suspended ? 'suspended' : 'trial', trial_ends_at: h.trial_ends_at, paid_until: h.paid_until, closing_at: h.closing_at, purge_after: h.purge_after }, cfg.graceDays), wallet_paise: h.wallet_paise },
+    closing_at: h.closing_at ?? null, purge_after: h.purge_after ?? null, close_reason: h.close_reason ?? null,
     wallet_paise: h.wallet_paise, price: h.price ?? cfg.plans[h.plan as keyof BillingConfig['plans']]?.price ?? null,
     domain: h.domain, staff: 0, patients: 0, owner_joined: false, owner_email: h.owner_email, messages: 0,
   }))
@@ -398,4 +405,186 @@ export const demoCp: CpApi = {
     log('settings:billing', null, null, p as Record<string, unknown>)
     return config(s)
   },
+
+  // ------------------------------------------------------------------ phase 7 (same rules as scripts/sql/compliance.sql)
+  async closeHospital(id, reason, days) {
+    await wait()
+    const m = need(['admin']), h = find(m, id)
+    if (h.is_primary) throw new Error('The platform’s own hospital cannot be closed.')
+    if (reason.trim().length < 3) throw new Error('Write the reason for closing (the owner is told).')
+    if (!(days >= 7 && days <= 90)) throw new Error('Notice period: 7 to 90 days.')
+    if (h.closing_at) throw new Error('This hospital is already closing.')
+    const at = iso(), purge = iso(Date.now() + days * 864e5)
+    setClosing(id, { closing_at: at, purge_after: purge, close_reason: reason.trim() })
+    log('hospital:close', id, h.slug, { reason: reason.trim(), days })
+    return { closing_at: at, purge_after: purge }
+  },
+
+  async reopenHospital(id) {
+    await wait()
+    const m = need(['admin']), h = find(m, id)
+    if (!h.closing_at) throw new Error('This hospital is not closing.')
+    setClosing(id, { closing_at: null, purge_after: null, close_reason: null })
+    log('hospital:reopen', id, h.slug, null)
+    return { ok: true }
+  },
+
+  async demoEndNotice(id) {
+    await wait(150)
+    const m = need(['admin']), h = find(m, id)
+    if (!h.closing_at) throw new Error('Close the hospital first.')
+    setClosing(id, { closing_at: h.closing_at, purge_after: iso(Date.now() - 60_000), close_reason: h.close_reason ?? null })
+  },
+
+  async purgeHospital(id, confirmSlug, password) {
+    await wait(500)
+    const m = need(['admin'])
+    if (password !== PASSWORD) throw new Error('Wrong password.')
+    const h = find(m, id)
+    if (h.is_primary) throw new Error('The platform’s own hospital cannot be deleted.')
+    if (!h.closing_at) throw new Error('Close the hospital first — the owner gets a notice period to download their data.')
+    if (h.purge_after && Date.parse(h.purge_after) > Date.now()) throw new Error(`The hospital can export its data until ${new Date(h.purge_after).toLocaleDateString('en-IN')} — delete after that.`)
+    if (confirmSlug.trim().toLowerCase() !== h.slug) throw new Error(`Type the short name (${h.slug}) to confirm.`)
+    const s = load()
+    if (!s.hospitals.some((x) => x.id === id)) throw new Error('The two demo hospitals can’t be deleted in the demo — try it with a hospital you created here.')
+    s.hospitals = s.hospitals.filter((x) => x.id !== id)
+    s.purged = [{ slug: h.slug, name: h.name, at: iso() }, ...(s.purged ?? [])]
+    save(s)
+    const counts = { patients: h.patients, staff: h.staff }
+    log('hospital:purge', id, h.slug, { name: h.name, counts })
+    return { purged: h.slug, counts }
+  },
+
+  async health(): Promise<CpHealth> {
+    await wait()
+    const m = need(['admin', 'support'])
+    const rows = visible(m), s = load(), now = Date.now()
+    const ago = (min: number) => iso(now - min * 60_000)
+    return {
+      at: iso(),
+      extensions: { pg_cron: true, pg_net: true },
+      jobs: [
+        { name: 'dch-notify-flush', schedule: '* * * * *', active: true, last_run: ago(0.4), last_status: 'succeeded', last_message: null },
+        { name: 'dch-scheduled-messages', schedule: '*/5 * * * *', active: true, last_run: ago(3), last_status: 'succeeded', last_message: null },
+        { name: 'dch-appointment-reminders', schedule: '30 12 * * *', active: true, last_run: ago(60 * 5), last_status: 'succeeded', last_message: null },
+        { name: 'dch-billing-reminders', schedule: '0 4 * * *', active: true, last_run: ago(60 * 14), last_status: 'succeeded', last_message: null },
+        { name: 'dch-retention', schedule: '30 21 * * *', active: true, last_run: retention(s).last_run?.at ?? ago(60 * 20), last_status: 'succeeded', last_message: null },
+      ],
+      messages: rows.filter((h) => h.messages > 0).map((h) => ({ id: h.id, name: h.name, sent: Math.round(h.messages / 20), failed: h.slug === 'citycare' ? 2 : 0, waiting: 0, stuck: 0 })),
+      recent_failures: rows.some((h) => h.slug === 'citycare') ? [
+        { at: ago(95), hospital: rows.find((h) => h.slug === 'citycare')!.name, event: 'appointment_booked', channel: 'sms', error: 'DLT template not approved for this sender id' },
+        { at: ago(60 * 7), hospital: rows.find((h) => h.slug === 'citycare')!.name, event: 'appointment_reminder', channel: 'whatsapp', error: 'Recipient is not on WhatsApp' },
+      ] : [],
+      payments: { abandoned_7d: 1, failed_7d: 0, paid_7d: rows.reduce((n, h) => n + (demoBilling(h.id)?.payments.filter((p) => p.status === 'paid' && p.paid_at && Date.parse(p.paid_at) > now - 7 * 864e5).length ?? 0), 0) },
+      database: { size_bytes: 48_234_496, largest_tables: m.role === 'admin' ? [
+        { table: 'audit_log', bytes: 14_680_064 }, { table: 'notification_outbox', bytes: 9_437_184 }, { table: 'appointments', bytes: 4_194_304 }, { table: 'patients', bytes: 2_621_440 },
+      ] : [] },
+      hospitals: rows.map((h) => ({ id: h.id, name: h.name, closing_at: h.closing_at ?? null, purge_after: h.purge_after ?? null, patients: h.patients, appointments: h.patients * 3, invoices: h.patients * 2, audit_log: h.patients * 11 })),
+      retention: retention(s).last_run ?? null,
+      privacy_open: 0,
+      privacy_overdue: 0,
+      incidents_open: (s.incidents ?? []).filter((i) => i.status !== 'resolved').length,
+    }
+  },
+
+  async incidents() {
+    await wait()
+    need(['admin', 'support'])
+    const names = Object.fromEntries(rowsAll().map((h) => [h.id, h]))
+    return [...(load().incidents ?? [])]
+      .map((i) => ({ ...i, hospitals: i.affected_tenants.filter((t) => names[t]).map((t) => ({ id: t, name: names[t].name, slug: names[t].slug })) }))
+      .sort((a, b) => Number(a.status === 'resolved') - Number(b.status === 'resolved') || b.detected_at.localeCompare(a.detected_at))
+  },
+
+  async saveIncident(p) {
+    await wait()
+    const m = need(['admin'])
+    const s = load(), list = s.incidents ?? [], now = iso()
+    let i: CpIncident
+    if (!p.id) {
+      const title = (p.title ?? '').trim()
+      if (title.length < 3) throw new Error('Give the incident a short title.')
+      const detected = p.detected_at ?? now
+      i = { id: uid(), created_at: now, updated_at: now, detected_at: detected, title, description: p.description ?? null, severity: p.severity ?? 'medium', status: 'open',
+        personal_data: !!p.personal_data, affected_tenants: p.affected_tenants ?? [], affected_people: p.affected_people ?? null, board_reported_at: null,
+        hospitals_notified_at: null, resolved_at: null, timeline: [{ at: now, by: m.name, note: p.note || 'Incident recorded' }], created_by_name: m.name,
+        deadline: iso(Date.parse(detected) + 72 * 3600_000), hospitals: [] }
+      list.unshift(i)
+    } else {
+      const found = list.find((x) => x.id === p.id)
+      if (!found) throw new Error('Incident not found')
+      i = found
+      const statusChanged = p.status && p.status !== i.status
+      const note = [statusChanged ? `Status: ${p.status}` : '', p.note ?? ''].filter(Boolean).join(' — ')
+      Object.assign(i, {
+        ...(p.title?.trim() ? { title: p.title.trim() } : {}),
+        ...(p.description !== undefined ? { description: p.description } : {}),
+        ...(p.severity ? { severity: p.severity } : {}),
+        ...(p.status ? { status: p.status, resolved_at: p.status === 'resolved' ? i.resolved_at ?? now : null } : {}),
+        ...(p.personal_data !== undefined ? { personal_data: p.personal_data } : {}),
+        ...(p.affected_tenants ? { affected_tenants: p.affected_tenants } : {}),
+        ...(p.affected_people !== undefined ? { affected_people: p.affected_people } : {}),
+        ...(p.board_reported ? { board_reported_at: i.board_reported_at ?? now } : {}),
+        updated_at: now,
+      })
+      if (note) i.timeline = [...i.timeline, { at: now, by: m.name, note }]
+    }
+    s.incidents = list
+    save(s)
+    log('incident:save', null, i.id, { title: i.title, status: i.status })
+    return i
+  },
+
+  async notifyIncident(id, message) {
+    await wait(400)
+    const m = need(['admin'])
+    const s = load(), i = (s.incidents ?? []).find((x) => x.id === id)
+    if (!i) throw new Error('Incident not found')
+    if (!message.trim()) throw new Error('Write the notice: what happened, what data, what you are doing, what they should do.')
+    if (!i.affected_tenants.length) throw new Error('Add the affected hospitals first.')
+    const rows = rowsAll(s).filter((h) => i.affected_tenants.includes(h.id))
+    const r = rows.map((h) => ({ id: h.id, name: h.name, owner_email: h.owner_email, queued: h.owner_email ? 1 : 0 }))
+    i.hospitals_notified_at = iso()
+    i.timeline = [...i.timeline, { at: iso(), by: m.name, note: `Hospitals notified (${r.length})` }]
+    save(s)
+    log('incident:notify', null, id, { hospitals: r })
+    return r
+  },
+
+  async retention() { await wait(); need(['admin']); return retention() },
+
+  async saveRetention(p) {
+    await wait()
+    need(['admin'])
+    for (const [k, v] of Object.entries(p)) {
+      if (!(RETENTION_KEYS as readonly string[]).includes(k)) throw new Error(`Unknown setting ${k}`)
+      const min = RETENTION_MIN[k as keyof typeof RETENTION_MIN]
+      if (!(Number.isInteger(v) && (v as number) >= min && (v as number) <= 3650)) throw new Error(`${k}: keep at least ${min} days (at most 3650).`)
+    }
+    const s = load()
+    s.retention = { ...retention(s), ...p }
+    save(s)
+    log('settings:retention', null, null, p as Record<string, unknown>)
+    return retention(s)
+  },
+
+  async runRetention() {
+    await wait(600)
+    need(['admin'])
+    const s = load()
+    const deleted = { audit_log: 0, provider_audit: Math.max(0, s.audit.length - 250), notification_outbox: 0, booking_otps: 3, password_reset_otps: 1, site_enquiries: 0, platform_leads: 0, privacy_requests: 0, wa_sessions: 2 }
+    s.audit = s.audit.slice(0, 250)
+    s.retention = { ...retention(s), last_run: { at: iso(), deleted } }
+    save(s)
+    return deleted
+  },
 }
+
+/** demo hospitals keep it in their billing store (so the hospital app shows the closing banner); created ones here */
+function setClosing(id: string, v: { closing_at: string | null; purge_after: string | null; close_reason: string | null }) {
+  const s = load(), created = s.hospitals.find((x) => x.id === id)
+  if (created) { Object.assign(created, v); save(s); return }
+  const b = demoBilling(id)
+  if (b) saveDemoBilling(id, { ...b, ...v })
+}
+function retention(s = load()): RetentionConfig { return { ...RETENTION_DEFAULTS, ...s.retention } }
