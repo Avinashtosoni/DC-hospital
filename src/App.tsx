@@ -49,6 +49,7 @@ const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 const RatingsPage = lazy(() => import('./pages/RatingsPage'))
 const EnquiriesPage = lazy(() => import('./pages/EnquiriesPage'))
 const NoticeBoard = lazy(() => import('./pages/NoticeBoard'))
+const PrivacyRequestsPage = lazy(() => import('./pages/PrivacyRequestsPage'))
 
 const RESOURCES = [
   R.patientsRes, R.appointmentsRes, R.prescriptionsRes, R.labTestsRes, R.admissionsRes, R.doctorsRes, R.staffRes,
@@ -56,7 +57,7 @@ const RESOURCES = [
 ]
 
 /** Paths that belong to the signed-in app; anything else a guest opens gets the public 404. */
-const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile', '/ratings', '/enquiries', '/billing']
+const APP_PREFIXES = [...RESOURCES.map((r) => r.path), '/me', '/patients', '/invoices', '/prescriptions', '/beds', '/reports', '/settings', '/cms', '/schedule', '/audit', '/profile', '/ratings', '/enquiries', '/billing', '/privacy-requests']
 const isAppPath = (p: string) => APP_PREFIXES.some((x) => p === x || p.startsWith(`${x}/`))
 
 const PageLoader = () => <div className="grid h-64 place-items-center"><Spinner className="h-6 w-6" /></div>
@@ -97,6 +98,7 @@ export default function App() {
           <Route path="/audit" element={<RequireNav path="/audit"><Suspense fallback={<PageLoader />}><AuditPage /></Suspense></RequireNav>} />
           <Route path="/ratings" element={<RequireNav path="/ratings"><Suspense fallback={<PageLoader />}><RatingsPage /></Suspense></RequireNav>} />
           <Route path="/enquiries" element={<RequireNav path="/enquiries"><Suspense fallback={<PageLoader />}><EnquiriesPage /></Suspense></RequireNav>} />
+          <Route path="/privacy-requests" element={<RequireNav path="/privacy-requests"><Suspense fallback={<PageLoader />}><PrivacyRequestsPage /></Suspense></RequireNav>} />
           <Route path="/profile" element={<Suspense fallback={<PageLoader />}><ProfilePage /></Suspense>} />
           <Route path="/billing" element={<RequireNav path="/billing"><Suspense fallback={<PageLoader />}><BillingPage /></Suspense></RequireNav>} />
           <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />

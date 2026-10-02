@@ -13,9 +13,12 @@ export interface LicenseInfo {
   read_only_from: string | null
   /** owner / accountant / platform team only */
   wallet_paise?: number
+  /** phase 7: the platform closed the account — read-only from then, everything deleted after purge_after */
+  closing_at?: string | null
+  purge_after?: string | null
 }
 
-export interface LicenseRow { is_primary?: boolean; status: TenantStatus; trial_ends_at: string | null; paid_until: string | null }
+export interface LicenseRow { is_primary?: boolean; status: TenantStatus; trial_ends_at: string | null; paid_until: string | null; closing_at?: string | null; purge_after?: string | null }
 
 /** same rules as public.tenant_license() */
 export function computeLicense(t: LicenseRow, graceDays = 7, now = Date.now()): LicenseInfo {
@@ -25,7 +28,8 @@ export function computeLicense(t: LicenseRow, graceDays = 7, now = Date.now()): 
   const readOnlyFrom = t.is_primary || !Number.isFinite(end) ? null : new Date(end + graceDays * 864e5).toISOString()
   const base = { trial_ends_at: t.trial_ends_at, paid_until: t.paid_until, read_only_from: readOnlyFrom }
   if (t.is_primary) return { ...base, status: 'active' }
-  if (t.status === 'suspended') return { ...base, status: 'suspended' }
+  if (t.status === 'suspended') return { ...base, status: 'suspended', ...(t.closing_at ? { closing_at: t.closing_at, purge_after: t.purge_after ?? null } : {}) }
+  if (t.closing_at) return { ...base, read_only_from: t.closing_at, closing_at: t.closing_at, purge_after: t.purge_after ?? null, status: 'read_only' }
   if (paid == null && trial == null) return { ...base, status: t.status }
   if (paid != null && paid > now) return { ...base, status: 'active' }
   if (trial != null && trial > now) return { ...base, status: 'trial' }
@@ -45,6 +49,12 @@ export function licenseBanner(l: LicenseInfo | null | undefined, canPay: boolean
   if (!l) return null
   const date = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '')
   const ask = canPay ? '' : ' Please ask the hospital owner to renew.'
+  if (l.closing_at) {
+    const d = daysUntil(l.purge_after, now)
+    return { tone: 'danger', title: 'This account is closing',
+      text: `Since ${date(l.closing_at ?? null)} nothing can be added or changed. ${canPay ? 'Download your data from Settings → Data & backup' : 'Ask the owner for anything you need'} before ${date(l.purge_after ?? null)}${l.purge_after ? ` (${d} day${d === 1 ? '' : 's'} left)` : ''} — after that every record is deleted permanently.`,
+      cta: false }
+  }
   switch (l.status) {
     case 'trial': {
       const d = daysUntil(l.trial_ends_at, now)

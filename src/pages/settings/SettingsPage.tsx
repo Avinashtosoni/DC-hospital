@@ -62,7 +62,8 @@ export default function SettingsPage() {
   const locked = useModuleLocks()
   // locked modules are managed by the platform team and hidden from the hospital
   // Domain: multi-hospital installs only (a single-hospital install's address is set where it is deployed)
-  const tabs = TABS.filter((t) => (isOwner || !t.ownerOnly) && !locked(t.module) && (t.id !== 'domain' || tenancyEnabled()))
+  // Data & backup stays for owners even when the module is platform-managed: taking your data out is never locked (phase 7.2)
+  const tabs = TABS.filter((t) => (isOwner || !t.ownerOnly) && (!locked(t.module) || t.id === 'data') && (t.id !== 'domain' || tenancyEnabled()))
   const [params, setParams] = useSearchParams()
   const tab = (tabs.find((t) => t.id === params.get('tab'))?.id ?? tabs[0].id) as TabId
   const qc = useQueryClient()
@@ -181,7 +182,7 @@ export default function SettingsPage() {
               {tab === 'notifications' && <NotificationsTab ctx={ctx!} />}
               {tab === 'billing' && <BillingTab ctx={ctx!} />}
               {tab === 'security' && <SecurityTab ctx={ctx!} />}
-              {tab === 'data' && <DataTab ctx={ctx!} />}
+              {tab === 'data' && <DataTab ctx={ctx!} exportOnly={locked('data')} />}
               {tab === 'account' && <AccountTab />}
             </>
           )}

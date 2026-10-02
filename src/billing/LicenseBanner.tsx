@@ -27,10 +27,14 @@ export function LicenseBanner() {
   const { user, context } = useAuth()
   const canPay = useCanPay()
   const loc = useLocation()
-  const b = licenseBanner(context?.license, canPay)
+  const closing = context?.license?.closing_at
+  const b = user?.role === 'patient' && closing
+    ? { tone: 'danger' as const, title: 'This hospital is closing its online account', cta: false,
+        text: `Download a copy of your data from My Profile → Your data & privacy before ${context?.license?.purge_after ? new Date(context.license.purge_after).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'it closes'}.` }
+    : licenseBanner(context?.license, canPay)
   const key = `dch:license-dismissed:${context?.license?.status}:${b?.title ?? ''}`
   const [gone, setGone] = useState(() => sessionStorage.getItem(key) === '1')
-  if (!tenancyEnabled() || !b || !user || user.role === 'patient') return null
+  if (!tenancyEnabled() || !b || !user || (user.role === 'patient' && !closing)) return null
   const dismissible = b.tone !== 'danger' && context?.license?.status !== 'grace'
   if (dismissible && gone) return null
   const onPlanTab = loc.pathname === '/billing'
@@ -39,6 +43,11 @@ export function LicenseBanner() {
     <div role="status" className={cn('mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-3 text-sm', TONE[b.tone])}>
       <Icon className="h-4 w-4 shrink-0" />
       <p className="min-w-0 flex-1"><b className="font-semibold">{b.title}.</b> {b.text}</p>
+      {closing && (user.role === 'patient' || user.role === 'owner') && loc.pathname !== '/profile' && (
+        <Link to={user.role === 'patient' ? '/profile' : '/settings?tab=data'} className="shrink-0 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-700">
+          Download data
+        </Link>
+      )}
       {b.cta && !onPlanTab && (
         <Link to="/billing" className={cn('shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition',
           b.tone === 'danger' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-brand-900 hover:bg-brand-800')}>

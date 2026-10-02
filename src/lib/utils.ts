@@ -44,6 +44,16 @@ export const initials = (name?: string | null) =>
 
 export const titleCase = (s?: string | null) => (s ?? '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
+/** rows → CSV text (header = every key seen in any row) */
+export function toCsv(rows: Record<string, unknown>[], headers = [...new Set(rows.flatMap((r) => Object.keys(r)))]): string {
+  const esc = (v: unknown) => {
+    let s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s) && !/^[+-]?[\d\s().-]+$/.test(s)) s = `'${s}`
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  return [headers.map(esc).join(','), ...rows.map((r) => headers.map((h) => esc(r[h])).join(','))].join('\r\n')
+}
+
 export function downloadCsv(filename: string, rows: Record<string, unknown>[]) {
   if (!rows.length) return
   const headers = Object.keys(rows[0])

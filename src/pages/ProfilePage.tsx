@@ -15,6 +15,7 @@ import { LEAVE_LABEL, isFullDay } from '../lib/schedule'
 import { invoiceBalance } from '../lib/billing'
 import { fmtDate, fmtTime, money, today } from '../lib/utils'
 import { ROLE_LABEL, type Patient } from '../types'
+import { PrivacyCard } from '../privacy/PrivacyCard'
 
 const APPT_PREF = 'dch:pref:appt-view'
 const BLOOD = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']
@@ -128,6 +129,7 @@ export default function ProfilePage() {
         <div className="space-y-6">
           {u.role !== 'patient' && <Preferences />}
           {u.role !== 'patient' && <MyActivity />}
+          {u.role === 'patient' && <PrivacyCard profileId={u.id} />}
           {u.role === 'patient' && (
             <Card>
               <CardHeader title="Quick links" icon={<LayoutGrid className="h-4 w-4" />} />

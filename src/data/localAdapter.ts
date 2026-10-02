@@ -517,6 +517,8 @@ export function localTemplateRecipients(t: DB['notification_templates']): { prof
   const patientsToo = t.schedule === 'birthday' || t.audience === 'patients' || t.audience === 'everyone' || (t.audience === 'roles' && t.roles.includes('patient'))
   if (patientsToo) for (const p of store.patients) {
     if (t.schedule === 'birthday' && (p.date_of_birth ?? '').slice(5, 10) !== today) continue
+    const flags = p as { marketing_opt_out?: boolean; erased_at?: string | null }
+    if (flags.marketing_opt_out || flags.erased_at) continue          // phase 7: said no to health tips & offers / erased
     out.push({ profile_id: p.profile_id ?? null, full_name: p.full_name, phone: p.phone ?? null, email: p.email ?? null })
   }
   if (t.schedule !== 'birthday') for (const p of store.profiles) {
@@ -554,4 +556,45 @@ export function localMyContext(): MyContext {
 export function localProviderTenants() {
   const sp = sessionProvider()
   return sp ? providerTenants(sp.p).map((t) => ({ id: t.id, slug: t.slug, name: t.name, status: demoLicense(t.id, false)?.status ?? t.status, plan: demoBilling(t.id)?.plan ?? t.plan, modules: t.modules, is_primary: t.is_primary, domain: t.domain })) : []
+}
+
+// ------------------------------------------------------------------ demo twins of the phase 7 privacy RPCs (compliance.sql)
+/** read-only copy of this hospital's demo tables */
+export const localSnapshot = () => structuredClone(load())
+
+/** set_marketing_consent(): stored on the patient row like the database column */
+export function localSetMarketingOptOut(patientId: string, optOut: boolean) {
+  const p = load().patients.find((x) => x.id === patientId) as (DB['patients'] & { marketing_opt_out?: boolean }) | undefined
+  if (!p) throw new Error('Your login is not linked to a patient record yet.')
+  p.marketing_opt_out = optOut
+  persist()
+}
+
+/** erase_patient(): anonymise the record (visits, bills and prescriptions stay — the law requires them), drop the
+ *  login, the enquiries from that phone and the feedback comments, and redact the audit trail */
+export function localErasePatient(patientId: string, reason: string) {
+  const s = load()
+  const p = s.patients.find((x) => x.id === patientId) as (DB['patients'] & { erased_at?: string | null; marketing_opt_out?: boolean }) | undefined
+  if (!p) throw new Error('Patient not found')
+  if (p.erased_at) throw new Error('This patient was already erased.')
+  const phone10 = (p.phone ?? '').replace(/\D/g, '').slice(-10)
+  const profileId = p.profile_id
+  const anon = p as unknown as Record<string, unknown>
+  Object.assign(anon, { full_name: `Erased patient ${p.mrn}`, phone: null, email: null, address: null, emergency_contact_name: null, emergency_contact_phone: null,
+    insurance_provider: null, allergies: null, profile_id: null, marketing_opt_out: true, erased_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+  if (phone10) s.site_enquiries = s.site_enquiries.filter((e) => (e.phone ?? '').replace(/\D/g, '').slice(-10) !== phone10)
+  for (const f of s.visit_feedback) if (f.patient_id === patientId) (f as { comment?: string | null }).comment = null
+  for (const a of s.audit_log) if (a.record_id === patientId || (profileId && a.record_id === profileId)) {
+    (a as unknown as Record<string, unknown>).changes = { redacted: true }
+    a.summary = `Erased patient ${p.mrn}`
+  }
+  if (profileId) {
+    s.profiles = s.profiles.filter((x) => x.id !== profileId)
+    const all = users().filter((u) => u.profile_id !== profileId)   // seeded demo logins come back after "Reset demo data"
+    localStorage.setItem(USERS_KEY, JSON.stringify(all))
+  }
+  s.audit_log.unshift({ id: uuid(), created_at: new Date().toISOString(), table_name: 'patients', record_id: patientId, action: 'update',
+    actor_id: currentProfile()?.id ?? null, actor_name: currentProfile()?.full_name ?? 'Owner', actor_role: currentProfile()?.role ?? 'owner',
+    summary: `Erased patient ${p.mrn}`, changes: { erased: { to: true }, reason: { to: reason.slice(0, 200) } } } as unknown as DB['audit_log'])
+  persist()
 }

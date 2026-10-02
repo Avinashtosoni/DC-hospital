@@ -1,7 +1,7 @@
 import { format } from 'date-fns'
 import { useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Database, Download, HardDrive, Info, KeyRound, RefreshCw, RotateCcw, Upload } from 'lucide-react'
+import { Archive, Database, Download, HardDrive, Info, KeyRound, RefreshCw, RotateCcw, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
 import { db } from '../../data/adapter'
@@ -12,6 +12,7 @@ import { deepMerge, defaultContent } from '../../site/cms/content'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
 import { DEFAULT_APP_SETTINGS } from '../../settings/types'
 import { Section, type TabCtx } from './shared'
+import { exportHospitalZip } from '../../privacy/exportZip'
 
 const supabaseHost = () => {
   const env = (window as unknown as { __ENV__?: Record<string, string> }).__ENV__
@@ -19,8 +20,39 @@ const supabaseHost = () => {
   try { return url ? new URL(url).host : '—' } catch { return '—' }
 }
 
-export function DataTab({ ctx }: { ctx: TabCtx }) {
-  const { refresh } = useAuth()
+/** Phase 7.2: every record of the hospital as CSV files in one ZIP — always available to the owner */
+function FullExport({ hospital }: { hospital: string }) {
+  const [busy, setBusy] = useState<{ done: number; total: number; table: string } | null>(null)
+  const run = async () => {
+    setBusy({ done: 0, total: 1, table: '' })
+    try {
+      const r = await exportHospitalZip(hospital, (done, total, table) => setBusy({ done, total, table }))
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(r.blob)
+      a.download = r.filename
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+      const rows = Object.values(r.counts).reduce((s, n) => s + n, 0)
+      const missing = Object.keys(r.skipped)
+      if (missing.length) toast.warning('Export finished with gaps', { description: `${rows.toLocaleString('en-IN')} rows. Not complete: ${missing.join(', ')} — see README.txt in the ZIP.` })
+      else toast.success('Hospital data exported', { description: `${rows.toLocaleString('en-IN')} rows in ${Object.keys(r.counts).length} CSV files.` })
+    } catch (e) { toast.error((e as Error).message) } finally { setBusy(null) }
+  }
+  const pct = busy ? Math.round((busy.done / Math.max(1, busy.total)) * 100) : 0
+  return (
+    <Section title="Export all hospital data" description="Every patient, visit, prescription, lab test, bill, payment, expense and log — one CSV per table, in a ZIP. Yours to keep or move to other software." icon={<Archive className="h-4 w-4" />}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button icon={<Download className="h-4 w-4" />} loading={!!busy} onClick={run}>{busy ? `Exporting… ${pct}%` : 'Download ZIP'}</Button>
+        {busy?.table && <span className="text-xs text-slate-500">Reading {busy.table.replace(/_/g, ' ')}…</span>}
+      </div>
+      {busy && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-brand-50"><div className="h-full rounded-full bg-brand-700 transition-all" style={{ width: `${pct}%` }} /></div>}
+      <p className="mt-3 text-xs text-slate-400">Contains patients' medical data — store the file encrypted and delete it when you no longer need it. Works on a read-only account too.</p>
+    </Section>
+  )
+}
+
+export function DataTab({ ctx, exportOnly }: { ctx: TabCtx; exportOnly?: boolean }) {
+  const { refresh, context } = useAuth()
   const { row } = useAppSettings()
   const qc = useQueryClient()
   const file = useRef<HTMLInputElement>(null)
@@ -67,8 +99,12 @@ export function DataTab({ ctx }: { ctx: TabCtx }) {
     ['Time zone', Intl.DateTimeFormat().resolvedOptions().timeZone],
   ]
 
+  const hospital = context?.tenant?.name || ctx.site.name || 'Hospital'
+  if (exportOnly) return <div className="space-y-6"><FullExport hospital={hospital} /></div>
+
   return (
     <div className="space-y-6">
+      <FullExport hospital={hospital} />
       <Section title="Backup & restore settings" description="Move your configuration between installations, or keep a copy before big changes." icon={<HardDrive className="h-4 w-4" />}>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" icon={<Download className="h-4 w-4" />} onClick={exportJson}>Export JSON</Button>

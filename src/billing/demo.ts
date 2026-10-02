@@ -20,6 +20,10 @@ export interface DemoBilling {
   ledger: LedgerRow[]
   payments: PaymentRow[]
   seq: number
+  /** phase 7: closed by the platform (control panel demo) */
+  closing_at?: string | null
+  purge_after?: string | null
+  close_reason?: string | null
 }
 
 const key = (t: DemoTenant) => `dch:billing:v1@${t.slug}`
@@ -65,7 +69,7 @@ export function saveDemoBilling(tenantId: string, s: DemoBilling) {
 export function demoLicense(tenantId: string, canSeeWallet: boolean): LicenseInfo | null {
   const t = demoTenantById(tenantId), b = demoBilling(tenantId)
   if (!t || !b) return null
-  const l = computeLicense({ is_primary: t.is_primary, status: b.suspended ? 'suspended' : t.status, trial_ends_at: b.trial_ends_at, paid_until: b.paid_until }, BILLING_DEFAULTS.graceDays)
+  const l = computeLicense({ is_primary: t.is_primary, status: b.suspended ? 'suspended' : t.status, trial_ends_at: b.trial_ends_at, paid_until: b.paid_until, closing_at: b.closing_at, purge_after: b.purge_after }, BILLING_DEFAULTS.graceDays)
   return canSeeWallet ? { ...l, wallet_paise: b.wallet_paise } : l
 }
 

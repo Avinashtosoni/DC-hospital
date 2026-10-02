@@ -1,6 +1,6 @@
 import {
   BadgeIndianRupee, BarChart3, BedDouble, Building2, CalendarCheck, ClipboardList, CreditCard, FlaskConical, HeartPulse, LayoutDashboard,
-  CalendarOff, CircleUserRound, History, Globe, Inbox, Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, Star, type LucideIcon,
+  CalendarOff, CircleUserRound, History, Globe, Inbox, Megaphone, Package, Pill, Receipt, Settings, Stethoscope, UserCog, Users, Wallet, ShieldCheck, Star, Fingerprint, type LucideIcon,
 } from 'lucide-react'
 import type { Role } from '../../types'
 
@@ -46,6 +46,7 @@ export const NAV: NavSection[] = [
     { label: 'Pharmacy & Inventory', path: '/inventory', icon: Package, roles: ['owner', 'staff', 'doctor', 'accountant'] },
     { label: 'Users & Roles', path: '/users', icon: ShieldCheck, roles: ['owner'] },
     { label: 'Audit Log', path: '/audit', icon: History, roles: ['owner'] },
+    { label: 'Privacy Requests', path: '/privacy-requests', icon: Fingerprint, roles: ['owner'] },
     { label: 'My Profile', path: '/profile', icon: CircleUserRound, roles: [...S, 'patient'] },
     { label: 'Settings', path: '/settings', icon: Settings, roles: [...S, 'patient'] },
   ] },
