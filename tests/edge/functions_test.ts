@@ -13,6 +13,7 @@ const CITY = 'b0000000-0000-4000-8000-000000000002'
 Deno.env.set('SUPABASE_URL', SB)
 Deno.env.set('SUPABASE_SERVICE_ROLE_KEY', SERVICE)
 Deno.env.set('SUPABASE_ANON_KEY', 'anon-key')
+Deno.env.set('PLATFORM_DOMAIN', 'hospital.digitalcomrade.in')
 
 // ------------------------------------------------------------------ the database
 const sms = (url: string) => ({ notifications: { sms: { enabled: true, provider: 'webhook', webhookUrl: url }, whatsapp: { enabled: true, provider: 'webhook', webhookUrl: url.replace('sms', 'wa'), botEnabled: true }, templates: {} } })
@@ -38,6 +39,7 @@ const db: Record<string, any[]> = {
     { tenant_id: CITY, key: 'settings', data: { name: 'City Care Clinic', phone: '+91 612 400 1100' } },
   ],
   notification_templates: [], push_tokens: [], wa_sessions: [], notification_outbox: [],
+  tenant_domains: [{ domain: 'dchospital.example', tenant_id: DC, is_primary: true, method: 'manual' }],
 }
 /** signed-in users → what my_context() says for them (providers depend on the x-tenant-id they send) */
 const users: Record<string, { id: string; ctx: (tenantHeader: string | null) => any }> = {
@@ -99,9 +101,34 @@ async function supabase(url: URL, init: RequestInit & { headers: Headers }): Pro
     if (method === 'GET') return reply(filterRows(table, url.searchParams), h)
     if (method === 'POST') { const rows = Array.isArray(body) ? body : [body]; db[table].push(...rows); return reply(rows, h, 201) }
     if (method === 'PATCH') { for (const r of filterRows(table, url.searchParams)) Object.assign(r, body); return reply([], h) }
-    if (method === 'DELETE') return reply([], h)
+    if (method === 'DELETE') { const gone = new Set(filterRows(table, url.searchParams)); db[table] = db[table].filter((r) => !gone.has(r)); return reply([], h) }
   }
   return new Response('not mocked: ' + url.pathname, { status: 404 })
+}
+
+// ------------------------------------------------------------------ Cloudflare for SaaS (custom hostnames)
+const cfHosts = new Map<string, any>()
+const cfCalls: { method: string; path: string; auth: string | null; body: any }[] = []
+const cfOk = (result: unknown, status = 200) => new Response(JSON.stringify({ success: true, errors: [], result }), { status, headers: { 'content-type': 'application/json' } })
+const cfErr = (code: number, message: string, status = 400) => new Response(JSON.stringify({ success: false, errors: [{ code, message }], result: null }), { status })
+function cloudflare(url: URL, method: string, h: Headers, body: any): Response {
+  cfCalls.push({ method, path: url.pathname + url.search, auth: h.get('authorization'), body })
+  const m = url.pathname.match(/^\/client\/v4\/zones\/([^/]+)\/custom_hostnames(?:\/([^/]+))?$/)
+  if (!m || m[1] !== 'zone-1') return cfErr(7003, 'Could not route', 404)
+  const id = m[2]
+  if (method === 'POST') {
+    if ([...cfHosts.values()].some((x) => x.hostname === body.hostname)) return cfErr(1406, 'Duplicate custom hostname found.')
+    const hid = `cfh-${cfHosts.size + 1}`
+    const host = { id: hid, hostname: body.hostname, status: 'pending', verification_errors: ['custom hostname does not CNAME to this zone.'],
+      ownership_verification: { type: 'txt', name: `_cf-custom-hostname.${body.hostname}`, value: 'txt-value' },
+      ssl: { status: 'pending_validation', method: body.ssl.method, type: body.ssl.type } }
+    cfHosts.set(hid, host); return cfOk(host)
+  }
+  if (method === 'GET' && !id) return cfOk([...cfHosts.values()].filter((x) => x.hostname === url.searchParams.get('hostname')))
+  if (!cfHosts.has(id)) return cfErr(1436, 'Custom hostname not found', 404)
+  if (method === 'GET') return cfOk(cfHosts.get(id))
+  if (method === 'DELETE') { cfHosts.delete(id); return cfOk({ id }) }
+  return cfErr(1000, 'bad method', 405)
 }
 
 globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -110,6 +137,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => 
   const headers = new Headers(init.headers ?? req?.headers)
   const body = init.body ?? (req ? await req.text() : undefined)
   if (url.origin === SB) return supabase(url, { ...init, method: init.method ?? req?.method, headers, body })
+  if (url.origin === 'https://api.cloudflare.com') return cloudflare(url, init.method ?? req?.method ?? 'GET', headers, body ? JSON.parse(String(body)) : null)
   sent.push({ url: url.href, auth: headers.get('authorization'), body: body ? JSON.parse(String(body)) : null })
   return new Response('{}', { status: 200, headers: { 'x-request-id': 'req-1' } })
 }) as typeof fetch
@@ -119,7 +147,8 @@ const handlers: ((req: Request) => Promise<Response>)[] = []
 ;(Deno as any).serve = (h: any) => { handlers.push(h); return { finished: Promise.resolve(), shutdown() {} } }
 await import('../../supabase/functions/notify/index.ts')
 await import('../../supabase/functions/whatsapp-bot/index.ts')
-const [notify, bot] = handlers
+await import('../../supabase/functions/domains/index.ts')
+const [notify, bot, domains] = handlers
 
 const post = (fn: typeof notify, body: unknown, token?: string, headers: Record<string, string> = {}, path = '') =>
   fn(new Request(`${SB}/functions/v1/x${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers }, body: JSON.stringify(body) }))
@@ -223,4 +252,73 @@ Deno.test('the simulator runs in the hospital of the signed-in user', async () =
   assertEquals(calls.find((c) => c.url.pathname.endsWith('/public_doctors'))!.headers.get('x-tenant-id'), CITY)
   assertEquals((await post(bot, { simulate: { from: '9876500002', text: '1' } }, 'tok-dc-patient', {}, '/whatsapp-bot')).status, 403)
   assertEquals((await post(bot, { simulate: { from: '9876500002', text: '1' } }, undefined, {}, '/whatsapp-bot')).status, 403)
+})
+
+// ------------------------------------------------------------------ domains (phase 2.3)
+const dom = (body: unknown, token?: string, headers: Record<string, string> = {}) => post(domains, body, token, headers, '/domains')
+const asAdmin = (tenant: string) => ({ 'x-tenant-id': tenant, 'x-provider-mode': 'admin' })
+
+Deno.test('domains: an owner sees only their own hospital and cannot change anything', async () => {
+  const r = await (await dom({ action: 'list' }, 'tok-city-owner')).json()
+  assertEquals(r.domains, [])
+  assertEquals(r.canManage, false)
+  assertEquals((await dom({ action: 'add', domain: 'www.citycare.in' }, 'tok-city-owner')).status, 403)
+  assertEquals((await dom({ action: 'list' }, 'tok-city-reception')).status, 403)
+  assertEquals((await dom({ action: 'list' })).status, 403)
+  // the service role skips RLS → every read names the hospital
+  for (const c of calls.filter((c) => c.method === 'GET' && c.url.pathname.endsWith('/tenant_domains'))) {
+    assert(c.url.searchParams.get('tenant_id') === `eq.${CITY}` || c.url.searchParams.has('domain'))
+  }
+})
+
+Deno.test('domains: without Cloudflare secrets a provider admin adds a manual domain', async () => {
+  reset()
+  Deno.env.delete('CF_API_TOKEN'); Deno.env.delete('CF_ZONE_ID')
+  const r = await (await dom({ action: 'add', domain: 'https://WWW.CityCare.in/' }, 'tok-admin', asAdmin(CITY))).json()
+  assertEquals(r.cloudflare, false)
+  assertEquals(r.domains.map((d: any) => [d.domain, d.method, d.is_primary, d.status]), [['www.citycare.in', 'manual', true, 'manual']])
+  assertEquals(cfCalls.length, 0)
+  // platform sub-domains are in our own zone → active straight away
+  const s = await (await dom({ action: 'add', domain: 'citycare.hospital.digitalcomrade.in' }, 'tok-admin', asAdmin(CITY))).json()
+  assertEquals(s.domains.find((d: any) => d.domain === 'citycare.hospital.digitalcomrade.in').status, 'active')
+  // rules: the platform itself, another hospital's domain, junk
+  assertEquals((await dom({ action: 'add', domain: 'hospital.digitalcomrade.in' }, 'tok-admin', asAdmin(CITY))).status, 400)
+  assertEquals((await dom({ action: 'add', domain: 'dchospital.example' }, 'tok-admin', asAdmin(CITY))).status, 409)
+  assertEquals((await dom({ action: 'add', domain: 'not a domain' }, 'tok-admin', asAdmin(CITY))).status, 400)
+  await dom({ action: 'remove', domain: 'www.citycare.in' }, 'tok-admin', asAdmin(CITY))
+  await dom({ action: 'remove', domain: 'citycare.hospital.digitalcomrade.in' }, 'tok-admin', asAdmin(CITY))
+  assertEquals(db.tenant_domains.filter((d) => d.tenant_id === CITY), [])
+})
+
+Deno.test('domains: Cloudflare custom hostname — add, check until active, make primary, remove', async () => {
+  reset(); cfCalls.length = 0
+  Deno.env.set('CF_API_TOKEN', 'cf-token'); Deno.env.set('CF_ZONE_ID', 'zone-1'); Deno.env.set('CF_CNAME_TARGET', 'customers.hospital.digitalcomrade.in')
+  const a = await (await dom({ action: 'add', domain: 'www.citycare.in' }, 'tok-admin', asAdmin(CITY))).json()
+  assertEquals(a.target, 'customers.hospital.digitalcomrade.in')
+  const d = a.domains[0]
+  assertEquals([d.method, d.status, d.ssl_status, d.dns_target, d.is_primary, d.verified_at ?? null], ['cloudflare', 'pending', 'pending_validation', 'customers.hospital.digitalcomrade.in', true, null])
+  assert(/CNAME/.test(d.last_error))
+  assertEquals(d.verification.txt.name, '_cf-custom-hostname.www.citycare.in')
+  assertEquals(cfCalls[0].auth, 'Bearer cf-token')
+  assertEquals(cfCalls[0].body, { hostname: 'www.citycare.in', ssl: { method: 'http', type: 'dv', settings: { min_tls_version: '1.2' } } })
+  // the hospital adds its CNAME → Cloudflare validates; the owner may refresh the status
+  Object.assign(cfHosts.get('cfh-1'), { status: 'active', verification_errors: [], ssl: { status: 'active' } })
+  const c = await (await dom({ action: 'check', domain: 'www.citycare.in' }, 'tok-city-owner')).json()
+  assertEquals([c.domains[0].status, c.domains[0].ssl_status, !!c.domains[0].verified_at, c.domains[0].last_error], ['active', 'active', true, null])
+  // a second address, then make it the primary one
+  await dom({ action: 'add', domain: 'citycare.hospital.digitalcomrade.in' }, 'tok-admin', asAdmin(CITY))
+  const p = await (await dom({ action: 'primary', domain: 'citycare.hospital.digitalcomrade.in' }, 'tok-admin', asAdmin(CITY))).json()
+  assertEquals(p.domains.filter((x: any) => x.is_primary).map((x: any) => x.domain), ['citycare.hospital.digitalcomrade.in'])
+  // re-adding something Cloudflare already knows adopts it instead of failing
+  await dom({ action: 'remove', domain: 'citycare.hospital.digitalcomrade.in' }, 'tok-admin', asAdmin(CITY))
+  db.tenant_domains = db.tenant_domains.filter((x) => x.domain !== 'www.citycare.in')   // removed here only
+  const again = await (await dom({ action: 'add', domain: 'www.citycare.in' }, 'tok-admin', asAdmin(CITY))).json()
+  assertEquals(again.domains[0].status, 'active')
+  assertEquals(cfHosts.size, 1)
+  // remove → gone at Cloudflare too
+  await dom({ action: 'remove', domain: 'www.citycare.in' }, 'tok-admin', asAdmin(CITY))
+  assertEquals(cfHosts.size, 0)
+  assertEquals(db.tenant_domains.filter((x) => x.tenant_id === CITY), [])
+  // DC Hospital's address was never touched
+  assertEquals(db.tenant_domains.map((x) => x.domain), ['dchospital.example'])
 })

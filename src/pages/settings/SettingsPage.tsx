@@ -1,10 +1,11 @@
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
 import { useModuleLocks, type ModuleKey } from '../../tenancy/modules'
+import { tenancyEnabled } from '../../tenancy/state'
 import { platformName } from '../../lib/supabase'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BellRing, Building2, ClipboardList, CircleUserRound, Database, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2, UserCog } from 'lucide-react'
+import { BellRing, Building2, ClipboardList, CircleUserRound, Database, Globe, LayoutDashboard, Loader2, Palette, Receipt, Save, ShieldCheck, Undo2, UserCog } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
 import { Button, PageHeader, Skeleton } from '../../components/ui'
@@ -19,6 +20,7 @@ import { AppearanceTab, LOCKED_MODULES } from './AppearanceTab'
 import { BillingTab } from './BillingTab'
 import { DashboardTab } from './DashboardTab'
 import { DataTab } from './DataTab'
+import { DomainTab } from './DomainTab'
 import { FormsTab } from './FormsTab'
 import { GeneralTab } from './GeneralTab'
 import { NotificationsTab } from './NotificationsTab'
@@ -26,7 +28,7 @@ import { SecurityTab } from './SecurityTab'
 import { UsersTab } from './UsersTab'
 import type { TabCtx } from './shared'
 
-type TabId = 'general' | 'appearance' | 'dashboard' | 'users' | 'notifications' | 'billing' | 'forms' | 'security' | 'data' | 'account'
+type TabId = 'general' | 'appearance' | 'dashboard' | 'users' | 'notifications' | 'billing' | 'forms' | 'security' | 'data' | 'domain' | 'account'
 const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ className?: string }>; ownerOnly: boolean; module?: ModuleKey }[] = [
   { id: 'general', label: 'General & brand', hint: 'Logo, name, contacts, formats', icon: Building2, ownerOnly: true, module: 'general' },
   { id: 'appearance', label: 'Appearance', hint: 'Theme, layout, modules, banner', icon: Palette, ownerOnly: true, module: 'appearance' },
@@ -37,6 +39,7 @@ const TABS: { id: TabId; label: string; hint: string; icon: ComponentType<{ clas
   { id: 'forms', label: 'Website forms', hint: 'Contact, reviews, custom forms', icon: ClipboardList, ownerOnly: true, module: 'forms' },
   { id: 'security', label: 'Security & access', hint: 'Timeout, sign-in, roles', icon: ShieldCheck, ownerOnly: true, module: 'security' },
   { id: 'data', label: 'Data & backup', hint: 'Export, import, system', icon: Database, ownerOnly: true, module: 'data' },
+  { id: 'domain', label: 'Domain', hint: 'Website address & SSL', icon: Globe, ownerOnly: true },
   { id: 'account', label: 'My account', hint: 'Profile and your access', icon: CircleUserRound, ownerOnly: false },
 ]
 
@@ -58,7 +61,8 @@ export default function SettingsPage() {
   const isOwner = user?.role === 'owner'
   const locked = useModuleLocks()
   // locked modules are managed by the platform team and hidden from the hospital
-  const tabs = TABS.filter((t) => (isOwner || !t.ownerOnly) && !locked(t.module))
+  // Domain: multi-hospital installs only (a single-hospital install's address is set where it is deployed)
+  const tabs = TABS.filter((t) => (isOwner || !t.ownerOnly) && !locked(t.module) && (t.id !== 'domain' || tenancyEnabled()))
   const [params, setParams] = useSearchParams()
   const tab = (tabs.find((t) => t.id === params.get('tab'))?.id ?? tabs[0].id) as TabId
   const qc = useQueryClient()
@@ -165,7 +169,7 @@ export default function SettingsPage() {
 
         <div className="min-w-0 pb-24">
           <h2 className="sr-only">{current.label}</h2>
-          {tab === 'forms' ? <FormsTab onDirty={setFormsDirty} /> : tab === 'users' ? <UsersTab /> : !ctx && tab !== 'account' ? (
+          {tab === 'forms' ? <FormsTab onDirty={setFormsDirty} /> : tab === 'users' ? <UsersTab /> : tab === 'domain' ? <DomainTab /> : !ctx && tab !== 'account' ? (
             <div className="space-y-4" aria-busy="true"><Skeleton className="h-56 rounded-2xl" /><Skeleton className="h-40 rounded-2xl" /></div>
           ) : (
             <>

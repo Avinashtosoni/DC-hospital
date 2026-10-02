@@ -36,6 +36,14 @@ create table if not exists public.tenant_domains (
   created_at      timestamptz not null default now()
 );
 create index if not exists tenant_domains_tenant_idx on public.tenant_domains (tenant_id);
+-- phase 2.3 — custom domains through Cloudflare for SaaS (written by the `domains` Edge Function)
+alter table public.tenant_domains add column if not exists status       text;          -- Cloudflare hostname status: pending / active / moved / …
+alter table public.tenant_domains add column if not exists dns_target   text;          -- what the hospital's CNAME must point to
+alter table public.tenant_domains add column if not exists verification jsonb;         -- TXT / HTTP ownership + certificate validation records
+alter table public.tenant_domains add column if not exists last_error   text;
+alter table public.tenant_domains add column if not exists checked_at   timestamptz;
+-- one primary (canonical) address per hospital
+create unique index if not exists tenant_domains_one_primary on public.tenant_domains (tenant_id) where is_primary;
 
 create table if not exists public.provider_users (
   user_id         uuid primary key references auth.users (id) on delete cascade,
