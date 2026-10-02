@@ -38,7 +38,7 @@ const db: Record<string, any[]> = {
     { tenant_id: DC, key: 'settings', data: { name: 'DC Hospital' } },
     { tenant_id: CITY, key: 'settings', data: { name: 'City Care Clinic', phone: '+91 612 400 1100' } },
   ],
-  notification_templates: [], push_tokens: [], wa_sessions: [], notification_outbox: [], message_usage: [],
+  notification_templates: [], push_tokens: [], wa_sessions: [], notification_outbox: [], message_usage: [], billing_payments: [],
   platform_settings: [{ key: 'messaging', data: { templates: {} } }],
   tenant_domains: [{ domain: 'dchospital.example', tenant_id: DC, is_primary: true, method: 'manual' }],
 }
@@ -97,6 +97,17 @@ async function supabase(url: URL, init: RequestInit & { headers: Headers }): Pro
       row.sent += body.p_sent; row.failed += body.p_failed
       return reply(null, h)
     }
+    if (fn === 'billing_quote') {
+      if (body.p_kind === 'plan' && body.p_months !== 1 && body.p_months !== 12) return new Response('{"message":"Choose 1 month or 12 months."}', { status: 400 })
+      const base = body.p_kind === 'plan' ? 99900 * (body.p_months === 12 ? 10 : 1) : Math.round(body.p_amount * 100)
+      return reply({ kind: body.p_kind, plan: body.p_kind === 'plan' ? 'clinic' : null, months: body.p_kind === 'plan' ? body.p_months : null, base_paise: base, gst_paise: Math.round(base * 0.18), total_paise: base + Math.round(base * 0.18) }, h)
+    }
+    if (fn === 'apply_payment') {
+      const row = db.billing_payments.find((r) => r.id === body.p_payment)
+      if (row.status === 'paid') return reply({ ok: true, already: true, invoice_no: row.invoice_no }, h)
+      Object.assign(row, { status: 'paid', payment_id: body.p_ref, invoice_no: `HC/2026-27/${String(db.billing_payments.filter((r) => r.status === 'paid').length + 1).padStart(6, '0')}` })
+      return reply({ ok: true, already: false, invoice_no: row.invoice_no }, h)
+    }
     if (fn === 'public_doctors') {
       const t = h.get('x-tenant-id')
       return reply(t === CITY ? [{ id: 'doc-city', full_name: 'Dr. Vivek Mishra', specialization: 'General Medicine', department: 'Medicine', consultation_fee: 300 }] : [{ id: 'doc-dc', full_name: 'Dr. DC Only', specialization: 'Cardiology', department: 'Cardiology', consultation_fee: 900 }], h)
@@ -145,10 +156,18 @@ globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => 
   const headers = new Headers(init.headers ?? req?.headers)
   const body = init.body ?? (req ? await req.text() : undefined)
   if (url.origin === SB) return supabase(url, { ...init, method: init.method ?? req?.method, headers, body })
+  if (url.origin === 'https://api.razorpay.com') {
+    const b = JSON.parse(String(body))
+    rzpCalls.push({ path: url.pathname, auth: headers.get('authorization'), body: b })
+    if (headers.get('authorization') !== `Basic ${btoa('rzp_test_key:rzp_secret')}`) return new Response('{"error":{"description":"Authentication failed"}}', { status: 401 })
+    return new Response(JSON.stringify({ id: `order_${rzpCalls.length}`, amount: b.amount, currency: b.currency, status: 'created' }), { status: 200 })
+  }
   if (url.origin === 'https://api.cloudflare.com') return cloudflare(url, init.method ?? req?.method ?? 'GET', headers, body ? JSON.parse(String(body)) : null)
   sent.push({ url: url.href, auth: headers.get('authorization'), body: body ? JSON.parse(String(body)) : null })
   return new Response('{}', { status: 200, headers: { 'x-request-id': 'req-1' } })
 }) as typeof fetch
+
+const rzpCalls: { path: string; auth: string | null; body: any }[] = []
 
 // capture each function's handler instead of starting a server
 const handlers: ((req: Request) => Promise<Response>)[] = []
@@ -156,7 +175,8 @@ const handlers: ((req: Request) => Promise<Response>)[] = []
 await import('../../supabase/functions/notify/index.ts')
 await import('../../supabase/functions/whatsapp-bot/index.ts')
 await import('../../supabase/functions/domains/index.ts')
-const [notify, bot, domains] = handlers
+await import('../../supabase/functions/billing/index.ts')
+const [notify, bot, domains, billing] = handlers
 
 const post = (fn: typeof notify, body: unknown, token?: string, headers: Record<string, string> = {}, path = '') =>
   fn(new Request(`${SB}/functions/v1/x${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers }, body: JSON.stringify(body) }))
@@ -421,4 +441,65 @@ Deno.test('phase 4: beyond the included messages an empty wallet stops platform 
     delete tenant.plan; delete tenant.wallet_paise; delete tenant.billing
     for (const k of ['PLATFORM_SMS_PROVIDER', 'PLATFORM_FAST2SMS_API_KEY']) Deno.env.delete(k)
   }
+})
+
+// ------------------------------------------------------------------ billing (phase 4.3, Razorpay mocked)
+import { paymentSignature, webhookSignature } from '../../supabase/functions/_shared/razorpay.ts'
+const rzpEnv = (on: boolean) => {
+  for (const [k, v] of [['RAZORPAY_KEY_ID', 'rzp_test_key'], ['RAZORPAY_KEY_SECRET', 'rzp_secret'], ['RAZORPAY_WEBHOOK_SECRET', 'whsec']]) on ? Deno.env.set(k, v) : Deno.env.delete(k)
+}
+
+Deno.test('billing: only the owner (or platform admin/finance) can pay; without Razorpay keys it says so', async () => {
+  reset(); rzpEnv(false)
+  assertEquals((await post(billing, { action: 'order', kind: 'plan', months: 1 })).status, 403)
+  assertEquals((await post(billing, { action: 'order', kind: 'plan', months: 1 }, 'tok-city-reception')).status, 403)
+  assertEquals(await (await post(billing, { action: 'config' }, 'tok-city-owner')).json(), { enabled: false, key_id: null })
+  const r = await post(billing, { action: 'order', kind: 'plan', months: 1 }, 'tok-city-owner')
+  assertEquals(r.status, 503); assert(/not set up/.test((await r.json()).error))
+})
+
+Deno.test('billing: order → checkout → verify applies the payment once; a forged signature is refused', async () => {
+  reset(); rzpEnv(true); rzpCalls.length = 0; db.billing_payments = []
+  try {
+    const o = await (await post(billing, { action: 'order', kind: 'plan', months: 12, amount: 1 }, 'tok-city-owner')).json()
+    assertEquals([o.key_id, o.amount, o.currency, o.description], ['rzp_test_key', 1178820, 'INR', 'Clinic plan · 12 months'])
+    assertEquals(rzpCalls[0].body.amount, 1178820)                  // the price comes from the database, not the browser
+    assertEquals(rzpCalls[0].body.notes.tenant, CITY)
+    const row = db.billing_payments[0]
+    assertEquals([row.tenant_id, row.order_id, row.status ?? 'created', row.created_by], [CITY, o.order_id, 'created', 'c1c-1'])
+
+    const bad = await post(billing, { action: 'verify', order_id: o.order_id, payment_id: 'pay_1', signature: 'deadbeef' }, 'tok-city-owner')
+    assertEquals(bad.status, 400)
+    const signature = await paymentSignature('rzp_secret', o.order_id, 'pay_1')
+    const ok = await (await post(billing, { action: 'verify', order_id: o.order_id, payment_id: 'pay_1', signature }, 'tok-city-owner')).json()
+    assertEquals(ok, { ok: true, already: false, invoice_no: 'HC/2026-27/000001' })
+    // another hospital can't claim it
+    const dc = await post(billing, { action: 'verify', order_id: o.order_id, payment_id: 'pay_1', signature }, 'tok-admin', { 'x-tenant-id': DC })
+    assertEquals(dc.status, 404)
+    // the webhook arriving later changes nothing
+    const ev = JSON.stringify({ event: 'payment.captured', payload: { payment: { entity: { id: 'pay_1', order_id: o.order_id, method: 'upi' } } } })
+    const wh = await billing(new Request(`${SB}/functions/v1/billing?webhook=razorpay`, { method: 'POST', headers: { 'x-razorpay-signature': await webhookSignature('whsec', ev) }, body: ev }))
+    assertEquals((await wh.json()).already, true)
+  } finally { rzpEnv(false) }
+})
+
+Deno.test('billing: the webhook applies a payment when the browser never returned; bad signatures and unknown orders are ignored', async () => {
+  reset(); rzpEnv(true); rzpCalls.length = 0; db.billing_payments = []
+  try {
+    const o = await (await post(billing, { action: 'order', kind: 'wallet', amount: 1000 }, 'tok-admin', { 'x-tenant-id': CITY, 'x-provider-mode': 'finance' })).json()
+    assertEquals(o.amount, 118000)
+    const ev = JSON.stringify({ event: 'order.paid', payload: { order: { entity: { id: o.order_id } }, payment: { entity: { id: 'pay_9', order_id: o.order_id, method: 'card' } } } })
+    const forged = await billing(new Request(`${SB}/functions/v1/billing?webhook=razorpay`, { method: 'POST', headers: { 'x-razorpay-signature': 'abc' }, body: ev }))
+    assertEquals(forged.status, 401)
+    assertEquals(db.billing_payments[0].status ?? 'created', 'created')
+    const r = await billing(new Request(`${SB}/functions/v1/billing?webhook=razorpay`, { method: 'POST', headers: { 'x-razorpay-signature': await webhookSignature('whsec', ev) }, body: ev }))
+    assertEquals((await r.json()).invoice_no, 'HC/2026-27/000001')
+    assertEquals([db.billing_payments[0].status, db.billing_payments[0].payment_id], ['paid', 'pay_9'])
+    const other = JSON.stringify({ event: 'payment.captured', payload: { payment: { entity: { id: 'pay_x', order_id: 'order_other_app' } } } })
+    const ig = await billing(new Request(`${SB}/functions/v1/billing?webhook=razorpay`, { method: 'POST', headers: { 'x-razorpay-signature': await webhookSignature('whsec', other) }, body: other }))
+    assertEquals(await ig.json(), { ok: true, ignored: 'unknown order' })
+    // bad plan length → the database's message
+    const bad = await post(billing, { action: 'order', kind: 'plan', months: 3 }, 'tok-city-owner')
+    assertEquals(bad.status, 400); assert(/1 month or 12/.test((await bad.json()).error))
+  } finally { rzpEnv(false) }
 })
