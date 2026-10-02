@@ -7,9 +7,9 @@
  *   ?hospital=main       back to DC Hospital
  */
 import type { Profile, Role } from '../types'
-import { activeTenantId, type ProviderRole, type TenantInfo } from './state'
+import { activeTenantId, PRIMARY_TENANT_ID, type ProviderRole, type TenantInfo } from './state'
 
-export const PRIMARY_TENANT_ID = 'a0000000-0000-4000-8000-000000000001'
+export { PRIMARY_TENANT_ID }
 export const CITY_TENANT_ID = 'b0000000-0000-4000-8000-000000000002'
 
 const MODULES = ['general', 'appearance', 'dashboard', 'notifications', 'forms', 'security', 'data', 'cms'] as const

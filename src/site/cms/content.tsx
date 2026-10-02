@@ -1,12 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '../../lib/utils'
-import { DEFAULT_CONTENT } from './defaults'
+import { activeTenantId, isPrimaryTenant } from '../../tenancy/state'
+import { baseContent } from './starter'
 import { cms, type ContentRows } from './store'
 import { CONTENT_KEYS, type ContentKey, type SiteContent, type SiteDoctor, type SiteSettings } from './types'
 
 export const CONTENT_QK = ['site-content'] as const
-const CACHE_KEY = 'dch:site-cache:v1'
+/** offline/instant-load cache — one per hospital, so a provider switching hospitals never sees another one's site */
+const cacheKey = () => `dch:site-cache:v1${isPrimaryTenant() ? '' : `@${activeTenantId()}`}`
 export const PREVIEW_CHANNEL = 'dch-cms-preview'
 export const PREVIEW_WINDOW = 'dch-cms-preview'
 
@@ -25,11 +27,14 @@ export function deepMerge<T>(base: T, over: unknown): T {
   return (typeof over === typeof base ? over : base) as T
 }
 
-export function mergeRows(rows: ContentRows | undefined, drafts: Partial<Record<ContentKey, unknown>> = {}): SiteContent {
+/** the built-in content this tab's hospital falls back to (DC Hospital's own site for the primary hospital, a neutral starter otherwise) */
+export const defaultContent = (): SiteContent => baseContent(isPrimaryTenant())
+
+export function mergeRows(rows: ContentRows | undefined, drafts: Partial<Record<ContentKey, unknown>> = {}, base: SiteContent = defaultContent()): SiteContent {
   const out = {} as Record<ContentKey, unknown>
   for (const k of CONTENT_KEYS) {
     const saved = k in drafts ? drafts[k] : rows?.[k]?.data
-    out[k] = deepMerge(DEFAULT_CONTENT[k], saved)
+    out[k] = deepMerge(base[k], saved)
   }
   return out as unknown as SiteContent
 }
@@ -66,7 +71,7 @@ export function toPublic(c: SiteContent): SiteContent {
 }
 
 // ------------------------------------------------------------------ data hooks
-const readCache = (): ContentRows | undefined => { try { const v = localStorage.getItem(CACHE_KEY); return v ? JSON.parse(v) : undefined } catch { return undefined } }
+const readCache = (): ContentRows | undefined => { try { const v = localStorage.getItem(cacheKey()); return v ? JSON.parse(v) : undefined } catch { return undefined } }
 
 /** Raw saved rows (what the CMS edits). Cached in localStorage so repeat visits render instantly. */
 export function useContentRows(opts: { enabled?: boolean } = {}) {
@@ -75,7 +80,7 @@ export function useContentRows(opts: { enabled?: boolean } = {}) {
     queryKey: CONTENT_QK,
     queryFn: async () => {
       const rows = await cms.fetchAll()
-      try { if (cms.mode === 'supabase') localStorage.setItem(CACHE_KEY, JSON.stringify(rows)) } catch { /* quota */ }
+      try { if (cms.mode === 'supabase') localStorage.setItem(cacheKey(), JSON.stringify(rows)) } catch { /* quota */ }
       return rows
     },
     placeholderData: cms.mode === 'supabase' ? readCache : undefined,
@@ -118,7 +123,7 @@ export function SiteContentProvider({ children, fallback }: { children: ReactNod
 export function useSite(): SiteContent {
   const c = useContext(Ctx)
   // Outside the provider (e.g. tests) fall back to defaults.
-  return c?.content ?? toPublic(DEFAULT_CONTENT)
+  return c?.content ?? toPublic(defaultContent())
 }
 export const useIsPreview = () => useContext(Ctx)?.preview ?? false
 

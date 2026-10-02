@@ -25,17 +25,22 @@ export default function About() {
         aside={
           <div className="relative mx-auto max-w-[520px]">
             <div aria-hidden="true" className="absolute -inset-6 rounded-[3rem] bg-gradient-to-br from-peri-300/70 to-transparent blur-2xl" />
-            <div className="relative grid grid-cols-3 gap-3">
+            {mosaic.length === 0 && (
+              <div className="relative overflow-hidden rounded-[2.5rem] border-[6px] border-white bg-peri-300 shadow-soft">
+                <img src={a.mission.image} alt="" width={1100} height={821} className="aspect-[4/3.3] w-full object-cover" />
+              </div>
+            )}
+            {mosaic.length > 0 && <div className="relative grid grid-cols-3 gap-3">
               {mosaic.map((d, i) => (
                 <div key={d.slug} className={`overflow-hidden rounded-3xl border-4 border-white bg-peri-300 shadow-soft ${i % 3 === 1 ? 'translate-y-8' : ''}`}>
                   <img src={d.img} alt={d.name} width={280} height={280} className="aspect-square w-full object-cover transition duration-700 hover:scale-110" />
                 </div>
               ))}
-            </div>
-            <div className="glass absolute -bottom-10 left-1/2 flex w-max -translate-x-1/2 items-center gap-3 rounded-2xl px-5 py-3">
+            </div>}
+            {a.hero.badgeTitle && <div className="glass absolute -bottom-10 left-1/2 flex w-max -translate-x-1/2 items-center gap-3 rounded-2xl px-5 py-3">
               <span className="grid h-10 w-10 place-items-center rounded-xl bg-peri-800 text-white"><Award className="h-5 w-5" /></span>
               <div className="leading-tight"><p className="font-display text-lg font-extrabold text-peri-900">{a.hero.badgeTitle}</p><p className="text-xs text-slate-500">{a.hero.badgeText}</p></div>
-            </div>
+            </div>}
           </div>
         }
       >
@@ -46,7 +51,8 @@ export default function About() {
       </PageHero>
 
       {/* stats */}
-      <section aria-label="DC Hospital in numbers" className="pb-10 pt-16">
+      {STATS.length > 0 && (
+      <section aria-label="In numbers" className="pb-10 pt-16">
         <div className={cn('l-container grid grid-cols-2 gap-3 sm:gap-4', STATS.length === 3 ? 'lg:grid-cols-3' : 'lg:grid-cols-4')}>
           {STATS.map((s, i) => (
             <Reveal key={s.label} delay={i * 90} className="rounded-3xl border border-peri-200/80 bg-white/80 p-5 text-center shadow-soft sm:p-7">
@@ -56,6 +62,7 @@ export default function About() {
           ))}
         </div>
       </section>
+      )}
 
       {/* mission / vision */}
       <section className="py-20 sm:py-24" aria-labelledby="mission-title">
@@ -86,6 +93,7 @@ export default function About() {
       </section>
 
       {/* timeline */}
+      {a.journey.milestones.length > 0 && (
       <section className="relative overflow-hidden py-20 sm:py-28" aria-labelledby="journey-title">
         <div aria-hidden="true" className="absolute inset-0 -z-10 bg-gradient-to-b from-transparent via-peri-100/60 to-transparent" />
         <div className="l-container">
@@ -105,6 +113,7 @@ export default function About() {
           </ol>
         </div>
       </section>
+      )}
 
       {/* values */}
       <section className="py-20 sm:py-24" aria-labelledby="values-title">
@@ -125,6 +134,7 @@ export default function About() {
       </section>
 
       {/* leadership */}
+      {leaders.length > 0 && (
       <section className="py-20 sm:py-24" aria-labelledby="leaders-title">
         <div className="l-container">
           <SectionHeader id="leaders-title" eyebrow={a.leadership.eyebrow} title={a.leadership.title} />
@@ -152,8 +162,10 @@ export default function About() {
           </div>
         </div>
       </section>
+      )}
 
       {/* accreditations */}
+      {a.accreditations.items.length > 0 && (
       <section className="py-12" aria-labelledby="acc-title">
         <div className="l-container">
           <Reveal className="rounded-[2rem] border border-peri-200 bg-white/80 p-6 shadow-soft backdrop-blur sm:p-10">
@@ -175,6 +187,7 @@ export default function About() {
           </Reveal>
         </div>
       </section>
+      )}
 
       <CtaBand title={a.cta.title} lead={a.cta.lead} />
     </>

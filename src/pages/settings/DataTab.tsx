@@ -8,8 +8,7 @@ import { db } from '../../data/adapter'
 import { Badge, Button, ConfirmDialog } from '../../components/ui'
 import { isSupabaseConfigured } from '../../lib/supabase'
 import { fmtDate } from '../../lib/utils'
-import { deepMerge } from '../../site/cms/content'
-import { DEFAULT_CONTENT } from '../../site/cms/defaults'
+import { deepMerge, defaultContent } from '../../site/cms/content'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
 import { DEFAULT_APP_SETTINGS } from '../../settings/types'
 import { Section, type TabCtx } from './shared'
@@ -41,7 +40,7 @@ export function DataTab({ ctx }: { ctx: TabCtx }) {
       const j = JSON.parse(await f.text())
       if (j?.kind !== 'dc-hospital-settings' || typeof j.app_settings !== 'object') throw new Error('This is not a settings export file')
       ctx.editApp((d) => Object.assign(d, deepMerge(DEFAULT_APP_SETTINGS, j.app_settings)))
-      if (j.site_settings && typeof j.site_settings === 'object') ctx.editSite((d) => Object.assign(d, deepMerge(DEFAULT_CONTENT.settings, j.site_settings)))
+      if (j.site_settings && typeof j.site_settings === 'object') ctx.editSite((d) => Object.assign(d, deepMerge(defaultContent().settings, j.site_settings)))
       toast.success('Settings imported', { description: 'Review the tabs, then click Save changes.' })
     } catch (e) { toast.error((e as Error).message) }
   }

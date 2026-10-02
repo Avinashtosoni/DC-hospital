@@ -59,10 +59,21 @@ export function tenancyEnabled() { return enabled }
 export function setSiteTenant(t: TenantInfo | null) { site = t }
 export function siteTenant() { return site }
 
+/** fixed id of the primary hospital (the original single-hospital install) — same value as in tenancy_core.sql */
+export const PRIMARY_TENANT_ID = 'a0000000-0000-4000-8000-000000000001'
+
 /** provider's chosen hospital (falls back to the website's hospital) */
 export function activeTenantId(): string | null {
   const id = choice.tenantId && UUID.test(choice.tenantId) ? choice.tenantId : null
   return id ?? site?.id ?? null
+}
+/** is the hospital this tab works in the primary one? (always true for single-hospital installs) */
+export function isPrimaryTenant(): boolean {
+  if (!enabled) return true
+  const id = activeTenantId()
+  if (!id) return true
+  if (id === site?.id && site?.is_primary !== undefined) return !!site.is_primary
+  return id === PRIMARY_TENANT_ID
 }
 export function providerChoice(): ProviderChoice { return { ...choice } }
 export function chooseProviderTenant(tenantId: string | null) { choice = { ...choice, tenantId }; writeChoice(choice) }

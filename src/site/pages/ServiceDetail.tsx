@@ -38,12 +38,12 @@ export default function ServiceDetail() {
               <div aria-hidden="true" className="absolute -right-14 -top-14 h-52 w-52 rounded-full bg-peri-500/50 blur-3xl" />
               <div aria-hidden="true" className="motion-safe-only absolute -bottom-10 -left-10 h-40 w-40 animate-drift rounded-full bg-peri-300/20 blur-3xl" />
               <span className="relative grid h-16 w-16 place-items-center rounded-2xl bg-white/15 backdrop-blur"><Icon className="h-8 w-8" /></span>
-              <dl className="relative mt-8 grid grid-cols-3 gap-4">
+              {s.stats.length > 0 && <dl className="relative mt-8 grid grid-cols-3 gap-4">
                 {s.stats.map(({ value: v, label: l }) => (
                   <div key={l}><dt className="sr-only">{l}</dt><dd className="whitespace-nowrap font-display text-lg font-extrabold sm:text-xl">{v}</dd><dd className="mt-1 text-[11px] leading-tight text-peri-300">{l}</dd></div>
                 ))}
-              </dl>
-              <p className="relative mt-8 flex items-start gap-2 rounded-2xl bg-white/10 p-3 text-xs text-peri-100"><Clock className="mt-0.5 h-4 w-4 shrink-0" />{s.hours}</p>
+              </dl>}
+              {s.hours && <p className="relative mt-8 flex items-start gap-2 rounded-2xl bg-white/10 p-3 text-xs text-peri-100"><Clock className="mt-0.5 h-4 w-4 shrink-0" />{s.hours}</p>}
             </div>
           </div>
         }
@@ -102,7 +102,7 @@ export default function ServiceDetail() {
                 <p className="mt-1 text-sm text-slate-500">Confirmed instantly. No booking fee.</p>
                 <Link to={book} className="btn-peri mt-5 w-full">Book now<ArrowRight className="h-4 w-4" /></Link>
                 <a href={c.tel} className="btn-ghost mt-3 w-full"><Phone className="h-4 w-4" />Call {c.phone}</a>
-                <p className="mt-5 flex items-start gap-2 border-t border-peri-100 pt-4 text-xs text-slate-500"><Clock className="mt-0.5 h-4 w-4 shrink-0 text-peri-500" />{s.hours}</p>
+                {s.hours && <p className="mt-5 flex items-start gap-2 border-t border-peri-100 pt-4 text-xs text-slate-500"><Clock className="mt-0.5 h-4 w-4 shrink-0 text-peri-500" />{s.hours}</p>}
               </div>
               {related.length > 0 && <div className="rounded-[1.75rem] border border-peri-200 bg-white/80 p-5 shadow-soft">
                 <p className="text-xs font-semibold uppercase tracking-wider text-peri-500">Other specialities</p>

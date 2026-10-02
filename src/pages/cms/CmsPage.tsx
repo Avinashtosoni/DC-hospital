@@ -12,8 +12,7 @@ import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
 import { Badge, Button, ConfirmDialog, Drawer, EmptyState, Skeleton } from '../../components/ui'
 import { ago, cn, fmtDate } from '../../lib/utils'
-import { CONTENT_QK, PREVIEW_CHANNEL, PREVIEW_WINDOW, deepMerge, mergeRows, useContentRows } from '../../site/cms/content'
-import { DEFAULT_CONTENT } from '../../site/cms/defaults'
+import { CONTENT_QK, PREVIEW_CHANNEL, PREVIEW_WINDOW, deepMerge, defaultContent, mergeRows, useContentRows } from '../../site/cms/content'
 import { cms, type ContentRows, type Revision } from '../../site/cms/store'
 import type { ContentKey } from '../../site/cms/types'
 import { FieldsForm } from './fields'
@@ -132,13 +131,13 @@ export default function CmsPage() {
       qc.setQueryData<ContentRows>(CONTENT_QK, (old) => { const n = { ...(old ?? {}) }; delete n[k]; return n })
       qc.invalidateQueries({ queryKey: ['cms-history', k] })
       setDrafts((d) => { const n = { ...d }; delete n[k]; return n })
-      post(k, DEFAULT_CONTENT[k]); setResetOpen(false); clearHist(k)
+      post(k, defaultContent()[k]); setResetOpen(false); clearHist(k)
       toast.success('Restored the original content', { description: 'The previous version is kept in History.' })
     },
     onError: (e) => toast.error((e as Error).message),
   })
   const restore = (rev: Revision) => {
-    const data = deepMerge(DEFAULT_CONTENT[rev.key], rev.data)
+    const data = deepMerge(defaultContent()[rev.key], rev.data)
     setDrafts((d) => ({ ...d, [rev.key]: data })); post(rev.key, data); setHistoryOpen(false)
     toast.success('Version loaded into the editor', { description: 'Review it, then press Publish to make it live.' })
   }

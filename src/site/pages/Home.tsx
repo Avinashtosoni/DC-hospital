@@ -47,7 +47,7 @@ function Words({ text, delay }: { text: string; delay: number }) {
 
 function Hero() {
   const navigate = useNavigate()
-  const { home: { hero }, services, doctors } = useSite()
+  const { home: { hero, insurers }, services, doctors } = useSite()
   const FEATURED = useFeatured()
   const [spec, setSpec] = useState('')
   const [when, setWhen] = useState<'Today' | 'Tomorrow' | 'Later'>('Today')
@@ -123,16 +123,16 @@ function Hero() {
           </form>
 
           {/* trust row */}
-          <div className="l-rise mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center lg:justify-start" style={{ animationDelay: '1000ms' }}>
+          {(FEATURED.length > 0 || hero.rating || hero.trust) && <div className="l-rise mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center lg:justify-start" style={{ animationDelay: '1000ms' }}>
             <div className="flex -space-x-3">
               {FEATURED.slice(0, 4).map((d) => <img key={d.slug} src={d.img} alt="" width={40} height={40} className="h-10 w-10 rounded-full border-2 border-white bg-peri-200 object-cover shadow-sm" />)}
               {doctors.length > 4 && <span className="grid h-10 w-10 place-items-center rounded-full border-2 border-white bg-peri-800 text-[11px] font-bold text-white">+{doctors.length - Math.min(4, FEATURED.length)}</span>}
             </div>
-            <div className="text-center sm:text-left">
-              <div className="flex items-center justify-center gap-2 sm:justify-start"><Stars value={5} /><span className="text-sm font-bold text-peri-900">{hero.rating}</span></div>
-              <p className="text-xs text-slate-500"><Rich text={hero.trust} hl="font-bold text-peri-800" /></p>
-            </div>
-          </div>
+            {(hero.rating || hero.trust) && <div className="text-center sm:text-left">
+              {hero.rating && <div className="flex items-center justify-center gap-2 sm:justify-start"><Stars value={5} /><span className="text-sm font-bold text-peri-900">{hero.rating}</span></div>}
+              {hero.trust && <p className="text-xs text-slate-500"><Rich text={hero.trust} hl="font-bold text-peri-800" /></p>}
+            </div>}
+          </div>}
         </div>
 
         {/* visual */}
@@ -186,12 +186,12 @@ function Hero() {
             </div>
           </div>
 
-          <div className="absolute -bottom-4 right-3 sm:-right-4" style={depth(-14)}>
+          {insurers.length > 0 && <div className="absolute -bottom-4 right-3 sm:-right-4" style={depth(-14)}>
             <div className="l-rise flex items-center gap-2 rounded-2xl bg-peri-900 px-4 py-3 text-white shadow-glow" style={{ animationDelay: '1350ms' }}>
               <ShieldCheck className="h-5 w-5 text-peri-300" />
               <div className="leading-tight"><p className="text-xs font-semibold">Cashless</p><p className="text-[11px] text-peri-300">30+ insurers</p></div>
             </div>
-          </div>
+          </div>}
         </div>
       </div>
     </section>
@@ -203,7 +203,7 @@ function Hero() {
 function SocialProof() {
   const { stats: STATS, insurers: INSURERS, insurersTitle } = useSite().home
   return (
-    <section aria-label="DC Hospital in numbers" className="relative py-10 sm:py-14">
+    <section aria-label="In numbers" className="relative py-10 sm:py-14">
       <div className="l-container">
         <div className={cn('grid grid-cols-2 gap-3 sm:gap-4', STATS.length === 3 ? 'lg:grid-cols-3' : 'lg:grid-cols-4')}>
           {STATS.map((s, i) => (
@@ -216,9 +216,9 @@ function SocialProof() {
           ))}
         </div>
 
-        <Reveal className="mt-12 text-center" delay={100}>
+        {insurersTitle && INSURERS.length > 0 && <Reveal className="mt-12 text-center" delay={100}>
           <p className="text-xs font-semibold uppercase tracking-[.2em] text-peri-500">{insurersTitle}</p>
-        </Reveal>
+        </Reveal>}
         {INSURERS.length > 0 && <div className="mask-fade-x group mt-6 overflow-hidden" aria-hidden="true">
           <div className="motion-safe-only flex w-max animate-marquee gap-4 group-hover:[animation-play-state:paused]">
             {[...INSURERS, ...INSURERS].map((n, i) => (
@@ -511,7 +511,7 @@ function Testimonials() {
       <div className="l-container">
         <SectionHeader id="testimonials-title" eyebrow={home.testimonials.eyebrow} title={home.testimonials.title} lead={home.testimonials.lead} />
         <Reveal delay={200} className="mt-6 flex items-center justify-center gap-3 text-sm text-slate-600">
-          <Stars value={5} /><Rich text={home.testimonials.reviews} hl="font-bold text-peri-900" />
+          {home.testimonials.reviews && <><Stars value={5} /><Rich text={home.testimonials.reviews} hl="font-bold text-peri-900" /></>}
         </Reveal>
       </div>
       <div className="mt-12 space-y-5">
