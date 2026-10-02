@@ -113,8 +113,9 @@ export const missingAccountError = (channel: Channel) => `Hospital Comrade ${cha
 /** First day of the current month in India — the metering period. */
 export const usageMonth = (now = Date.now()) => new Date(now + 5.5 * 3600_000).toISOString().slice(0, 7) + '-01'
 
-/** OTPs always go out (patients must be able to book and sign in) — they are still counted. */
-export const exemptFromLimit = (event: string) => event === 'otp' || event === 'password_otp'
+/** OTPs always go out (patients must be able to book and sign in) and so do renewal reminders to the owner
+ *  (an empty wallet must not hide "your plan ends") — they are still counted. */
+export const exemptFromLimit = (event: string) => event === 'otp' || event === 'password_otp' || event === 'billing_reminder'
 
 /** null when allowed, otherwise the reason (matches isPermanent: "allowance"). */
 export function overAllowance(m: Pick<Msg, 'event' | 'channel'>, used: number, tenant?: TenantMessaging | null): string | null {

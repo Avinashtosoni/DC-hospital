@@ -2950,6 +2950,8 @@ begin
     execute $c$ select cron.schedule('dch-notify-flush', '* * * * *', 'select public.notify_cron_flush()') $c$;
     execute $c$ select cron.schedule('dch-scheduled-messages', '*/5 * * * *', 'select public.run_scheduled_notifications()') $c$;
     execute $c$ select cron.schedule('dch-appointment-reminders', '30 12 * * *', 'select public.queue_appointment_reminders()') $c$;  -- 18:00 IST
+    -- Hospital Comrade renewal reminders to owners (phase 6); the function exists once billing.sql is loaded
+    execute $c$ select cron.schedule('dch-billing-reminders', '0 4 * * *', 'select public.queue_billing_reminders()') $c$;  -- 09:30 IST
     execute $c$ select cron.schedule('dch-outbox-cleanup', '15 21 * * 0', $d$delete from public.notification_outbox where created_at < now() - interval '400 days'$d$) $c$;
   elsif exists (select 1 from pg_extension where extname = 'pg_cron') then
     for j in execute $q$ select jobid from cron.job where jobname like 'dch-%' $q$ loop
@@ -3635,7 +3637,7 @@ insert into public.platform_settings (key, data) values ('messaging', '{"templat
 --  • Prices, GST, trial / grace days and message rates: platform_settings 'billing' (defaults from src/platform/billing.ts);
 --    per-hospital overrides in tenants.billing (custom price, included messages, rates).
 
-insert into public.platform_settings (key, data) values ('billing', $json${"currency":"INR","gstPercent":18,"trialDays":14,"graceDays":7,"yearlyMonths":10,"minTopup":500,"maxTopup":100000,"ratesPaise":{"sms":30,"whatsapp":40,"email":2},"plans":{"clinic":{"price":999,"included":{"sms":100,"whatsapp":300,"email":1000}},"hospital":{"price":2999,"included":{"sms":500,"whatsapp":1500,"email":5000}},"enterprise":{"price":7999,"included":{"sms":2000,"whatsapp":5000,"email":20000}},"custom":{"price":null,"included":{"sms":0,"whatsapp":0,"email":0}}},"seller":{"name":"Digital Comrade","gstin":"","address":"","state":"Bihar","email":""}}$json$::jsonb)
+insert into public.platform_settings (key, data) values ('billing', $json${"currency":"INR","gstPercent":18,"trialDays":14,"graceDays":7,"yearlyMonths":10,"minTopup":500,"maxTopup":100000,"ratesPaise":{"sms":30,"whatsapp":40,"email":2},"plans":{"clinic":{"price":999,"included":{"sms":100,"whatsapp":300,"email":1000}},"hospital":{"price":2999,"included":{"sms":500,"whatsapp":1500,"email":5000}},"enterprise":{"price":7999,"included":{"sms":2000,"whatsapp":5000,"email":20000}},"custom":{"price":null,"included":{"sms":0,"whatsapp":0,"email":0}}},"seller":{"name":"Digital Comrade","gstin":"","address":"","state":"Bihar","email":"","sac":"998315"}}$json$::jsonb)
 on conflict (key) do update set data = excluded.data || public.platform_settings.data;   -- new keys arrive, saved values win
 
 create or replace function public.billing_config()
@@ -3669,6 +3671,8 @@ create table if not exists public.billing_payments (
   note         text,
   created_by   uuid
 );
+-- phase 6: the seller printed on the tax invoice, as it was when the invoice was numbered (invoices never change later)
+alter table public.billing_payments add column if not exists seller jsonb;
 create index if not exists billing_payments_tenant_idx on public.billing_payments (tenant_id, created_at desc);
 
 create table if not exists public.wallet_ledger (
@@ -3809,10 +3813,13 @@ end $$;
 
 -- ------------------------------------------------------------------ prices
 -- What a plan renewal (1 or 12 months) or a wallet top-up (₹) costs this hospital, GST included.
-create or replace function public.billing_quote(p_tenant uuid, p_kind text, p_months int default 1, p_amount numeric default null)
+-- p_plan (phase 6): renew on another plan — it switches when the payment arrives (custom-priced hospitals: ask the team)
+drop function if exists public.billing_quote(uuid, text, int, numeric);
+create or replace function public.billing_quote(p_tenant uuid, p_kind text, p_months int default 1, p_amount numeric default null, p_plan text default null)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare
   t      public.tenants;
+  v_plan text;
   cfg    jsonb := public.billing_config();
   v_gst  numeric := coalesce((cfg ->> 'gstPercent')::numeric, 18);
   v_price numeric;
@@ -3824,14 +3831,22 @@ begin
   if not found then raise exception 'No hospital selected'; end if;
   if p_kind = 'plan' then
     if coalesce(p_months, 0) not in (1, 12) then raise exception 'Choose 1 month or 12 months.'; end if;
-    v_price := coalesce((t.billing ->> 'price')::numeric, (cfg -> 'plans' -> t.plan ->> 'price')::numeric);
+    v_plan := coalesce(nullif(p_plan, ''), t.plan);
+    if v_plan <> t.plan then
+      if not (cfg -> 'plans' ? v_plan) then raise exception 'Unknown plan %', v_plan; end if;
+      if (t.billing ->> 'price') is not null then
+        raise exception 'Your price was agreed with Hospital Comrade — ask them to change your plan.';
+      end if;
+    end if;
+    v_price := case when v_plan = t.plan then coalesce((t.billing ->> 'price')::numeric, (cfg -> 'plans' -> t.plan ->> 'price')::numeric)
+                    else (cfg -> 'plans' -> v_plan ->> 'price')::numeric end;
     if v_price is null or v_price <= 0 then
       raise exception 'Your plan is priced individually — Hospital Comrade will send you the payment details.';
     end if;
     v_base := round(v_price * 100 * case when p_months = 12 then coalesce((cfg ->> 'yearlyMonths')::int, 12) else 1 end);
     -- the new period starts after whatever is already paid (or the trial), never in the past
     v_from := greatest(v_today, (greatest(coalesce(t.paid_until, '-infinity'::timestamptz), coalesce(t.trial_ends_at, '-infinity'::timestamptz)) at time zone 'Asia/Kolkata')::date);
-    return jsonb_build_object('kind', 'plan', 'plan', t.plan, 'months', p_months, 'base_paise', v_base,
+    return jsonb_build_object('kind', 'plan', 'plan', v_plan, 'months', p_months, 'base_paise', v_base,
       'gst_paise', round(v_base * v_gst / 100)::bigint, 'total_paise', v_base + round(v_base * v_gst / 100)::bigint, 'gst_percent', v_gst,
       'period_from', v_from, 'period_to', (v_from + make_interval(months => p_months) - interval '1 day')::date);
   elsif p_kind = 'wallet' then
@@ -3866,6 +3881,7 @@ begin
   select * into t from public.tenants where id = p.tenant_id for update;
   update public.billing_payments set status = 'paid', paid_at = now(), invoice_no = v_inv,
          payment_id = coalesce(p_ref, payment_id), method = coalesce(p_method, method),
+         seller = coalesce(seller, public.billing_config() -> 'seller'),
          buyer = case when buyer = '{}'::jsonb then jsonb_build_object('name', coalesce(t.billing ->> 'legalName', t.name), 'gstin', coalesce(t.billing ->> 'gstin', ''),
                                                                        'address', coalesce(t.billing ->> 'address', '')) else buyer end
    where id = p.id;
@@ -3902,14 +3918,113 @@ begin
     'gst_percent', coalesce((cfg ->> 'gstPercent')::numeric, 18), 'yearly_months', coalesce((cfg ->> 'yearlyMonths')::int, 12),
     'min_topup', coalesce((cfg ->> 'minTopup')::numeric, 500), 'max_topup', coalesce((cfg ->> 'maxTopup')::numeric, 100000),
     'buyer', jsonb_build_object('legalName', coalesce(t.billing ->> 'legalName', t.name), 'gstin', coalesce(t.billing ->> 'gstin', ''), 'address', coalesce(t.billing ->> 'address', '')),
+    -- phase 6: plan picker + invoices
+    'custom_price', (t.billing ->> 'price') is not null,
+    'plans', coalesce((select jsonb_object_agg(e.key, jsonb_build_object('price', e.value -> 'price', 'included', e.value -> 'included')) from jsonb_each(cfg -> 'plans') e), '{}'::jsonb),
+    'seller', coalesce(cfg -> 'seller', '{}'::jsonb),
     'usage', coalesce((select jsonb_object_agg(channel, sent) from public.message_usage where tenant_id = t.id and month = v_month and source = 'platform'), '{}'::jsonb));
 end $$;
 
-create or replace function public.my_billing_quote(p_kind text, p_months int default 1, p_amount numeric default null)
+drop function if exists public.my_billing_quote(text, int, numeric);
+create or replace function public.my_billing_quote(p_kind text, p_months int default 1, p_amount numeric default null, p_plan text default null)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 begin
   if not public.has_role('owner', 'accountant') then raise exception 'Only the owner or accountant can see prices.' using errcode = '42501'; end if;
-  return public.billing_quote(public.current_tenant(), p_kind, p_months, p_amount);
+  return public.billing_quote(public.current_tenant(), p_kind, p_months, p_amount, p_plan);
+end $$;
+
+-- phase 6: during the free trial (nothing paid yet) the owner may try another plan straight away
+create or replace function public.change_trial_plan(p_plan text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare t public.tenants; cfg jsonb := public.billing_config();
+begin
+  if not public.has_role('owner') then raise exception 'Only the owner can change the plan.' using errcode = '42501'; end if;
+  select * into t from public.tenants where id = public.current_tenant() for update;
+  if not found or t.is_primary then raise exception 'No plan to change here.'; end if;
+  if not (cfg -> 'plans' ? coalesce(p_plan, '')) then raise exception 'Unknown plan %', p_plan; end if;
+  if (cfg -> 'plans' -> p_plan ->> 'price') is null then raise exception 'That plan is priced individually — Hospital Comrade will get in touch.'; end if;
+  if (t.billing ->> 'price') is not null then raise exception 'Your price was agreed with Hospital Comrade — ask them to change your plan.'; end if;
+  if public.tenant_license(t.id) <> 'trial' or coalesce(t.paid_until > now(), false) then
+    raise exception 'Your plan is paid — choose the new plan when you renew; it switches when the payment arrives.';
+  end if;
+  update public.tenants set plan = p_plan, updated_at = now() where id = t.id;
+  return public.billing_summary();
+end $$;
+
+-- phase 6: messages per month on the shared accounts (sent, included, charged to the wallet) — the usage chart
+create or replace function public.billing_usage_history(p_months int default 6)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_t   uuid := public.current_tenant();
+  v_now date := date_trunc('month', now() at time zone 'Asia/Kolkata')::date;
+  v_n   int := least(greatest(coalesce(p_months, 6), 1), 24);
+begin
+  if not public.has_role('owner', 'accountant') then raise exception 'Only the owner or accountant can see billing.' using errcode = '42501'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object(
+      'month', to_char(m.month, 'YYYY-MM'),
+      'sent', coalesce((select jsonb_object_agg(u.channel, u.sent) from public.message_usage u where u.tenant_id = v_t and u.month = m.month and u.source = 'platform' and u.channel <> 'push'), '{}'::jsonb),
+      'own', coalesce((select sum(u.sent) from public.message_usage u where u.tenant_id = v_t and u.month = m.month and u.source = 'own'), 0),
+      'charged_paise', coalesce((select -sum(l.amount_paise) from public.wallet_ledger l where l.tenant_id = v_t and l.kind = 'usage'
+                                   and date_trunc('month', l.day)::date = m.month), 0)) order by m.month)
+    from (select (v_now - make_interval(months => g))::date as month from generate_series(v_n - 1, 0, -1) g) m), '[]'::jsonb);
+end $$;
+
+-- phase 6: renewal reminders to each hospital's owner — 7, 3 and 1 day before the trial / plan ends, and once when the
+-- grace period starts. E-mail (+ app push). Daily from the scheduler (Settings → Notifications → automatic delivery).
+create or replace function public.queue_billing_reminders()
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare
+  r       record;
+  v_count int := 0;
+  v_today date := (now() at time zone 'Asia/Kolkata')::date;
+  v_left  int;
+  v_m     text;
+  v_end   timestamptz;
+  v_name  text;
+  v_mail  text;
+  v_prof  uuid;
+  v_subj  text;
+  v_body  text;
+  v_link  text;
+  cfg     jsonb := public.billing_config();
+begin
+  if auth.uid() is not null and coalesce(public.provider_role(), '') <> 'admin' then raise exception 'Not allowed' using errcode = '42501'; end if;
+  for r in select t.*, public.tenant_license(t.id) as lic from public.tenants t where not t.is_primary and t.status <> 'suspended' loop
+    v_end := greatest(coalesce(r.paid_until, '-infinity'::timestamptz), coalesce(r.trial_ends_at, '-infinity'::timestamptz));
+    continue when v_end = '-infinity'::timestamptz;
+    v_left := ((v_end at time zone 'Asia/Kolkata')::date - v_today);
+    v_m := case when r.lic in ('trial', 'active') and v_left in (7, 3, 1) then 'd' || v_left
+                when r.lic = 'grace' then 'grace' end;
+    continue when v_m is null;
+    -- once per hospital, milestone and end date (paying moves the end date, so the next round starts fresh)
+    continue when exists (select 1 from public.notification_outbox o where o.tenant_id = r.id and o.event = 'billing_reminder'
+                            and o.vars ->> 'milestone' = v_m and o.vars ->> 'until' = to_char(v_end at time zone 'Asia/Kolkata', 'YYYY-MM-DD'));
+    select p.id, p.full_name, p.email into v_prof, v_name, v_mail from public.profiles p where p.tenant_id = r.id and p.role = 'owner' order by p.created_at limit 1;
+    v_mail := coalesce(v_mail, (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = r.id and s.key = 'bootstrap'));
+    continue when v_mail is null and v_prof is null;
+    v_link := coalesce((select 'https://' || d.domain || '/billing' from public.tenant_domains d where d.tenant_id = r.id order by d.is_primary desc, (d.verified_at is null), d.created_at limit 1),
+                       nullif(rtrim(coalesce((select c.data ->> 'siteUrl' from public.site_content c where c.tenant_id = r.id and c.key = 'settings'), ''), '/') || '/billing', '/billing'),
+                       'the app → Billing & plan');
+    v_subj := case when v_m = 'grace' then '{hospital}: renew now to keep adding records'
+                   when r.lic = 'trial' then '{hospital}: your free trial ends {date}'
+                   else '{hospital}: your plan renews {date}' end;
+    v_body := case when v_m = 'grace'
+      then 'Namaste {name}, the {plan} plan for {hospital} has ended. Everything still works until {read_only}; after that the app becomes read-only until you renew. Renew in a minute: {link}'
+      else 'Namaste {name}, the ' || case when r.lic = 'trial' then 'free trial' else '{plan} plan' end
+           || ' for {hospital} ends on {date} ({days}). Renew in a minute: {link} — UPI, cards and net banking, with a GST invoice.' end;
+    perform set_config('app.tenant_id', r.id::text, true);
+    v_count := v_count + public.notify_enqueue_raw('billing_reminder',
+      jsonb_build_object('subject', v_subj, 'text', v_body), array['email', 'push'], null, v_mail, v_prof,
+      jsonb_build_object('name', split_part(coalesce(v_name, 'there'), ' ', 1), 'milestone', v_m,
+        'hospital', coalesce(nullif((select c.data ->> 'name' from public.site_content c where c.tenant_id = r.id and c.key = 'settings'), ''), r.name),
+        'until', to_char(v_end at time zone 'Asia/Kolkata', 'YYYY-MM-DD'), 'date', to_char(v_end at time zone 'Asia/Kolkata', 'DD Mon YYYY'),
+        'days', case when v_left = 1 then 'tomorrow' else 'in ' || v_left || ' days' end,
+        'read_only', to_char((v_end + make_interval(days => coalesce((cfg ->> 'graceDays')::int, 7))) at time zone 'Asia/Kolkata', 'DD Mon YYYY'),
+        'plan', initcap(r.plan), 'link', v_link),
+      'tenants', r.id, null);
+  end loop;
+  perform set_config('app.tenant_id', '', true);
+  return v_count;
 end $$;
 
 -- the owner keeps the name and GSTIN printed on Hospital Comrade's invoices up to date
@@ -3947,7 +4062,7 @@ begin
     raise exception 'Only a Hospital Comrade admin can do this.' using errcode = '42501';
   end if;
   if p_action = 'manual_payment' then
-    q := public.billing_quote(v_tenant, p_args ->> 'kind', coalesce((p_args ->> 'months')::int, 1), (p_args ->> 'amount')::numeric);
+    q := public.billing_quote(v_tenant, p_args ->> 'kind', coalesce((p_args ->> 'months')::int, 1), (p_args ->> 'amount')::numeric, p_args ->> 'plan');
     insert into public.billing_payments (tenant_id, kind, plan, months, base_paise, gst_paise, total_paise, provider, method, payment_id, note,
                                          period_from, period_to, created_by)
     values (v_tenant, q ->> 'kind', q ->> 'plan', (q ->> 'months')::int, (q ->> 'base_paise')::bigint, (q ->> 'gst_paise')::bigint, (q ->> 'total_paise')::bigint,
@@ -3991,14 +4106,14 @@ end $$;
 
 -- ------------------------------------------------------------------ who may call what
 revoke all on function public.billing_config(), public.license_guard(), public.wallet_apply(uuid, text, bigint, uuid, text, text, int),
-  public.record_message_usage(uuid, text, text, int, int), public.billing_quote(uuid, text, int, numeric),
-  public.apply_payment(uuid, text, text) from public, anon, authenticated;
-grant execute on function public.record_message_usage(uuid, text, text, int, int), public.billing_quote(uuid, text, int, numeric),
-  public.apply_payment(uuid, text, text) to service_role;
-revoke all on function public.billing_summary(), public.my_billing_quote(text, int, numeric), public.set_billing_details(text, text, text),
-  public.provider_billing(text, jsonb) from public, anon;
-grant execute on function public.billing_summary(), public.my_billing_quote(text, int, numeric), public.set_billing_details(text, text, text),
-  public.provider_billing(text, jsonb) to authenticated;
+  public.record_message_usage(uuid, text, text, int, int), public.billing_quote(uuid, text, int, numeric, text),
+  public.apply_payment(uuid, text, text), public.queue_billing_reminders() from public, anon, authenticated;
+grant execute on function public.record_message_usage(uuid, text, text, int, int), public.billing_quote(uuid, text, int, numeric, text),
+  public.apply_payment(uuid, text, text), public.queue_billing_reminders() to service_role;
+revoke all on function public.billing_summary(), public.my_billing_quote(text, int, numeric, text), public.set_billing_details(text, text, text),
+  public.provider_billing(text, jsonb), public.change_trial_plan(text), public.billing_usage_history(int) from public, anon;
+grant execute on function public.billing_summary(), public.my_billing_quote(text, int, numeric, text), public.set_billing_details(text, text, text),
+  public.provider_billing(text, jsonb), public.change_trial_plan(text), public.billing_usage_history(int) to authenticated;
 grant execute on function public.tenant_license(uuid), public.tenant_license_dates(uuid) to anon, authenticated, service_role;
 -- <<< billing
 

@@ -22,7 +22,7 @@ export interface BillingConfig {
   ratesPaise: { sms: number; whatsapp: number; email: number }
   plans: Record<Plan['id'], { price: number | null; included: Plan['included'] }>
   /** printed on Hospital Comrade's tax invoices */
-  seller: { name: string; gstin: string; address: string; state: string; email: string }
+  seller: { name: string; gstin: string; address: string; state: string; email: string; sac?: string }
 }
 
 export const BILLING_DEFAULTS: BillingConfig = {
@@ -35,7 +35,7 @@ export const BILLING_DEFAULTS: BillingConfig = {
   maxTopup: 100000,
   ratesPaise: { sms: 30, whatsapp: 40, email: 2 },
   plans: Object.fromEntries(PLANS.map((p) => [p.id, { price: p.price, included: p.included }])) as BillingConfig['plans'],
-  seller: { name: 'Digital Comrade', gstin: '', address: '', state: 'Bihar', email: '' },
+  seller: { name: 'Digital Comrade', gstin: '', address: '', state: 'Bihar', email: '', sac: '998315' },
 }
 
 /** ₹ amounts with paise → "₹1,178.82" */

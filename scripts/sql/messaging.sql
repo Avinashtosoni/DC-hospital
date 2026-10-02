@@ -591,6 +591,8 @@ begin
     execute $c$ select cron.schedule('dch-notify-flush', '* * * * *', 'select public.notify_cron_flush()') $c$;
     execute $c$ select cron.schedule('dch-scheduled-messages', '*/5 * * * *', 'select public.run_scheduled_notifications()') $c$;
     execute $c$ select cron.schedule('dch-appointment-reminders', '30 12 * * *', 'select public.queue_appointment_reminders()') $c$;  -- 18:00 IST
+    -- Hospital Comrade renewal reminders to owners (phase 6); the function exists once billing.sql is loaded
+    execute $c$ select cron.schedule('dch-billing-reminders', '0 4 * * *', 'select public.queue_billing_reminders()') $c$;  -- 09:30 IST
     execute $c$ select cron.schedule('dch-outbox-cleanup', '15 21 * * 0', $d$delete from public.notification_outbox where created_at < now() - interval '400 days'$d$) $c$;
   elsif exists (select 1 from pg_extension where extname = 'pg_cron') then
     for j in execute $q$ select jobid from cron.job where jobname like 'dch-%' $q$ loop

@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
 
     if (action === 'order') {
       const kind = body?.kind === 'wallet' ? 'wallet' : 'plan'
-      const { data: q, error } = await admin.rpc('billing_quote', { p_tenant: tenant, p_kind: kind, p_months: Number(body?.months) || 1, p_amount: kind === 'wallet' ? Number(body?.amount) : null })
+      const { data: q, error } = await admin.rpc('billing_quote', { p_tenant: tenant, p_kind: kind, p_months: Number(body?.months) || 1, p_amount: kind === 'wallet' ? Number(body?.amount) : null, p_plan: kind === 'plan' && typeof body?.plan === 'string' ? body.plan : null })
       if (error || !q) return json({ error: error?.message ?? 'Could not price this' }, 400)
       const id = crypto.randomUUID()
       const { error: insErr } = await admin.from('billing_payments').insert({
