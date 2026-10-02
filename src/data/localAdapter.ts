@@ -11,6 +11,7 @@ import { CONTACT_FORM_ID } from '../forms/schema'
 import { nextRun } from '../settings/schedule'
 import { buildCitySeed } from './citySeed'
 import { activeDemoTenant, DEMO_PROVIDERS, DEMO_TENANTS, demoKey, demoTenantById, providerAppRole, providerCan, providerProfile, providerTenants } from '../tenancy/demo'
+import { demoBilling, demoLicense } from '../billing/demo'
 import { activeTenantId, providerChoice, type MyContext, type ProviderRole } from '../tenancy/state'
 
 /** each demo hospital has its own store (see src/tenancy/demo.ts) */
@@ -534,20 +535,23 @@ export function localMarkTemplateRun(id: string, count: number) {
 // ------------------------------------------------------------------ demo twins of my_context() / provider_tenants()
 export function localMyContext(): MyContext {
   const t = activeDemoTenant()
-  const tenant = { id: t.id, slug: t.slug, name: t.name, status: t.status, plan: t.plan, modules: t.modules, is_primary: t.is_primary }
   const sp = sessionProvider()
   if (sp) {
     const ok = providerCan(sp.p, t.id)
-    return { tenant: ok ? tenant : null, role: ok ? providerAppRole(sp.mode) : null, provider_role: sp.p.role, provider_mode: sp.mode }
+    const license = ok ? demoLicense(t.id, true) : null
+    const tenant = { id: t.id, slug: t.slug, name: t.name, status: license?.status ?? t.status, plan: demoBilling(t.id)?.plan ?? t.plan, modules: t.modules, is_primary: t.is_primary }
+    return { tenant: ok ? tenant : null, role: ok ? providerAppRole(sp.mode) : null, provider_role: sp.p.role, provider_mode: sp.mode, license }
   }
   const u = users().find((x) => x.profile_id === localStorage.getItem(SESSION_KEY))
   const home = u ? demoTenantById(tenantOf(u)) : undefined
+  const role = currentProfile()?.role ?? null
+  const license = home ? demoLicense(home.id, role === 'owner' || role === 'accountant') : null
   return {
-    tenant: home ? { id: home.id, slug: home.slug, name: home.name, status: home.status, plan: home.plan, modules: home.modules, is_primary: home.is_primary } : null,
-    role: currentProfile()?.role ?? null, provider_role: null, provider_mode: null,
+    tenant: home ? { id: home.id, slug: home.slug, name: home.name, status: license?.status ?? home.status, plan: demoBilling(home.id)?.plan ?? home.plan, modules: home.modules, is_primary: home.is_primary } : null,
+    role, provider_role: null, provider_mode: null, license,
   }
 }
 export function localProviderTenants() {
   const sp = sessionProvider()
-  return sp ? providerTenants(sp.p).map((t) => ({ id: t.id, slug: t.slug, name: t.name, status: t.status, plan: t.plan, modules: t.modules, is_primary: t.is_primary, domain: t.domain })) : []
+  return sp ? providerTenants(sp.p).map((t) => ({ id: t.id, slug: t.slug, name: t.name, status: demoLicense(t.id, false)?.status ?? t.status, plan: demoBilling(t.id)?.plan ?? t.plan, modules: t.modules, is_primary: t.is_primary, domain: t.domain })) : []
 }

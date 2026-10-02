@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import { localAdapter } from '../data/localAdapter'
 import type { SiteForm } from '../types'
+import { isLicenseError, LICENSE_PUBLIC_MESSAGE } from '../billing/license'
 import { CONTACT_FORM_ID, DEFAULT_FORMS, toEnquiry, validateAnswers, type Answers, type FormField } from './schema'
 
 const builtIn = (slug: string): SiteForm | null => {
@@ -48,7 +49,7 @@ export async function submitForm(form: SiteForm, answers: Answers, optionsFor?: 
       if (e2) throw new Error(e2.message)
       return ref
     }
-    throw new Error(error.message)
+    throw new Error(isLicenseError(error.message) ? LICENSE_PUBLIC_MESSAGE : error.message)
   }
   await new Promise((r) => setTimeout(r, 500))
   const ref = demoRef()

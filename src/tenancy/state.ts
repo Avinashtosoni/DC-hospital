@@ -10,6 +10,8 @@
  * Plain module (no React, no Supabase import) so the Supabase fetch wrapper can read it without cycles.
  */
 
+import type { LicenseInfo } from '../billing/license'
+
 export type ProviderRole = 'admin' | 'support' | 'finance'
 export type TenantStatus = 'trial' | 'active' | 'grace' | 'read_only' | 'suspended'
 
@@ -29,6 +31,8 @@ export interface MyContext {
   role: string | null
   provider_role: ProviderRole | null
   provider_mode: ProviderRole | null
+  /** Hospital Comrade licence (phase 4): status + dates; wallet only for owner / accountant / platform team */
+  license?: LicenseInfo | null
 }
 
 const KEY = 'dch:provider:v1'

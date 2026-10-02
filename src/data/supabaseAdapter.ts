@@ -3,6 +3,7 @@ import type { Profile, TableName } from '../types'
 import { supabase } from '../lib/supabase'
 import { cleanTerm } from './query'
 import type { AuthAdapter, DataAdapter, NewRow, Row } from './adapter'
+import { isLicenseError, licenseStaffMessage } from '../billing/license'
 import { ConfirmEmailError } from './errors'
 
 const client = () => {
@@ -97,6 +98,8 @@ export const supabaseAdapter: DataAdapter = {
 /** Turn Postgres / PostgREST errors into something a receptionist can act on. */
 export function friendlyDbError(error: { message: string; code?: string; details?: string | null }, action: 'save' | 'delete' = 'save'): Error {
   const c = error.code ?? ''
+  // the plan has ended (Hospital Comrade licence guard) — the database's own sentence says what to do
+  if (isLicenseError(error.message)) return new Error(licenseStaffMessage(error.message))
   if (c === '23503' || c === '23001') {
     return new Error(action === 'delete'
       ? 'This record can\'t be deleted because appointments, bills or medical records are linked to it. Mark it inactive or cancelled instead.'

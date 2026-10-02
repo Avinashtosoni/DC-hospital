@@ -11,6 +11,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import { asActor, localAdapter } from '../data/localAdapter'
 import { freeSlots, type ScheduleExt } from '../lib/schedule'
 import type { Appointment, Doctor, DoctorLeave, Holiday, Invoice, Patient } from '../types'
+import { isLicenseError, LICENSE_PUBLIC_MESSAGE } from '../billing/license'
 import type { SiteSettings } from '../site/cms/types'
 
 export interface PublicDoctor {
@@ -61,6 +62,7 @@ const normName = (s: string) => s.trim().replace(/\s+/g, ' ')
 
 function fromPg(e: { message: string } | null): never {
   const m = e?.message ?? 'Something went wrong'
+  if (isLicenseError(m)) throw new BookingError(LICENSE_PUBLIC_MESSAGE, 'OTHER')
   const code = (['SLOT_TAKEN', 'SLOT_UNAVAILABLE', 'OTP_REQUIRED'] as const).find((c) => m.startsWith(c))
   throw new BookingError(code ? m.slice(code.length + 1).trim() : m, code ?? 'OTHER')
 }

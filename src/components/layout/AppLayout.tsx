@@ -11,6 +11,7 @@ import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
 import { isSupabaseConfigured, appEnv } from '../../lib/supabase'
 import { ProviderBanner } from '../../tenancy/ProviderBanner'
+import { LicenseBanner } from '../../billing/LicenseBanner'
 import { useNavLocked } from '../../tenancy/modules'
 import { useTable } from '../../hooks/useData'
 import { toast } from 'sonner'
@@ -275,6 +276,7 @@ export function AppLayout() {
         <ProviderBanner />
         <Topbar onMenu={() => setMobileOpen(true)} />
         <main className="w-full min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <LicenseBanner />
           <Announcement />
           {off ? <ModuleOff /> : <ErrorBoundary resetKey={loc.pathname}><Outlet /></ErrorBoundary>}
         </main>
