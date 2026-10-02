@@ -27,3 +27,15 @@ describe('platform product page', () => {
     expect(PLANS.map((p) => [p.id, p.price])).toEqual([['clinic', 999], ['hospital', 2999], ['enterprise', 7999], ['custom', null]])
   })
 })
+
+describe('per-hospital web-app manifest', async () => {
+  const { hospitalManifest } = await import('../src/settings/AppSettingsProvider')
+  it('uses the hospital name, short name, logo and absolute URLs', () => {
+    const m = hospitalManifest({ name: 'City Care Clinic', seoDescription: 'Patna clinic', brand: { shortName: 'City Care', appSubtitle: '', logoUrl: '/uploads/logo.png', faviconUrl: '', showName: true } }, 'https://www.citycare.in')
+    expect(m.name).toBe('City Care Clinic — Patient app')
+    expect(m.short_name).toBe('City Care')
+    expect(m.start_url).toBe('https://www.citycare.in/?source=pwa')
+    expect(m.icons[0].src).toBe('https://www.citycare.in/uploads/logo.png')
+    expect(JSON.stringify(m)).not.toMatch(/DC Hospital/)
+  })
+})

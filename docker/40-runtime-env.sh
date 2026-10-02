@@ -21,6 +21,29 @@ cat > "$TARGET" <<JS
 window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}", "TENANCY": "${TEN}", "APP_ENV": "${APPENV}", "PLATFORM_NAME": "${PNAME}", "PLATFORM_DOMAIN": "${PDOMAIN}" };
 JS
 
+# Multi-hospital: index.html is shared by every hospital's domain, and link previews (WhatsApp, Facebook…) don't run
+# JavaScript — so the sample hospital's name must not be in it. Swap the marked block for neutral text; the app sets
+# each hospital's own title / description as soon as it loads.
+INDEX="${INDEX_HTML_PATH:-$(dirname "$TARGET")/index.html}"
+if [ "$TEN" = "multi" ] && [ -f "$INDEX" ] && grep -q '<!-- seo:start' "$INDEX"; then
+  html() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+  HP="$(html "${PLATFORM_NAME:-Hospital Comrade}")"
+  awk -v p="$HP" '
+    /<!-- seo:start/ {
+      print "    <meta name=\"description\" content=\"Book doctor appointments online, get digital prescriptions and lab reports on your phone.\" />"
+      print "    <meta name=\"apple-mobile-web-app-title\" content=\"Hospital\" />"
+      print "    <meta property=\"og:title\" content=\"Book appointments online\" />"
+      print "    <meta property=\"og:description\" content=\"Book doctor appointments online, get digital prescriptions and lab reports on your phone.\" />"
+      print "    <meta name=\"generator\" content=\"" p "\" />"
+      print "    <title>Book appointments online</title>"
+      skip = 1; next
+    }
+    /<!-- seo:end -->/ { skip = 0; next }
+    !skip
+  ' "$INDEX" > "$INDEX.tmp" && cat "$INDEX.tmp" > "$INDEX" && rm -f "$INDEX.tmp"
+  echo "[dc-hospital] index.html: neutral title / link-preview text for multi-hospital mode"
+fi
+
 if [ -n "$URL" ] && [ -n "$KEY" ]; then
   echo "[dc-hospital] Supabase configured: ${URL}"
 elif [ -n "$REQ" ] && [ "$REQ" != "false" ] && [ "$REQ" != "0" ]; then

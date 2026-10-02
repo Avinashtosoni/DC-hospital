@@ -5,6 +5,8 @@ import { useAuth } from '../auth/AuthProvider'
 import { deepMerge, useSiteSettings } from '../site/cms/content'
 import { setFormatPrefs } from '../lib/utils'
 import { DEFAULT_APP_SETTINGS, paletteFor, type AppSettings } from './types'
+import type { SiteSettings } from '../site/cms/types'
+import { isPrimaryTenant } from '../tenancy/state'
 import { setSettingsActor, settingsStore, type SettingsRow } from './store'
 
 export const APP_SETTINGS_QK = ['app-settings'] as const
@@ -62,6 +64,33 @@ export function useAppSettings() {
 }
 
 /** Favicon from Settings → Branding (falls back to the logo, then the bundled icon). */
+const setMeta = (attr: 'name' | 'property', key: string, value: string) => {
+  let m = document.head.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]`)
+  if (!m) { m = document.createElement('meta'); m.setAttribute(attr, key); document.head.appendChild(m) }
+  m.content = value
+}
+
+/** The web-app manifest for THIS hospital (name, icon) — one static file can't serve every hospital's domain. */
+export function hospitalManifest(s: Pick<SiteSettings, 'name' | 'brand' | 'seoDescription'>, origin: string) {
+  const abs = (u: string) => new URL(u, origin).href
+  const icons = [
+    ...(s.brand?.logoUrl ? [{ src: abs(s.brand.logoUrl), sizes: 'any', purpose: 'any' }] : []),
+    { src: abs('/icons/icon-192.png'), sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: abs('/icons/icon-512.png'), sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: abs('/icons/maskable-512.png'), sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+  ]
+  const shortcut = (name: string, short_name: string, url: string) => ({ name, short_name, url: abs(url), icons: [{ src: abs('/icons/shortcut-book.png'), sizes: '96x96' }] })
+  return {
+    id: abs('/'), name: `${s.name} — Patient app`, short_name: (s.brand?.shortName || s.name).slice(0, 30),
+    description: s.seoDescription || 'Book appointments, reschedule visits, download lab reports and bills.',
+    start_url: abs('/?source=pwa'), scope: abs('/'), display: 'standalone', display_override: ['standalone', 'minimal-ui'],
+    orientation: 'portrait-primary', background_color: '#f5f5ff', theme_color: '#292966', lang: 'en-IN', categories: ['health', 'medical'],
+    icons,
+    shortcuts: [shortcut('Book appointment', 'Book', '/book?source=pwa'), shortcut('My appointments', 'Visits', '/appointments?source=pwa'), shortcut('My lab reports', 'Reports', '/lab-tests?source=pwa')],
+  }
+}
+
+/** Favicon, install name, link-preview tags and manifest follow the hospital's own brand (each hospital's domain). */
 export function BrandEffects() {
   const s = useSiteSettings()
   const href = s.brand?.faviconUrl || s.brand?.logoUrl
@@ -70,7 +99,24 @@ export function BrandEffects() {
     if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link) }
     if (!link.dataset.default) link.dataset.default = link.href
     link.href = href || link.dataset.default
-  }, [href])
+    const apple = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')
+    if (apple) { if (!apple.dataset.default) apple.dataset.default = apple.href; apple.href = s.brand?.logoUrl || apple.dataset.default }
+  }, [href, s.brand?.logoUrl])
+  const short = s.brand?.shortName || s.name
+  useEffect(() => {
+    setMeta('name', 'apple-mobile-web-app-title', short)
+    setMeta('property', 'og:title', s.name)
+    setMeta('property', 'og:site_name', s.name)
+    if (s.seoDescription) setMeta('property', 'og:description', s.seoDescription)
+  }, [s.name, short, s.seoDescription])
+  useEffect(() => {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+    // the primary hospital keeps the real /manifest.webmanifest file; every other hospital gets its own
+    if (!link || isPrimaryTenant() || typeof URL.createObjectURL !== 'function') return
+    const url = URL.createObjectURL(new Blob([JSON.stringify(hospitalManifest(s, location.origin))], { type: 'application/manifest+json' }))
+    link.href = url
+    return () => URL.revokeObjectURL(url)
+  }, [s.name, short, s.seoDescription, s.brand?.logoUrl]) // eslint-disable-line react-hooks/exhaustive-deps
   return null
 }
 
