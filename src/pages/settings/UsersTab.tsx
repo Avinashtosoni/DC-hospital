@@ -36,7 +36,16 @@ export function UsersTab() {
   const [del, setDel] = useState<Profile | null>(null)
   useEffect(() => setPage(1), [search, role])
 
-  const counts = Object.fromEntries(ROLES.map((r) => [r, useCount('profiles', [['role', 'eq', r]])])) as Record<Role, ReturnType<typeof useCount>>
+  // one count per role — written out so the hooks are always called in the same order (rules of hooks)
+  const byRole = (r: Role) => [['role', 'eq', r]] as Parameters<typeof useCount>[1]
+  const counts: Record<Role, ReturnType<typeof useCount>> = {
+    owner: useCount('profiles', byRole('owner')),
+    doctor: useCount('profiles', byRole('doctor')),
+    receptionist: useCount('profiles', byRole('receptionist')),
+    accountant: useCount('profiles', byRole('accountant')),
+    staff: useCount('profiles', byRole('staff')),
+    patient: useCount('profiles', byRole('patient')),
+  }
   const total = ROLES.reduce((s, r) => s + (counts[r].count ?? 0), 0)
 
   const q = useRows('profiles', {

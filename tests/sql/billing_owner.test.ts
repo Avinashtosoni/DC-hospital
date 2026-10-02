@@ -16,6 +16,11 @@ const signUp = (id: string, email: string, meta: Record<string, unknown>) => db.
   `insert into auth.users (id, email, encrypted_password, raw_user_meta_data) values ($1, $2, 'x', $3::jsonb)`, [id, email, JSON.stringify(meta)])
 const setDates = (trial: string | null, paid: string | null, status = 'trial') => db.as(null,
   `update public.tenants set trial_ends_at = now() + $1::interval, paid_until = now() + $2::interval, status = $3 where id = $4`, [trial, paid, status, B])
+/** end dates on whole India calendar days (noon IST, n days from today) — reminders count IST days, so `now() + 7 days 2 hours`
+ *  would land on day 8 when the suite runs late in the evening */
+const setIstDays = (trial: number | null, paid: number | null, status = 'trial') => db.as(null,
+  `update public.tenants set trial_ends_at = ((now() at time zone 'Asia/Kolkata')::date + $1::int + time '12:00') at time zone 'Asia/Kolkata',
+     paid_until = ((now() at time zone 'Asia/Kolkata')::date + $2::int + time '12:00') at time zone 'Asia/Kolkata', status = $3 where id = $4`, [trial, paid, status, B])
 const quote = async (who: string, sql: string) => (await db.one<{ q: Record<string, unknown> }>(who, sql)).q
 const plan = async () => (await db.one<{ p: string }>(null, `select plan p from public.tenants where id = $1`, [B])).p
 
@@ -107,7 +112,7 @@ describe('renewal reminders', () => {
 
   test('7 / 3 / 1 days before the end and once in grace, to the owner, never twice for the same milestone', async () => {
     await db.as(null, `delete from public.notification_outbox`)
-    await setDates('7 days 2 hours', null)
+    await setIstDays(7, null)
     expect(Number((await db.one<{ n: number }>('service', `select public.queue_billing_reminders() n`)).n)).toBe(1)
     expect(Number((await db.one<{ n: number }>('service', `select public.queue_billing_reminders() n`)).n)).toBe(0)
     const [m] = await outbox()
@@ -118,9 +123,9 @@ describe('renewal reminders', () => {
     await db.as(null, `insert into public.tenant_domains (domain, tenant_id, is_primary, verified_at) values ('cityhospital.in', $1, true, now())`, [B])
     expect(m.vars.milestone).toBe('d7')
 
-    await setDates('5 days', null)                      // not a milestone
+    await setIstDays(5, null)                           // not a milestone
     expect(Number((await db.one<{ n: number }>('service', `select public.queue_billing_reminders() n`)).n)).toBe(0)
-    await setDates('-30 days', '1 day 1 hour', 'active')
+    await setIstDays(-30, 1, 'active')
     await db.as('service', `select public.queue_billing_reminders()`)
     const paid = (await outbox()).at(-1)!
     expect(paid.subject).toContain('your plan renews')
@@ -137,7 +142,7 @@ describe('renewal reminders', () => {
   test('only the scheduler (or a platform admin) may run it; the primary hospital and suspended ones get nothing', async () => {
     await expect(db.as(B_OWNER, `select public.queue_billing_reminders()`)).rejects.toThrow(/permission denied/)
     await db.as(null, `delete from public.notification_outbox`)
-    await setDates('3 days 1 hour', null, 'suspended')
+    await setIstDays(3, null, 'suspended')
     expect(Number((await db.one<{ n: number }>('service', `select public.queue_billing_reminders() n`)).n)).toBe(0)
     expect(await db.as(null, `select 1 from public.notification_outbox where tenant_id <> $1`, [B])).toHaveLength(0)
   })

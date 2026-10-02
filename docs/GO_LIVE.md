@@ -21,7 +21,9 @@ the setup and a week of soft launch with one or two friendly hospitals before yo
    hospitals on their own domains, each `https://<their-domain>/**` (add them as hospitals connect).
 5. **Auth → SMTP**: your own sender (Resend, Amazon SES, Zoho…). The built-in sender only allows a few e-mails per
    hour — sign-ups and password resets would fail on launch day.
-6. **Auth → Providers → Email**: keep "Confirm email" on.
+6. **Auth → Providers → Email**: keep "Confirm email" on. Owners, doctors and staff are matched to their hospital by
+   e-mail, so with it off anyone could claim an unclaimed hospital with the owner's address. `npm run preflight`
+   fails while it is off.
 7. Note the **Project URL** and the **anon key** (Settings → API) for step 3, and the **Session pooler** connection
    string (Connect → Session pooler) for backups (step 8).
 

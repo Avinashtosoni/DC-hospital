@@ -11,6 +11,7 @@ import { Toaster } from 'sonner'
 import '../../src/index.css'
 import { App } from './App'
 import { initMonitoring } from '../../src/lib/monitoring'
+import { ErrorBoundary } from '../../src/components/ErrorBoundary'
 
 initMonitoring('control-panel')
 
@@ -20,7 +21,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <BrowserRouter basename="/control-panel">
-        <App />
+        <ErrorBoundary full><App /></ErrorBoundary>
       </BrowserRouter>
       <Toaster position="top-right" richColors closeButton />
     </QueryClientProvider>

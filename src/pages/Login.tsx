@@ -9,8 +9,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { Button } from '../components/ui'
 import { Logo } from '../components/layout/AppLayout'
 import { FormError, IconInput, PasswordInput, friendlyAuthError } from '../components/auth/AuthFields'
-import { DEMO_PASSWORD, DEMO_USERS } from '../data/seed'
-import { CITY_USERS } from '../data/citySeed'
+import { CITY_USERS, DEMO_PASSWORD, DEMO_USERS } from '../data/demoUsers'
 import { activeDemoTenant, DEMO_PROVIDERS, DEMO_TENANTS } from '../tenancy/demo'
 import { PROVIDER_ROLE_LABEL } from '../tenancy/state'
 import { ROLE_LABEL, type Role } from '../types'
@@ -103,7 +102,7 @@ export default function Login() {
   const [demoOpen, setDemoOpen] = useState(!isSupabaseConfigured)
 
   // only same-app paths (never //evil.com or /\\evil.com)
-  const next = typeof loc.state?.from === 'string' && /^\/(?![\/\\])/.test(loc.state.from) && !loc.state.from.includes('\\') ? loc.state.from : '/'
+  const next = typeof loc.state?.from === 'string' && /^\/(?![/\\])/.test(loc.state.from) && !loc.state.from.includes('\\') ? loc.state.from : '/'
   if (user) return <Navigate to={next} replace />
 
   const doLogin = async (e: string, p: string) => {

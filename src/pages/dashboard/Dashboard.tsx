@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { addDays, format, parseISO, subDays } from 'date-fns'
 import {
@@ -10,7 +11,8 @@ import { useAppSettings } from '../../settings/AppSettingsProvider'
 import { useSiteSettings } from '../../site/cms/content'
 import { Widget, WidgetScope } from '../../settings/widgetScope'
 import { UsageMini } from '../../components/usage/UsageMini'
-import { useByIds, useCount, useLookup, useTable, useUpdate, useWindow } from '../../hooks/useData'
+import { FINANCE_KEY, useByIds, useCount, useLookup, useTable, useUpdate, useWindow } from '../../hooks/useData'
+import { fetchFinance } from '../../lib/dashboardFinance'
 import { useMe } from '../../hooks/useScope'
 import { Avatar, Badge, Button, Card, CardHeader, StatCard, StatusBadge } from '../../components/ui'
 import { Donut, Greeting, ListCard, ListRow, QuickAction, RevenueChart, SimpleBar, monthBuckets } from './widgets'
@@ -44,27 +46,24 @@ function RoleDashboard({ role }: { role?: string }) {
 // ---------------------------------------------------------------- shared
 /** ISO timestamp rounded to the hour, so the query (and its cache key) stays stable between renders */
 const hoursAgo = (h: number) => new Date(Math.floor(Date.now() / 3_600_000 - h) * 3_600_000).toISOString()
-const OPEN_INVOICE = ['unpaid', 'partial', 'overdue']
-/** Finance widgets read a 6-month window of payments / expenses and the open invoices — never whole tables. */
+/** Finance widgets: 6 months of totals + the few invoices / payments the lists show, computed in the database
+ *  (dashboard_finance) — a busy hospital has tens of thousands of payments in 6 months, so they are never downloaded. */
 function useFinance() {
   const since = `${monthBuckets(6)[0].key}-01`
-  const invoices = useWindow('invoices', { where: [['status', 'in', OPEN_INVOICE]] })
-  const payments = useWindow('payments', { where: [['paid_on', 'gte', since]], order: [{ column: 'paid_on', asc: false }] })
-  const expenses = useWindow('expenses', { where: [['expense_date', 'gte', since]] })
+  const { user } = useAuth()
+  const q = useQuery({ queryKey: [...FINANCE_KEY, 'dashboard', since], queryFn: () => fetchFinance(since), enabled: !!user, staleTime: 30_000 })
   return useMemo(() => {
-    const buckets = monthBuckets(6)
-    const series = buckets.map((b) => ({
-      label: b.label,
-      revenue: (payments.data ?? []).filter((p) => p.paid_on.startsWith(b.key)).reduce((s, p) => s + Number(p.amount), 0),
-      expenses: (expenses.data ?? []).filter((e) => e.expense_date.startsWith(b.key)).reduce((s, e) => s + Number(e.amount), 0),
-    }))
-    const thisMonth = series[series.length - 1]
-    const lastMonth = series[series.length - 2]
-    const outstanding = (invoices.data ?? []).filter((i) => !['cancelled', 'draft'].includes(i.status)).reduce((s, i) => s + invoiceBalance(i), 0)
-    const methods = Object.entries((payments.data ?? []).reduce<Record<string, number>>((acc, p) => { acc[p.method] = (acc[p.method] ?? 0) + Number(p.amount); return acc }, {}))
-      .map(([name, value]) => ({ name: name === 'upi' ? 'UPI' : titleCase(name), value }))
-    return { series, thisMonth, lastMonth, outstanding, methods, loading: invoices.isLoading || payments.isLoading || expenses.isLoading, invoices: invoices.data ?? [], payments: payments.data ?? [], expenses: expenses.data ?? [] }
-  }, [invoices.data, payments.data, expenses.data, invoices.isLoading, payments.isLoading, expenses.isLoading])
+    const d = q.data
+    const series = monthBuckets(6).map((b) => ({ label: b.label, revenue: Number(d?.revenue?.[b.key] ?? 0), expenses: Number(d?.expenses?.[b.key] ?? 0) }))
+    const methods = Object.entries(d?.methods ?? {}).map(([name, value]) => ({ name: name === 'upi' ? 'UPI' : titleCase(name), value: Number(value) }))
+      .sort((a, b) => b.value - a.value)
+    return {
+      series, thisMonth: series[series.length - 1], lastMonth: series[series.length - 2], methods,
+      outstanding: Number(d?.outstanding ?? 0), openCount: Number(d?.open_count ?? 0),
+      topOpen: d?.top_open ?? [], overdue: d?.overdue ?? [], recent: d?.recent ?? [],
+      loading: q.isLoading,
+    }
+  }, [q.data, q.isLoading])
 }
 
 const pct = (a: number, b: number) => (b ? Math.round(((a - b) / b) * 100) : 0)
@@ -114,7 +113,7 @@ function OwnerDashboard() {
   const dLk = useLookup('doctors')
   const deptLk = useLookup('departments')
   const todays = (appts.data ?? []).filter((a) => a.appointment_date === t).sort((a, b) => a.appointment_time.localeCompare(b.appointment_time))
-  const topOpen = fin.invoices.filter((i) => invoiceBalance(i) > 0).sort((a, b) => invoiceBalance(b) - invoiceBalance(a)).slice(0, 5)
+  const topOpen = fin.topOpen
   const pLk = useByIds('patients', [...todays.slice(0, 7).map((a) => a.patient_id), ...(admissions.data ?? []).slice(0, 5).map((a) => a.patient_id), ...topOpen.map((i) => i.patient_id)])
   const occupied = (beds.data ?? []).filter((b) => b.status === 'occupied').length
   const totalBeds = beds.data?.length ?? 0
@@ -182,7 +181,7 @@ function OwnerDashboard() {
             <ListRow key={a.id} to={`/patients/${a.patient_id}`} left={<div className="flex items-center gap-3"><Avatar name={pLk.get(a.patient_id)?.full_name} size="sm" /><div><div className="text-sm font-medium text-slate-800">{pLk.get(a.patient_id)?.full_name}</div><div className="text-xs text-slate-500">{a.reason}</div></div></div>} right={<span className="text-xs text-slate-500">since {fmtDate(a.admission_date, 'dd MMM')}</span>} />
           ))}
         </ListCard>
-        <ListCard title="Outstanding invoices" subtitle={`${money(fin.outstanding)} receivable`} icon={<Receipt className="h-4 w-4" />} link="/invoices?status=overdue" loading={fin.loading} empty={!fin.invoices.some((i) => invoiceBalance(i) > 0)}>
+        <ListCard title="Outstanding invoices" subtitle={`${money(fin.outstanding)} receivable`} icon={<Receipt className="h-4 w-4" />} link="/invoices?status=overdue" loading={fin.loading} empty={!fin.topOpen.length}>
           {topOpen.map((i) => (
             <ListRow key={i.id} to={`/invoices/${i.id}`} left={<div><div className="text-sm font-medium text-slate-800">{i.invoice_number} · {pLk.get(i.patient_id)?.full_name}</div><div className="text-xs text-slate-500">Due {fmtDate(i.due_date)}</div></div>} right={<div className="flex items-center gap-2"><span className="text-sm font-semibold text-rose-600">{money(invoiceBalance(i))}</span><StatusBadge value={i.status} /></div>} />
           ))}
@@ -308,8 +307,8 @@ function AccountantDashboard() {
   const { user } = useAuth()
   const fin = useFinance()
   const net = (fin.thisMonth?.revenue ?? 0) - (fin.thisMonth?.expenses ?? 0)
-  const overdue = fin.invoices.filter((i) => i.status === 'overdue').sort((a, b) => invoiceBalance(b) - invoiceBalance(a))
-  const recent = [...fin.payments].sort((a, b) => b.paid_on.localeCompare(a.paid_on)).slice(0, 6)
+  const overdue = fin.overdue
+  const recent = fin.recent
   const pLk = useByIds('patients', [...overdue.slice(0, 6), ...recent].map((r) => r.patient_id))
   return (
     <div>
@@ -319,7 +318,7 @@ function AccountantDashboard() {
       </Greeting>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         <StatCard label="Collected (month)" value={money(fin.thisMonth?.revenue)} icon={<IndianRupee className="h-5 w-5" />} loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.revenue} prev={fin.lastMonth.revenue} />} />
-        <StatCard label="Outstanding" value={money(fin.outstanding)} icon={<Receipt className="h-5 w-5" />} tone="amber" loading={fin.loading} hint={`${fin.invoices.filter((i) => invoiceBalance(i) > 0 && i.status !== 'cancelled').length} open invoices`} />
+        <StatCard label="Outstanding" value={money(fin.outstanding)} icon={<Receipt className="h-5 w-5" />} tone="amber" loading={fin.loading} hint={`${fin.openCount} open invoices`} />
         <StatCard label="Expenses (month)" value={money(fin.thisMonth?.expenses)} icon={<Wallet className="h-5 w-5" />} tone="violet" loading={fin.loading} hint={fin.lastMonth && <Trend now={fin.thisMonth.expenses ?? 0} prev={fin.lastMonth.expenses ?? 0} invert />} />
         <StatCard label="Net (month)" value={money(net)} icon={net >= 0 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />} tone={net >= 0 ? 'green' : 'red'} loading={fin.loading} />
       </div>

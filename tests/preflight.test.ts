@@ -18,6 +18,7 @@ function fakeFetch(over: Record<string, Response> = {}) {
     if (u.pathname === '/rest/v1/rpc/platform_signup_info') return Response.json({ enabled: true, mode: 'approve', trialDays: 14 })
     if (u.pathname === '/rest/v1/rpc/resolve_tenant') return Response.json([{ slug: 'main' }])
     if (u.pathname === '/rest/v1/patients') return Response.json([])
+    if (u.pathname === '/auth/v1/settings') return Response.json({ mailer_autoconfirm: false, disable_signup: false })
     if (u.pathname.startsWith('/functions/v1/')) return new Response('ok')
     return new Response('nope', { status: 404 })
   }
@@ -49,6 +50,13 @@ describe('go-live preflight', () => {
     }) })
     const failed = r.filter((c) => c.status === 'fail').map((c) => c.name)
     expect(failed).toEqual(['Multi-hospital mode', 'Database up to date', 'Patients hidden from visitors', 'Function billing'])
+  })
+  it('fails when Supabase Auth lets people in without confirming their e-mail', async () => {
+    const r = await preflight('https://h.in', { fetch: fakeFetch({ 'GET abc.supabase.co/auth/v1/settings': Response.json({ mailer_autoconfirm: true, disable_signup: true }) }) })
+    expect(r.filter((c) => c.status === 'fail').map((c) => c.name)).toEqual(['Auth: confirm e-mail', 'Auth: sign-ups allowed'])
+    expect(r.find((c) => c.name === 'Auth: confirm e-mail')?.detail).toMatch(/Confirm email" is OFF/)
+    const unknown = await preflight('https://h.in', { fetch: fakeFetch({ 'GET abc.supabase.co/auth/v1/settings': new Response('', { status: 401 }) }) })
+    expect(unknown.find((c) => c.name === 'Auth: confirm e-mail')?.status).toBe('warn')
   })
   it('stops early when the site is down', async () => {
     const r = await preflight('http://h.in', { fetch: async () => { throw new Error('ECONNREFUSED') } })

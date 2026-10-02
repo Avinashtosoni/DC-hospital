@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '../../lib/utils'
+import { safeUrl } from '../../lib/safeUrl'
 import { activeTenantId, isPrimaryTenant } from '../../tenancy/state'
 import { baseContent } from './starter'
 import { cms, type ContentRows } from './store'
@@ -55,8 +56,16 @@ export function toPublic(c: SiteContent): SiteContent {
   const services = visible(c.services)
   const keepCols = c.packages.items.map((p, i) => (p.hidden ? -1 : i)).filter((i) => i >= 0)
   const doctors = visible(c.doctors).map((d) => ({ ...d, dept: d.dept || c.services.find((x) => x.slug === d.service)?.name || 'General' }))
+  // admin-typed URLs: only http(s)/tel/mailto (see src/lib/safeUrl.ts) — a bad one hides the link instead of running script
+  const settings = {
+    ...s,
+    map: { embedUrl: safeUrl(s.map?.embedUrl, 'web'), directionsUrl: safeUrl(s.map?.directionsUrl, 'web') },
+    socials: (s.socials ?? []).map((x) => ({ ...x, url: safeUrl(x.url, 'web') })),
+    brand: { ...s.brand, logoUrl: safeUrl(s.brand?.logoUrl, 'image'), faviconUrl: safeUrl(s.brand?.faviconUrl, 'image') },
+  }
   const pub: SiteContent = {
     ...c,
+    settings,
     services,
     support: visible(c.support),
     doctors,

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Inbox, LogOut, Menu, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
 import { Avatar, Badge, Spinner } from '../../src/components/ui'
 import { cn } from '../../src/lib/utils'
+import { ErrorBoundary } from '../../src/components/ErrorBoundary'
 import { platformName } from '../../src/lib/supabase'
 import { cp, isDemo } from './api'
 import { MeContext, ROLE_LABEL, ROLE_TONE, useMe } from './ui'
@@ -126,7 +127,10 @@ function Shell({ children }: { children: ReactNode }) {
           <Badge tone={ROLE_TONE[me.role]}>{ROLE_LABEL[me.role]}</Badge>
         </div>
       </header>
-      <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">{children}</main>
+      <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
+        {/* a crash in one page shows a friendly card; the sidebar keeps working and the next page resets it */}
+        <ErrorBoundary resetKey={loc.pathname}>{children}</ErrorBoundary>
+      </main>
     </div>
   )
 }

@@ -94,6 +94,9 @@ describe('7.1 privacy — the patient', () => {
     await one(B_PAT, `select public.privacy_submit('erasure', null)`)
     await expect(db.as(B_PAT, `select public.privacy_submit('erasure')`)).rejects.toThrow(/already have an open erasure/)
     await expect(db.as(B_PAT, `select public.privacy_submit('delete_all')`)).rejects.toThrow(/correction or erasure/)
+    // friendly errors, never a raw "null value in column" message
+    await expect(db.as(B_PAT2, `select public.privacy_submit(null)`)).rejects.toThrow(/correction or erasure/)
+    await expect(db.as(B_OWNER, `select public.privacy_submit('erasure')`)).rejects.toThrow(/Only patients/)
     const mail = await db.as<{ recipient: string; subject: string }>(null, `select recipient, subject from public.notification_outbox where event = 'privacy_request' order by created_at`)
     expect(mail.map((m) => m.recipient)).toEqual(['owner@city.in', 'owner@city.in'])
     expect(mail[1].subject).toContain('erasure')

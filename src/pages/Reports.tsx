@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { Download, IndianRupee, Percent, PieChart as PieIcon, Receipt, TrendingDown, TrendingUp, Wallet } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { qk } from '../hooks/useData'
+import { FINANCE_KEY } from '../hooks/useData'
 import { fetchReport, shapeReport } from '../lib/reports'
 import { Button, Card, CardHeader, PageHeader, Select, Skeleton, StatCard, Tabs } from '../components/ui'
 import { useSearchParams } from 'react-router-dom'
@@ -22,7 +22,7 @@ export default function Reports() {
 function FinancialReport({ tabs }: { tabs: React.ReactNode }) {
   const [months, setMonths] = useState(6)
   // totals come from the database (financial_report) — the browser never downloads every invoice
-  const q = useQuery({ queryKey: [...qk('invoices'), 'report', months], queryFn: () => fetchReport(months), staleTime: 60_000, placeholderData: keepPreviousData })
+  const q = useQuery({ queryKey: [...FINANCE_KEY, 'report', months], queryFn: () => fetchReport(months), staleTime: 60_000, placeholderData: keepPreviousData })
   const loading = q.isLoading
   const r = useMemo(() => shapeReport(q.data, months), [q.data, months])
 

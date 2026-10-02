@@ -498,7 +498,7 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
           </ol>
           {w.source === 'platform' && tenancyEnabled() && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">WhatsApp is set to the <b>shared</b> account, which can’t receive your patients’ chats. To use the chatbot, switch WhatsApp to <b>Your own account</b> above.</p>}
           {w.provider === 'meta' && <>
-            <p>In Meta → WhatsApp → Configuration → Webhook, paste the URL, enter the verify token below and subscribe to <b>messages</b>.</p>
+            <p>In Meta → WhatsApp → Configuration → Webhook, paste the URL, enter the verify token below and subscribe to <b>messages</b>. The <b>app secret</b> is required — unsigned requests are rejected, because the sender’s number is the patient’s identity.</p>
             <SecretInput name="whatsapp_verify_token" secrets={secrets} />
             <SecretInput name="meta_app_secret" secrets={secrets} />
           </>}

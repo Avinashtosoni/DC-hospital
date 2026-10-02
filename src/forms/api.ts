@@ -6,7 +6,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { localAdapter } from '../data/localAdapter'
+import { loadLocal } from '../data/local'
 import type { SiteForm } from '../types'
 import { isLicenseError, LICENSE_PUBLIC_MESSAGE } from '../billing/license'
 import { CONTACT_FORM_ID, DEFAULT_FORMS, toEnquiry, validateAnswers, type Answers, type FormField } from './schema'
@@ -24,7 +24,7 @@ export async function getPublicForm(slug: string): Promise<SiteForm | null> {
     if (error) { if (missingTable(error.message) && slug === 'contact') return builtIn(slug); throw new Error(error.message) }
     return (data as SiteForm | null) ?? null
   }
-  const forms = await localAdapter.list('site_forms')
+  const forms = await (await loadLocal()).localAdapter.list('site_forms')
   return forms.find((f) => f.slug === slug && f.enabled) ?? null
 }
 
@@ -53,6 +53,6 @@ export async function submitForm(form: SiteForm, answers: Answers, optionsFor?: 
   }
   await new Promise((r) => setTimeout(r, 500))
   const ref = demoRef()
-  await localAdapter.insert('site_enquiries', { ...toEnquiry(form, answers), ref, status: 'new' })
+  await (await loadLocal()).localAdapter.insert('site_enquiries', { ...toEnquiry(form, answers), ref, status: 'new' })
   return ref
 }

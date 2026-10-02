@@ -155,14 +155,14 @@ Deno.serve(async (req) => {
   // ---- Twilio (form-encoded)
   if (type.includes('application/x-www-form-urlencoded')) {
     const form = new URLSearchParams(raw)
+    // the sender's number is the patient's identity (book / cancel), so unsigned requests are never trusted
     const tok = setup.ctx.secrets.twilio_auth_token
-    if (tok) {   // https://www.twilio.com/docs/usage/security#validating-requests
-      // Twilio signs the full address it calls, including ?hospital=…
-      const publicUrl = `${SUPABASE_URL}/functions/v1/whatsapp-bot${url.search}`
-      const data = publicUrl + [...form.keys()].sort().map((k) => k + form.get(k)).join('')
-      const sig = b64(await hmac('SHA-1', tok, data))
-      if (!safeEq(sig, req.headers.get('x-twilio-signature') ?? '')) return new Response('bad signature', { status: 403 })
-    }
+    if (!tok) return new Response('twilio auth token is not configured', { status: 401 })
+    // https://www.twilio.com/docs/usage/security#validating-requests — Twilio signs the full address it calls, incl. ?hospital=…
+    const publicUrl = `${SUPABASE_URL}/functions/v1/whatsapp-bot${url.search}`
+    const data = publicUrl + [...form.keys()].sort().map((k) => k + form.get(k)).join('')
+    const sig = b64(await hmac('SHA-1', tok, data))
+    if (!safeEq(sig, req.headers.get('x-twilio-signature') ?? '')) return new Response('bad signature', { status: 403 })
     const twiml = (msgs: string[]) => new Response(`<?xml version="1.0" encoding="UTF-8"?><Response>${msgs.map((m) => `<Message>${m.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</Message>`).join('')}</Response>`, { headers: { 'Content-Type': 'text/xml' } })
     if (!setup.bot) return twiml([])
     const res = await converse(phone10(form.get('From') ?? ''), form.get('Body') ?? '', setup)
@@ -189,11 +189,11 @@ Deno.serve(async (req) => {
   }
 
   // ---- Meta Cloud API
+  // Meta signs every delivery with the app secret (Settings → Notifications → Chatbot) — no secret, no trust
   const secret = setup.ctx.secrets.meta_app_secret
-  if (secret) {
-    const sig = 'sha256=' + hex(await hmac('SHA-256', secret, raw))
-    if (!safeEq(sig, req.headers.get('x-hub-signature-256') ?? '')) return new Response('bad signature', { status: 403 })
-  }
+  if (!secret) return new Response('meta app secret is not configured', { status: 401 })
+  const sig = 'sha256=' + hex(await hmac('SHA-256', secret, raw))
+  if (!safeEq(sig, req.headers.get('x-hub-signature-256') ?? '')) return new Response('bad signature', { status: 403 })
   const messages: any[] = (body.entry ?? []).flatMap((e: any) => (e.changes ?? []).flatMap((c: any) => c.value?.messages ?? []))
   if (!setup.bot || !messages.length) return json({ ok: true })   // status updates etc. — acknowledge
   for (const m of messages) {

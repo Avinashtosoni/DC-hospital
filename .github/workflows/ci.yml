@@ -27,6 +27,9 @@ jobs:
       - name: Typecheck
         run: npx tsc -b
 
+      - name: Lint (errors fail; warnings are a to-do list)
+        run: npm run lint
+
       - name: Master SQL is up to date
         run: |
           npm run sql:build

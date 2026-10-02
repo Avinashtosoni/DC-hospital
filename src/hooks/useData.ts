@@ -15,6 +15,15 @@ const NOTIFY_TABLES = new Set<string>(['appointments', 'invoices', 'payments', '
 const notifyIds = (row: unknown) => { const r = row as { id?: string; invoice_id?: string } | null; return [r?.id, r?.invoice_id] }
 
 export const qk = (table: TableName) => ['table', table] as const
+/** Money totals computed in the database (dashboard_finance, financial_report) — refreshed after any money write. */
+export const FINANCE_KEY = ['finance'] as const
+const FINANCE_TABLES = new Set<TableName>(['invoices', 'payments', 'expenses'])
+
+function afterWrite(qc: QueryClient, table: TableName) {
+  qc.invalidateQueries({ queryKey: qk(table) })
+  if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') })
+  if (FINANCE_TABLES.has(table)) qc.invalidateQueries({ queryKey: FINANCE_KEY })
+}
 
 /**
  * Tables that grow with every visit / bill. They are never downloaded whole: screens read a page, a date window
@@ -155,7 +164,7 @@ export function useCreate<T extends TableName>(table: T, opts: { silent?: boolea
       toast.error(`Could not create ${opts.label ?? 'record'}`, { description: err.message })
     },
     onSuccess: (row) => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} created`); if (NOTIFY_TABLES.has(table)) flushNotificationsSoon(1200, notifyIds(row)) },
-    onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
+    onSettled: () => afterWrite(qc, table),
   })
 }
 
@@ -175,7 +184,7 @@ export function useUpdate<T extends TableName>(table: T, opts: { silent?: boolea
       toast.error(`Could not update ${opts.label ?? 'record'}`, { description: err.message })
     },
     onSuccess: (row, { id }) => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} updated`); if (NOTIFY_TABLES.has(table)) flushNotificationsSoon(1200, [id, ...notifyIds(row)]) },
-    onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
+    onSettled: () => afterWrite(qc, table),
   })
 }
 
@@ -194,6 +203,6 @@ export function useRemove<T extends TableName>(table: T, opts: { silent?: boolea
       toast.error(`Could not delete ${opts.label ?? 'record'}`, { description: err.message })
     },
     onSuccess: () => { if (!opts.silent) toast.success(`${opts.label ?? 'Record'} deleted`) },
-    onSettled: () => { qc.invalidateQueries({ queryKey: qk(table) }); if (isAudited(table)) qc.invalidateQueries({ queryKey: qk('audit_log') }) },
+    onSettled: () => afterWrite(qc, table),
   })
 }

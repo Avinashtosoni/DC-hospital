@@ -152,7 +152,12 @@ returns uuid language plpgsql volatile security definer set search_path = public
 declare v_id uuid; v_pid uuid; v_name text; o record;
 begin
   if auth.uid() is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
-  if p_kind not in ('correction', 'erasure') then raise exception 'Choose correction or erasure.'; end if;
+  -- friendly messages instead of raw "null value in column …" errors
+  if public.current_tenant() is null then raise exception 'Your account is not linked to a hospital yet.' using errcode = '42501'; end if;
+  if not exists (select 1 from public.profiles where id = auth.uid() and role = 'patient') then
+    raise exception 'Only patients can do this.' using errcode = '42501';
+  end if;
+  if p_kind is null or p_kind not in ('correction', 'erasure') then raise exception 'Choose correction or erasure.'; end if;
   if p_kind = 'correction' and coalesce(trim(p_details), '') = '' then raise exception 'Tell us what is wrong and what it should say.'; end if;
   if exists (select 1 from public.privacy_requests where profile_id = auth.uid() and kind = p_kind and status = 'open' and tenant_id = public.current_tenant()) then
     raise exception 'You already have an open % request — the hospital will get back to you.', p_kind;

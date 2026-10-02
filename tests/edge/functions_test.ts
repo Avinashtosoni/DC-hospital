@@ -33,6 +33,7 @@ const db: Record<string, any[]> = {
     { tenant_id: CITY, key: 'sms_webhook_secret', value: 'city-secret' },
     { tenant_id: CITY, key: 'whatsapp_webhook_secret', value: 'city-wa-secret' },
     { tenant_id: CITY, key: 'whatsapp_verify_token', value: 'city-verify' },
+    { tenant_id: CITY, key: 'meta_app_secret', value: 'city-meta-secret' },
   ],
   site_content: [
     { tenant_id: DC, key: 'settings', data: { name: 'DC Hospital' } },
@@ -246,6 +247,11 @@ Deno.test("a test message uses the owner's hospital — and a provider's chosen 
 })
 
 // ------------------------------------------------------------------ whatsapp-bot
+async function metaSig(secret: string, body: string) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const b = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(body)))
+  return 'sha256=' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+}
 Deno.test("Meta's webhook check uses the hospital in the address", async () => {
   const verify = (q: string) => bot(new Request(`${SB}/functions/v1/whatsapp-bot?${q}`))
   assertEquals(await (await verify('hospital=citycare&hub.mode=subscribe&hub.verify_token=city-verify&hub.challenge=42')).text(), '42')
@@ -258,8 +264,8 @@ Deno.test("Meta's webhook check uses the hospital in the address", async () => {
 Deno.test("incoming chats are answered from that hospital's doctors, number and chat state", async () => {
   reset()
   db.wa_sessions = [{ tenant_id: DC, phone: '9876500001', state: { step: 'doctor', lang: 'en', at: Date.now() } }]   // same phone, other hospital
-  const meta = { entry: [{ changes: [{ value: { messages: [{ from: '919876500001', text: { body: '1' } }] } }] }] }
-  const r = await bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(meta) }))
+  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '919876500001', text: { body: '1' } }] } }] }] })
+  const r = await bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('city-meta-secret', meta) }, body: meta }))
   assertEquals(r.status, 200)
   const doctors = calls.find((c) => c.url.pathname.endsWith('/public_doctors'))!
   assertEquals(doctors.headers.get('x-tenant-id'), CITY)
@@ -272,6 +278,23 @@ Deno.test("incoming chats are answered from that hospital's doctors, number and 
   assert(sent.length > 0)
   assert(sent.every((s) => s.url === 'https://hooks.city.test/wa' && s.auth === 'Bearer city-wa-secret'))
   assert(sent.some((s) => /Medicine|Vivek/.test(s.body.message)) && !sent.some((s) => /Cardiology|DC Only/.test(s.body.message)))
+})
+
+Deno.test('Meta and Twilio chats must be signed — the sender number is the patient identity', async () => {
+  reset()
+  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '919876500001', text: { body: '1' } }] } }] }] })
+  const post = (q: string, headers: Record<string, string>, body: string) => bot(new Request(`${SB}/functions/v1/whatsapp-bot?${q}`, { method: 'POST', headers, body }))
+  // DC has no Meta app secret → rejected, even with a made-up signature
+  assertEquals((await post('hospital=main', { 'content-type': 'application/json' }, meta)).status, 401)
+  assertEquals((await post('hospital=main', { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('guess', meta) }, meta)).status, 401)
+  // City has one → a missing or wrong signature is refused
+  assertEquals((await post('hospital=citycare', { 'content-type': 'application/json' }, meta)).status, 403)
+  assertEquals((await post('hospital=citycare', { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('wrong', meta) }, meta)).status, 403)
+  // Twilio without an auth token → rejected
+  const form = 'From=whatsapp%3A%2B919876500001&Body=1'
+  assertEquals((await post('hospital=citycare', { 'content-type': 'application/x-www-form-urlencoded' }, form)).status, 401)
+  assertEquals(sent.length, 0)
+  assert(!calls.some((c) => c.url.pathname.endsWith('/wa_sessions') && c.method === 'POST'))
 })
 
 Deno.test('the simulator runs in the hospital of the signed-in user', async () => {
@@ -451,7 +474,10 @@ Deno.test('phase 4: beyond the included messages an empty wallet stops platform 
 // ------------------------------------------------------------------ billing (phase 4.3, Razorpay mocked)
 import { paymentSignature, webhookSignature } from '../../supabase/functions/_shared/razorpay.ts'
 const rzpEnv = (on: boolean) => {
-  for (const [k, v] of [['RAZORPAY_KEY_ID', 'rzp_test_key'], ['RAZORPAY_KEY_SECRET', 'rzp_secret'], ['RAZORPAY_WEBHOOK_SECRET', 'whsec']]) on ? Deno.env.set(k, v) : Deno.env.delete(k)
+  for (const [k, v] of [['RAZORPAY_KEY_ID', 'rzp_test_key'], ['RAZORPAY_KEY_SECRET', 'rzp_secret'], ['RAZORPAY_WEBHOOK_SECRET', 'whsec']]) {
+    if (on) Deno.env.set(k, v)
+    else Deno.env.delete(k)
+  }
 }
 
 Deno.test('billing: only the owner (or platform admin/finance) can pay; without Razorpay keys it says so', async () => {

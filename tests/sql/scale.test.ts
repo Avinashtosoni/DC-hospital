@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { freshDb, USER, type Db } from './harness'
 import { rawReport, type RawReport } from '../../src/lib/reports'
+import { summariseFinance, type FinanceSummary } from '../../src/lib/dashboardFinance'
 
 let db: Db
 beforeAll(async () => { db = await freshDb('master') }, 180_000)
@@ -79,6 +80,42 @@ describe('financial_report', () => {
     const r = (await db.one<{ r: RawReport }>(USER.patient, `select public.financial_report(current_date - 400) r`)).r
     expect(r.expenses).toEqual({})
     await expect(db.as('anon', `select public.financial_report(current_date)`)).rejects.toThrow(/permission denied/)
+  })
+})
+
+describe('dashboard_finance', () => {
+  test('database totals and lists match the demo-mode calculation', async () => {
+    const from = (await db.one<{ d: string }>(null, `select (date_trunc('month', current_date) - interval '5 months')::date::text d`)).d
+    const sql = (await db.one<{ r: FinanceSummary }>(USER.owner, 'select public.dashboard_finance($1::date) r', [from])).r
+    const num = (rows: Record<string, unknown>[], ...cols: string[]) => rows.map((r) => { for (const c of cols) r[c] = Number(r[c]); return r })
+    const inv = num(await db.as(null, `select id, issue_date::text, due_date::text, status, total, amount_paid from public.invoices`), 'total', 'amount_paid')
+    const pay = num(await db.as(null, `select id, paid_on::text, amount, method, created_at::text from public.payments`), 'amount')
+    const exp = num(await db.as(null, `select expense_date::text, amount from public.expenses`), 'amount')
+    const js = summariseFinance(inv as never, pay as never, exp as never, from)
+    for (const k of ['revenue', 'expenses', 'methods'] as const) {
+      expect(Object.keys(sql[k]).sort(), k).toEqual(Object.keys(js[k]).sort())
+      for (const [key, v] of Object.entries(js[k])) expect(Number(sql[k][key]), `${k}.${key}`).toBeCloseTo(v, 2)
+    }
+    expect(Number(sql.outstanding)).toBeCloseTo(js.outstanding, 2)
+    expect(Number(sql.open_count)).toBe(js.open_count)
+    expect(js.open_count).toBeGreaterThan(0)
+    // same balances in the same order (ties may pick a different invoice)
+    const bal = (l: { total: unknown; amount_paid: unknown }[]) => l.map((i) => Number(i.total) - Number(i.amount_paid))
+    expect(bal(sql.top_open)).toEqual(bal(js.top_open))
+    expect(bal(sql.overdue)).toEqual(bal(js.overdue))
+    expect(sql.top_open.length).toBeLessThanOrEqual(5)
+    expect(sql.recent.map((p) => p.paid_on)).toEqual(js.recent.map((p) => p.paid_on))
+    // whole rows come back (the lists link to the invoice and show the patient)
+    expect(sql.top_open[0]).toHaveProperty('invoice_number')
+    expect(sql.top_open[0]).toHaveProperty('patient_id')
+    expect(sql.top_open[0]).not.toHaveProperty('balance')
+  })
+  test('row level security applies: a patient only sees their own bills, visitors nothing', async () => {
+    const mine = await db.as<{ id: string }>(null, `select pa.id from public.patients pa where pa.profile_id = $1`, [USER.patient])
+    const r = (await db.one<{ r: FinanceSummary }>(USER.patient, `select public.dashboard_finance(current_date - 400) r`)).r
+    expect(r.expenses).toEqual({})
+    expect(r.recent.every((p) => p.patient_id === mine[0].id)).toBe(true)
+    await expect(db.as('anon', `select public.dashboard_finance(current_date)`)).rejects.toThrow(/permission denied/)
   })
 })
 

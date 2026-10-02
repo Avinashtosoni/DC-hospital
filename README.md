@@ -179,7 +179,9 @@ re-reading every payment. Demo mode runs the very same queries against the brows
    to *Redirect URLs* (used by **Forgot password**). Configure a custom SMTP server (Supabase's built-in mailer is heavily rate limited).
 3. **Backups:** Supabase Pro daily backups / PITR, or a nightly `pg_dump`. Test a restore once.
 4. **Messaging:** connect SMS / WhatsApp before turning on online booking. The OTP is capped at 5 per number per hour and
-   200 per hour for the whole site (`booking.otpHourlyLimit` in site settings); the Contact form allows 3 per number and 60 per hour overall.
+   200 per hour for the whole site (`booking.otpHourlyLimit` in site settings), and 10 per hour from one internet connection
+   across all hospitals (`booking.otpIpHourlyLimit`; the address is read from `cf-connecting-ip` / `x-real-ip` set by the proxy and
+   stored only as a hash) — so one person cannot use up a hospital's hourly budget. The Contact form allows 3 per number and 60 per hour overall.
 5. **Legal:** edit the Privacy policy / Terms (Website CMS → Legal) with the hospital's legal name, grievance officer and address
    (DPDP Act 2023). Records are never cascade-deleted: patients, doctors and invoices with history can't be deleted
    (deactivate / cancel them instead), which keeps medical and GST records intact.
@@ -230,8 +232,8 @@ Errors are explained in the delivery log. A disconnected phone (409) or pacing (
 1. `supabase functions deploy whatsapp-bot --no-verify-jwt` (the webhook is public; requests are verified by signature instead).
 2. Settings → Notifications → **WhatsApp**: choose **WA CRM / OpenWA**, **Meta Cloud API** or **Twilio**, enter the credentials, turn it on.
 3. **WhatsApp booking chatbot** card → turn it on and copy the webhook URL (`https://<project>.supabase.co/functions/v1/whatsapp-bot`).
-   * **Meta:** WhatsApp → Configuration → Webhook → paste the URL, set a *verify token* (save the same text in the card), subscribe to `messages`. Save the **app secret** too so every incoming request's `X-Hub-Signature-256` is checked.
-   * **Twilio:** WhatsApp sender → *When a message comes in* → the URL (POST). Requests are checked against your Twilio auth token.
+   * **Meta:** WhatsApp → Configuration → Webhook → paste the URL, set a *verify token* (save the same text in the card), subscribe to `messages`. Save the **app secret** too — it is **required**: every incoming request's `X-Hub-Signature-256` is checked and unsigned requests are rejected (the sender's number is the patient's identity).
+   * **Twilio:** WhatsApp sender → *When a message comes in* → the URL (POST). Requests are checked against your Twilio auth token (required — without it incoming chats are rejected).
    * **WA CRM / OpenWA:** Sessions → your session → Webhooks → add the URL, subscribe to `message.received`, set a **secret** and save the same secret in the card. Each delivery's `X-OpenWA-Signature` is verified; unsigned requests are rejected, because the sender's number is the patient's identity. Group chats, your own messages and `@lid` privacy IDs are ignored.
 
 The conversation logic is `supabase/functions/_shared/bot.ts` — plain TypeScript used by the Edge Function, the in-app preview and the tests. Chat state is kept per number in `wa_sessions` (service role only) and resets after 30 minutes.

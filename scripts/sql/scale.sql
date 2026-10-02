@@ -116,3 +116,29 @@ begin
 end $$;
 revoke execute on function public.financial_report(date) from public, anon;
 grant execute on function public.financial_report(date) to authenticated;
+
+-- ---- Owner / accountant dashboard money widgets: 6 months of totals + the few rows the lists show, so the
+--      dashboard never downloads every payment (a busy hospital has tens of thousands in 6 months). Caller's rights
+--      (RLS: owner / accountant). Mirrors useFinance() in src/pages/dashboard/Dashboard.tsx (demo mode).
+create or replace function public.dashboard_finance(p_from date)
+returns jsonb language plpgsql stable security invoker set search_path = public as $$
+declare r jsonb;
+begin
+  with open_inv as (
+    select i.*, greatest(0, i.total - i.amount_paid) as balance
+      from public.invoices i where i.status in ('unpaid', 'partial', 'overdue')
+  )
+  select jsonb_build_object(
+    'revenue', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(paid_on, 'YYYY-MM') m, sum(amount) v from public.payments where paid_on >= p_from group by 1) x),
+    'expenses', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(expense_date, 'YYYY-MM') m, sum(amount) v from public.expenses where expense_date >= p_from group by 1) x),
+    'methods', (select coalesce(jsonb_object_agg(method, v), '{}') from (select method, sum(amount) v from public.payments where paid_on >= p_from group by 1) x),
+    'outstanding', (select coalesce(sum(balance), 0) from open_inv),
+    'open_count', (select count(*) from open_inv where balance > 0),
+    'top_open', (select coalesce(jsonb_agg(to_jsonb(t) - 'balance' order by t.balance desc), '[]') from (select * from open_inv where balance > 0 order by balance desc, issue_date limit 5) t),
+    'overdue', (select coalesce(jsonb_agg(to_jsonb(t) - 'balance' order by t.balance desc), '[]') from (select * from open_inv where status = 'overdue' and balance > 0 order by balance desc, due_date limit 6) t),
+    'recent', (select coalesce(jsonb_agg(to_jsonb(t) order by t.paid_on desc, t.created_at desc), '[]') from (select * from public.payments order by paid_on desc, created_at desc limit 6) t)
+  ) into r;
+  return r;
+end $$;
+revoke execute on function public.dashboard_finance(date) from public, anon;
+grant execute on function public.dashboard_finance(date) to authenticated;

@@ -29,6 +29,8 @@ drop function if exists public.send_booking_otp(text, text) cascade;
 drop function if exists public.booking_setting(text, text, text) cascade;
 drop function if exists public.norm_phone(text) cascade;
 
+alter table public.booking_otps add column if not exists ip_hash text;   -- hashed visitor connection (per-IP OTP limit)
+create index if not exists booking_otps_ip_idx on public.booking_otps (ip_hash, created_at desc) where ip_hash is not null;
 alter table public.booking_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.booking_otps from anon, authenticated;
 
@@ -120,6 +122,7 @@ declare
   v_id     uuid;
   v_avail  text[] := public.booking_otp_channels();
   v_use    text[];
+  v_ip     text := public.client_ip_hash();
 begin
   if public.booking_setting('enabled', 'true') <> 'true' then
     raise exception 'Online booking is switched off right now. Please call the hospital to book.';
@@ -133,6 +136,11 @@ begin
   if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
   end if;
+  -- one connection can't cycle through numbers either (hashed IP; the whole-site cap below is the backstop)
+  if v_ip is not null and (select count(*) from public.booking_otps where ip_hash = v_ip and created_at > now() - interval '1 hour')
+     >= greatest(3, coalesce(nullif(public.booking_setting('otpIpHourlyLimit', '10'), '')::int, 10)) then
+    raise exception 'Too many codes requested from this connection. Please try again in an hour or call the hospital.';
+  end if;
   -- whole-site cap: stops bots cycling through thousands of numbers to run up the SMS bill ("SMS pumping")
   if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
@@ -140,8 +148,8 @@ begin
   end if;
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
-  insert into public.booking_otps (phone, code_hash, expires_at)
-  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
+  insert into public.booking_otps (phone, code_hash, expires_at, ip_hash)
+  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes', v_ip)
   returning id into v_id;
   v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;
   v_queued := case when cardinality(v_use) > 0 then public.send_booking_otp(v_phone, v_code, v_id, v_use) else 0 end;

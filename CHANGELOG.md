@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — hardening after the October 2026 audit
+
+- **Security:** the WhatsApp webhook rejects (401) Twilio / Meta messages when their signing secret is not set, instead of
+  accepting them unsigned. Booking and password-reset codes are also limited per internet connection (10/hour, hashed
+  address) so one person cannot exhaust a hospital's hourly OTP budget. Website CMS links (social, map, directions, logo)
+  only allow http(s)/tel/mailto — a `javascript:` link is hidden.
+- **Go-live check:** `npm run preflight` fails when Supabase Auth has *Confirm email* off or sign-ups disabled.
+- **Scale:** the owner / accountant dashboards add up revenue in the database (`dashboard_finance()`), not by downloading
+  six months of payments.
+- **Speed:** the demo store and seed data (~24 kB gzip) load only in demo mode; production never downloads them.
+  Firebase is now just `@firebase/app` + `@firebase/messaging` (push) — no Firestore/gRPC.
+- **Tooling:** Vite 7, Vitest 4, plugin-react 5 — `npm audit` reports 0 vulnerabilities. ESLint 9 (`npm run lint`, in CI
+  and `npm run check`).
+- **Fixes:** dashboard cards no longer push the page sideways on phones; the control panel shows a friendly card instead
+  of a white page if a screen crashes; the service worker trims old cached files; privacy requests give clear errors;
+  a date-dependent test no longer fails late in the evening (IST).
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run).
+
 ## v1.0.0 — Hospital Comrade (October 2026)
 
 The single-hospital system becomes **Hospital Comrade**: many hospitals on one database, each on its own domain, with

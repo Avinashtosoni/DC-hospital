@@ -93,6 +93,16 @@ returns text language sql stable set search_path = public as $$
   select nullif(coalesce(nullif(current_setting('request.headers', true), ''), '{}')::json ->> lower(p_name), '')
 $$;
 
+-- the visitor's connection, for rate limits on public endpoints (OTPs). Only a hash is kept (no raw IPs stored).
+-- cf-connecting-ip / x-real-ip are set by Supabase's edge (a client can't forge them); X-Forwarded-For's first entry is
+-- the fallback the Supabase docs use. NULL outside an API request (SQL editor, cron, tests).
+create or replace function public.client_ip_hash()
+returns text language sql stable set search_path = public as $$
+  select case when ip is null then null else encode(extensions.digest('dch-ip:' || ip, 'sha256'), 'hex') end
+    from (select nullif(trim(coalesce(public.request_header('cf-connecting-ip'), public.request_header('x-real-ip'),
+                                      split_part(coalesce(public.request_header('x-forwarded-for'), ''), ',', 1))), '') as ip) x
+$$;
+
 create or replace function public.primary_tenant()
 returns uuid language sql stable security definer set search_path = public as $$
   select id from public.tenants where is_primary limit 1

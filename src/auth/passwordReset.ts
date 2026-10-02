@@ -4,7 +4,7 @@
  * Demo mode: simulated with the browser store; the code is shown on screen.
  */
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { localFindByEmailPhone, localSetPassword } from '../data/localAdapter'
+import { loadLocal } from '../data/local'
 import { flushNotificationsSoon } from '../settings/store'
 
 export type OtpChannel = 'whatsapp' | 'sms'
@@ -41,7 +41,7 @@ const local = {
     await wait(500)
     const prev = read(), p = phone10(phone)
     if (prev?.phone === p && Date.now() - prev.sentAt < 30e3) throw new ResetError('Please wait 30 seconds before requesting another code.')
-    const profile = localFindByEmailPhone(email, p)
+    const profile = (await loadLocal()).localFindByEmailPhone(email, p)
     const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1e6).padStart(6, '0')
     write({ email: email.trim().toLowerCase(), phone: p, profile, code, expires: Date.now() + 600e3, attempts: 0, sentAt: Date.now() })
     return { channels: [channel], expiresIn: 600, demoCode: profile ? code : null }
@@ -63,7 +63,7 @@ const local = {
     await wait(400)
     const o = read()
     if (!o?.token || o.token !== token || !o.profile || Date.now() - (o.verifiedAt ?? 0) > 15 * 60e3) throw new ResetError('This reset has expired. Please verify your mobile number again.', 'OTP_REQUIRED')
-    localSetPassword(o.profile, password)
+    ;(await loadLocal()).localSetPassword(o.profile, password)
     sessionStorage.removeItem(KEY)
   },
 }

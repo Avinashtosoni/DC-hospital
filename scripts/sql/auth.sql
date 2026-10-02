@@ -26,6 +26,8 @@ create table if not exists public.password_reset_otps (
 -- tables created by this section get their hospital column right away (functions below refer to it)
 select public.ensure_tenant_columns();
 create index if not exists password_reset_otps_phone_idx on public.password_reset_otps (phone, created_at desc);
+alter table public.password_reset_otps add column if not exists ip_hash text;   -- hashed visitor connection (per-IP limit)
+create index if not exists password_reset_otps_ip_idx on public.password_reset_otps (ip_hash, created_at desc) where ip_hash is not null;
 alter table public.password_reset_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.password_reset_otps from anon, authenticated;
 
@@ -68,6 +70,7 @@ declare
   v_user   uuid;
   v_code   text;
   v_id     uuid;
+  v_ip     text := public.client_ip_hash();
 begin
   if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
     raise exception 'Please enter the e-mail you sign in with.';
@@ -83,6 +86,10 @@ begin
   end if;
   if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
+  end if;
+  if v_ip is not null and (select count(*) from public.password_reset_otps where ip_hash = v_ip and created_at > now() - interval '1 hour')
+     >= greatest(3, coalesce(nullif(public.booking_setting('otpIpHourlyLimit', '10'), '')::int, 10)) then
+    raise exception 'Too many reset requests from this connection. Please try again in an hour.';
   end if;
   if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
@@ -100,8 +107,8 @@ begin
   limit 1;
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
-  insert into public.password_reset_otps (user_id, phone, code_hash, expires_at)
-  values (v_user, v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
+  insert into public.password_reset_otps (user_id, phone, code_hash, expires_at, ip_hash)
+  values (v_user, v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes', v_ip)
   returning id into v_id;
 
   v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;

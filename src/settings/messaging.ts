@@ -9,7 +9,7 @@
 import { addDays, format } from 'date-fns'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import { db } from '../data/adapter'
-import { localAdmin, localMarkTemplateRun, localTemplateRecipients } from '../data/localAdapter'
+import { loadLocal } from '../data/local'
 import type { NotificationTemplate, Profile } from '../types'
 import { appendLocalLog, readLocalLog, recipientProblem } from './store'
 import type { Channel } from './types'
@@ -27,7 +27,7 @@ export interface AudiencePreview { total: number; phone: number; email: number; 
 
 export async function templateAudience(t: NotificationTemplate): Promise<AudiencePreview> {
   if (live) return rpc<AudiencePreview>('notify_template_audience', { p_id: t.id })
-  const r = localTemplateRecipients(t)
+  const r = (await loadLocal()).localTemplateRecipients(t)
   return { total: r.length, phone: r.filter((x) => !recipientProblem('sms', x.phone ?? '')).length, email: r.filter((x) => x.email?.includes('@')).length, push: 0 }
 }
 
@@ -36,7 +36,8 @@ export async function sendTemplate(t: NotificationTemplate, enabledChannels: Cha
   if (live) return Number(await rpc<number>('notify_send_template', { p_id: t.id })) || 0
   await new Promise((r) => setTimeout(r, 500))
   const rows: Parameters<typeof appendLocalLog>[0] = []
-  for (const p of localTemplateRecipients(t)) {
+  const local = await loadLocal()
+  for (const p of local.localTemplateRecipients(t)) {
     for (const ch of t.channels) {
       if (!enabledChannels.includes(ch) || ch === 'push') continue
       const to = ch === 'email' ? p.email : p.phone
@@ -45,7 +46,7 @@ export async function sendTemplate(t: NotificationTemplate, enabledChannels: Cha
     }
   }
   appendLocalLog(rows.slice(0, 300))
-  localMarkTemplateRun(t.id, rows.length)
+  local.localMarkTemplateRun(t.id, rows.length)
   return rows.length
 }
 
@@ -120,28 +121,28 @@ export interface UserStatus { id: string; disabled: boolean; last_sign_in_at: st
 export interface UserInput { email: string; full_name: string; role: Profile['role']; phone?: string | null; password?: string | null }
 export const usersApi = {
   async create(u: UserInput): Promise<string> {
-    if (!live) return localAdmin.create(u)
+    if (!live) return (await loadLocal()).localAdmin.create(u)
     return rpc<string>('admin_create_user', { p_email: u.email, p_full_name: u.full_name, p_role: u.role, p_phone: u.phone || null, p_password: u.password || null })
   },
   async update(id: string, u: Omit<UserInput, 'password'>) {
-    if (!live) return localAdmin.update(id, u)
+    if (!live) return (await loadLocal()).localAdmin.update(id, u)
     await rpc('admin_update_user', { p_id: id, p_full_name: u.full_name, p_role: u.role, p_phone: u.phone || null, p_email: u.email || null })
   },
   async setPassword(id: string, password: string) {
-    if (!live) return localAdmin.setPassword(id, password)
+    if (!live) return (await loadLocal()).localAdmin.setPassword(id, password)
     await rpc('admin_set_user_password', { p_id: id, p_password: password })
   },
   async setActive(id: string, active: boolean) {
-    if (!live) return localAdmin.setActive(id, active)
+    if (!live) return (await loadLocal()).localAdmin.setActive(id, active)
     await rpc('admin_set_user_active', { p_id: id, p_active: active })
   },
   async status(ids: string[]): Promise<UserStatus[]> {
     if (!ids.length) return []
-    if (!live) return localAdmin.status(ids)
+    if (!live) return (await loadLocal()).localAdmin.status(ids)
     return rpc<UserStatus[]>('admin_user_status', { p_ids: ids })
   },
   async remove(id: string) {
-    if (!live) return localAdmin.remove(id)
+    if (!live) return (await loadLocal()).localAdmin.remove(id)
     await rpc('admin_delete_user', { p_id: id })
   },
 }

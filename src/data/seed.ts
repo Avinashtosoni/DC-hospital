@@ -18,16 +18,8 @@ export interface DateHelper {
   ts(offsetDays: number, time?: string): string
 }
 
-export const DEMO_PASSWORD = 'Demo@123'
-
-export const DEMO_USERS: { id: string; email: string; full_name: string; role: Role; phone: string }[] = [
-  { id: 'd0c00000-0000-4000-8000-000000000001', email: 'owner@dchospital.com', full_name: 'Avinash Tosoni', role: 'owner', phone: '+91 98100 10001' },
-  { id: 'd0c00000-0000-4000-8000-000000000002', email: 'doctor@dchospital.com', full_name: 'Dr. Arjun Mehta', role: 'doctor', phone: '+91 98100 10002' },
-  { id: 'd0c00000-0000-4000-8000-000000000003', email: 'reception@dchospital.com', full_name: 'Neha Kapoor', role: 'receptionist', phone: '+91 98100 10003' },
-  { id: 'd0c00000-0000-4000-8000-000000000004', email: 'accounts@dchospital.com', full_name: 'Rahul Verma', role: 'accountant', phone: '+91 98100 10004' },
-  { id: 'd0c00000-0000-4000-8000-000000000005', email: 'staff@dchospital.com', full_name: 'Priya Sharma', role: 'staff', phone: '+91 98100 10005' },
-  { id: 'd0c00000-0000-4000-8000-000000000006', email: 'patient@dchospital.com', full_name: 'Rohan Das', role: 'patient', phone: '+91 98100 10006' },
-]
+export { DEMO_PASSWORD, DEMO_USERS } from './demoUsers'
+import { DEMO_USERS } from './demoUsers'
 
 // ---------------------------------------------------------------------------------------------
 // helpers
@@ -161,7 +153,7 @@ export function buildSeed(raw: DateHelper): { [K in keyof DB]: DB[K][] } {
   const cities = ['Sector 14, Gurugram, Haryana', 'Lajpat Nagar, New Delhi', 'Indirapuram, Ghaziabad, UP', 'Sector 62, Noida, UP', 'Dwarka Sector 10, New Delhi', 'Vasant Kunj, New Delhi', 'Rohini Sector 7, New Delhi', 'Faridabad Sector 21, Haryana', 'Karol Bagh, New Delhi', 'Mayur Vihar Phase 1, New Delhi']
   const bloods = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']
   const bloodWeights = [0.22, 0.02, 0.32, 0.02, 0.29, 0.02, 0.09, 0.02]
-  const pickBlood = () => { let r = rand(), acc = 0; for (let i = 0; i < bloods.length; i++) { acc += bloodWeights[i]; if (r < acc) return bloods[i] } return 'O+' }
+  const pickBlood = () => { const r = rand(); let acc = 0; for (let i = 0; i < bloods.length; i++) { acc += bloodWeights[i]; if (r < acc) return bloods[i] } return 'O+' }
   const allergyPool = [null, null, null, null, 'Penicillin', 'Sulfa drugs', 'Peanuts', 'Dust mites', 'Aspirin', 'Latex', 'Shellfish']
   const insurers = [null, null, 'Star Health', 'HDFC ERGO', 'ICICI Lombard', 'Niva Bupa', 'Care Health', 'CGHS', 'Ayushman Bharat']
 

@@ -3,21 +3,14 @@
  * (so every screen has something to show) but with its own people, ids, MRN prefix and e-mail domain — so it's
  * obvious that nothing is shared between the two hospitals.
  */
-import type { Role } from '../types'
 import { buildSeed, DEMO_USERS, type DateHelper } from './seed'
 import { cityName } from '../tenancy/demo'
 
 const strip = (n: string) => n.replace(/^Dr\.?\s+/, '')
 
 /** City Care Clinic's one-click logins (same roles as DC Hospital's) */
-export const CITY_USERS: { id: string; email: string; full_name: string; role: Role; phone: string }[] = [
-  { id: 'c1c00000-0000-4000-8000-000000000001', email: 'owner@citycare.demo', full_name: 'Dr. Ritu Ranjan', role: 'owner', phone: '+91 98100 50011' },
-  { id: 'c1c00000-0000-4000-8000-000000000002', email: 'doctor@citycare.demo', full_name: 'Dr. Vivek Mishra', role: 'doctor', phone: '+91 98100 50012' },
-  { id: 'c1c00000-0000-4000-8000-000000000003', email: 'reception@citycare.demo', full_name: 'Swati Kumari', role: 'receptionist', phone: '+91 98100 50013' },
-  { id: 'c1c00000-0000-4000-8000-000000000004', email: 'accounts@citycare.demo', full_name: 'Pankaj Prasad', role: 'accountant', phone: '+91 98100 50014' },
-  { id: 'c1c00000-0000-4000-8000-000000000005', email: 'staff@citycare.demo', full_name: 'Komal Thakur', role: 'staff', phone: '+91 98100 50015' },
-  { id: 'c1c00000-0000-4000-8000-000000000006', email: 'patient@citycare.demo', full_name: 'Aarav Jha', role: 'patient', phone: '+91 98100 50016' },
-]
+export { CITY_USERS } from './demoUsers'
+import { CITY_USERS } from './demoUsers'
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

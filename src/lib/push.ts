@@ -18,7 +18,7 @@ export const savedPushToken = () => localStorage.getItem(TOKEN_KEY)
 const webConfig = (c: PushCfg) => ({ apiKey: c.apiKey, authDomain: c.authDomain || `${c.projectId}.firebaseapp.com`, projectId: c.projectId, messagingSenderId: c.messagingSenderId, appId: c.appId })
 
 async function messaging(c: PushCfg) {
-  const [{ initializeApp, getApps }, m] = await Promise.all([import('firebase/app'), import('firebase/messaging')])
+  const [{ initializeApp, getApps }, m] = await Promise.all([import('@firebase/app'), import('@firebase/messaging')])
   if (!(await m.isSupported())) throw new Error('This browser does not support push notifications')
   const app = getApps().find((a) => a.name === 'dch-push') ?? initializeApp(webConfig(c), 'dch-push')
   return { m, messaging: m.getMessaging(app) }

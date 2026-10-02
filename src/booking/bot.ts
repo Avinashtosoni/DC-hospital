@@ -5,7 +5,7 @@
 import { format } from 'date-fns'
 import { botReply, newBotState, type BotDeps, type BotState } from '../../supabase/functions/_shared/bot'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
-import { localAdapter } from '../data/localAdapter'
+import { db as demoDb } from '../data/adapter'   // only used in demo mode (Supabase → the database RPCs)
 import { bookingApi, bookingWindow, localWhatsappBook, phone10, slotsFor } from './api'
 import type { SiteSettings } from '../site/cms/types'
 
@@ -14,7 +14,7 @@ export { newBotState }
 
 function localDeps(phone: string, site: SiteSettings): BotDeps {
   const p10 = phone10(phone)
-  const mine = async () => (await localAdapter.list('patients')).filter((p) => phone10(p.phone ?? '') === p10)
+  const mine = async () => (await demoDb.list('patients')).filter((p) => phone10(p.phone ?? '') === p10)
   return {
     hospital: { name: site.name, phone: site.appointmentsPhone || site.phone, address: site.address, site: site.siteUrl || window.location.origin },
     async doctors() {
@@ -38,14 +38,14 @@ function localDeps(phone: string, site: SiteSettings): BotDeps {
     },
     async upcoming() {
       const ids = new Set((await mine()).map((p) => p.id))
-      const [appts, docs] = await Promise.all([localAdapter.list('appointments'), localAdapter.list('doctors')])
+      const [appts, docs] = await Promise.all([demoDb.list('appointments'), demoDb.list('doctors')])
       const today = format(new Date(), 'yyyy-MM-dd')   // local calendar day (toISOString is UTC → yesterday before 05:30 IST)
       return appts.filter((a) => ids.has(a.patient_id) && a.appointment_date >= today && ['scheduled', 'confirmed'].includes(a.status))
         .sort((a, b) => (a.appointment_date + a.appointment_time).localeCompare(b.appointment_date + b.appointment_time))
         .slice(0, 9)
         .map((a) => ({ id: a.id, ref: a.booking_ref ?? a.id.slice(0, 8).toUpperCase(), date: a.appointment_date, time: a.appointment_time.slice(0, 5), status: a.status, doctor: docs.find((d) => d.id === a.doctor_id)?.full_name ?? 'Doctor' }))
     },
-    async cancel(id) { await localAdapter.update('appointments', id, { status: 'cancelled' }) },
+    async cancel(id) { await demoDb.update('appointments', id, { status: 'cancelled' }) },
   }
 }
 

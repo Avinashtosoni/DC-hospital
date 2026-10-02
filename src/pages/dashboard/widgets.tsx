@@ -21,9 +21,10 @@ export function ListCard({ title, subtitle, icon, link, linkLabel = 'View all', 
 }) {
   if (useWidgetHidden(widgetId ?? title)) return null
   return (
-    <Card className={className}>
+    // min-w-0: as a grid item the card must not grow past the screen when a row is long (phones)
+    <Card className={`min-w-0 ${className ?? ''}`}>
       <CardHeader title={title} subtitle={subtitle} icon={icon}
-        action={link && <Link to={link} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">{linkLabel}<ArrowRight className="h-3 w-3" /></Link>} />
+        action={link && <Link to={link} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-brand-700 hover:underline">{linkLabel}<ArrowRight className="h-3 w-3" /></Link>} />
       {loading ? (
         <div className="space-y-3 p-5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="flex items-center gap-3"><Skeleton className="h-8 w-8 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3 w-1/2" /><Skeleton className="h-2.5 w-1/3" /></div></div>)}</div>
       ) : empty ? (

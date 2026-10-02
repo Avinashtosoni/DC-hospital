@@ -295,7 +295,7 @@ begin
           left(p_action, 80), left(p_target, 200), p_detail);
 end $$;
 
-revoke all on function public.request_header(text), public.primary_tenant(), public.keep_tenant(), public.profiles_pick_tenant() from public, anon, authenticated;
+revoke all on function public.request_header(text), public.client_ip_hash(), public.primary_tenant(), public.keep_tenant(), public.profiles_pick_tenant() from public, anon, authenticated;
 grant execute on function public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
   public.has_role(public.app_role[]), public.is_staff(), public.current_app_role(), public.my_doctor_id(), public.my_patient_id()
   to anon, authenticated, service_role;

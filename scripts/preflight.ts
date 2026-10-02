@@ -6,7 +6,8 @@
  *
  * Reads the deployment's own /env.js for the Supabase URL and anon key, so no secrets are needed. Checks: the site
  * answers, multi-hospital mode with a real backend, security headers, the legal pages, the control panel is not
- * indexed, the database has every phase installed, the Edge Functions are deployed, and sign-up is configured.
+ * indexed, the database has every phase installed, Supabase Auth requires e-mail confirmation, the Edge Functions are
+ * deployed, and sign-up is configured.
  * Exit code 1 when anything fails (warnings don't fail). Nothing is written anywhere.
  */
 
@@ -89,6 +90,21 @@ export async function preflight(base: string, opts: { hospital?: string; fetch?:
       const rows = t instanceof Error || !t.ok ? [] : await t.json() as unknown[]
       add(`Hospital "${opts.hospital}"`, Array.isArray(rows) && rows.length ? 'ok' : 'fail', Array.isArray(rows) && rows.length ? 'found' : 'not found')
     }
+    // Auth: "Confirm email" must stay on — owners, doctors and staff are matched to their hospital by e-mail, so an
+    // unconfirmed sign-up with someone else's address must never get in (GoTrue's public settings endpoint says)
+    try {
+      const r = await f(`${url}/auth/v1/settings`, { headers: { apikey: key } })
+      if (!r.ok) add('Auth: confirm e-mail', 'warn', `could not read /auth/v1/settings (HTTP ${r.status}) — check Authentication → Providers → Email by hand`)
+      else {
+        const a = await r.json() as { mailer_autoconfirm?: boolean; disable_signup?: boolean }
+        add('Auth: confirm e-mail', a.mailer_autoconfirm ? 'fail' : 'ok', a.mailer_autoconfirm
+          ? '"Confirm email" is OFF — anyone could sign up with an owner\'s or doctor\'s address. Supabase → Authentication → Providers → Email → turn "Confirm email" on'
+          : 'on — new accounts must confirm their e-mail')
+        add('Auth: sign-ups allowed', a.disable_signup ? 'fail' : 'ok', a.disable_signup
+          ? 'sign-ups are disabled in Supabase Auth — new owners, staff invites and patients cannot create accounts'
+          : 'on')
+      }
+    } catch (e) { add('Auth: confirm e-mail', 'warn', (e as Error).message) }
     // anonymous visitors must not read private tables
     try {
       const r = await f(`${url}/rest/v1/patients?select=id&limit=1`, { headers: h })

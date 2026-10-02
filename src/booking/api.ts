@@ -8,7 +8,8 @@
 import { flushNotificationsSoon } from '../settings/store'
 import { addDays, format, parseISO } from 'date-fns'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
-import { asActor, localAdapter } from '../data/localAdapter'
+import { db as demoDb } from '../data/adapter'   // demo-mode branches only
+import { loadLocal } from '../data/local'
 import { freeSlots, type ScheduleExt } from '../lib/schedule'
 import type { Appointment, Doctor, DoctorLeave, Holiday, Invoice, Patient } from '../types'
 import { isLicenseError, LICENSE_PUBLIC_MESSAGE } from '../billing/license'
@@ -94,7 +95,7 @@ const readJson = <T,>(k: string): T | null => { try { return JSON.parse(sessionS
 
 const local = {
   async doctors(): Promise<PublicDoctor[]> {
-    const [docs, deps] = await Promise.all([localAdapter.list('doctors'), localAdapter.list('departments')])
+    const [docs, deps] = await Promise.all([demoDb.list('doctors'), demoDb.list('departments')])
     const dn = new Map(deps.map((d) => [d.id, d.name]))
     return docs.filter((d) => d.status === 'active').sort((a, b) => a.full_name.localeCompare(b.full_name)).map((d) => ({
       id: d.id, full_name: d.full_name, specialization: d.specialization, department: dn.get(d.department_id ?? '') ?? null,
@@ -102,7 +103,7 @@ const local = {
     }))
   },
   async availability(doctorId: string | null, from: string, to: string): Promise<Availability> {
-    const [appts, leaves, holidays] = await Promise.all([localAdapter.list('appointments'), localAdapter.list('doctor_leaves'), localAdapter.list('holidays')])
+    const [appts, leaves, holidays] = await Promise.all([demoDb.list('appointments'), demoDb.list('doctor_leaves'), demoDb.list('holidays')])
     return {
       booked: appts.filter((a) => (!doctorId || a.doctor_id === doctorId) && a.appointment_date >= from && a.appointment_date <= to && a.status !== 'cancelled' && a.status !== 'no_show')
         .map(({ doctor_id, appointment_date, appointment_time, status }) => ({ doctor_id, appointment_date, appointment_time, status })),
@@ -148,8 +149,8 @@ const local = {
     if (name.length < 2) throw new BookingError('Please enter the patient’s full name.')
 
     const [docs, deps, patients, appts, leaves, holidays, invoices] = await Promise.all([
-      localAdapter.list('doctors'), localAdapter.list('departments'), localAdapter.list('patients'), localAdapter.list('appointments'),
-      localAdapter.list('doctor_leaves'), localAdapter.list('holidays'), localAdapter.list('invoices'),
+      demoDb.list('doctors'), demoDb.list('departments'), demoDb.list('patients'), demoDb.list('appointments'),
+      demoDb.list('doctor_leaves'), demoDb.list('holidays'), demoDb.list('invoices'),
     ])
     const d = docs.find((x) => x.id === input.doctorId)
     if (!d || d.status !== 'active') throw new BookingError('This doctor is not taking bookings right now.', 'SLOT_UNAVAILABLE')
@@ -161,7 +162,7 @@ const local = {
       throw taken ? new BookingError('Sorry — someone just booked this slot. Please pick another time.', 'SLOT_TAKEN') : new BookingError('This time is no longer available — please pick another slot.', 'SLOT_UNAVAILABLE')
     }
 
-    return asActor('Website booking', 'public', async () => {
+    return (await loadLocal()).asActor('Website booking', 'public', async () => {
       let patient = patients.find((p) => phone10(p.phone ?? '') === tk.phone && normName(p.full_name).toLowerCase() === name.toLowerCase())
       let isNew = false
       if (patient) {
@@ -169,21 +170,21 @@ const local = {
           throw new BookingError('You already have a booking with this doctor on this day.')
       } else {
         const mrn = `DCH-${Math.max(100000, ...patients.map((p) => Number(p.mrn.replace(/\D/g, '')) || 0)) + 1}`
-        patient = await localAdapter.insert('patients', {
+        patient = await demoDb.insert('patients', {
           mrn, full_name: name, gender: input.gender, date_of_birth: input.dob || null, phone: prettyPhone(tk.phone),
           email: input.email?.trim().toLowerCase() || null, status: 'outpatient',
         } as never)
         isNew = true
       }
       const ref = `DCB-${Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase()}`
-      const appointment = await localAdapter.insert('appointments', {
+      const appointment = await demoDb.insert('appointments', {
         patient_id: patient.id, doctor_id: d.id, appointment_date: input.date, appointment_time: input.time, type: 'consultation',
         status: 'scheduled', reason: input.reason?.trim().slice(0, 500) || null, source: 'website', booking_ref: ref,
       } as never)
       const fee = Number(d.consultation_fee)
       const tax = Math.round(fee * (Number(cfg.billing.gstRate) || 0)) / 100
       const seq = Math.max(10000, ...invoices.map((i) => Number(i.invoice_number.replace(/\D/g, '')) || 0)) + 1
-      const invoice = await localAdapter.insert('invoices', {
+      const invoice = await demoDb.insert('invoices', {
         invoice_number: `INV-${String(seq).padStart(5, '0')}`, patient_id: patient.id, issue_date: format(new Date(), 'yyyy-MM-dd'), due_date: input.date,
         items: [{ description: `Consultation — ${d.full_name} (${d.specialization}) · ${format(parseISO(input.date), 'dd MMM yyyy')}, ${input.time}`, quantity: 1, unit_price: fee }],
         subtotal: fee, tax, discount: 0, total: fee + tax, amount_paid: 0, status: 'unpaid', notes: `Online booking ${ref}`,
@@ -236,7 +237,7 @@ export async function localWhatsappBook(phone: string, input: Omit<BookingInput,
   const token = crypto.randomUUID()
   sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token, phone: phone10(phone), expires: Date.now() + 60e3 } satisfies LocalToken))
   const r = await local.book({ ...input, token, gender: 'other', dob: null, email: null }, cfg)
-  await asActor('WhatsApp booking', 'public', () => localAdapter.update('appointments', r.appointment.id, { source: 'whatsapp' } as never))
+  await (await loadLocal()).asActor('WhatsApp booking', 'public', () => demoDb.update('appointments', r.appointment.id, { source: 'whatsapp' } as never))
   return r
 }
 

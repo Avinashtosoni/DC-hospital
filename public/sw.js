@@ -8,6 +8,16 @@ const BUILD_ID = '__BUILD_ID__'
 const SHELL = `dch-shell-${BUILD_ID}`
 const ASSETS = 'dch-assets'
 const MEDIA = 'dch-media'
+// hashed assets of old deploys pile up in these caches — keep only the newest entries (oldest are dropped first)
+const LIMITS = { [ASSETS]: 120, [MEDIA]: 80 }
+async function trim(name) {
+  const cache = await caches.open(name)
+  const keys = await cache.keys()   // insertion order: oldest first
+  const extra = keys.length - LIMITS[name]
+  if (extra > 0) await Promise.all(keys.slice(0, extra).map((k) => cache.delete(k)))
+}
+let trimTimer = 0
+const trimSoon = () => { clearTimeout(trimTimer); trimTimer = setTimeout(() => { trim(ASSETS).catch(() => {}); trim(MEDIA).catch(() => {}) }, 5000) }
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/manifest.webmanifest', '/icons/icon-192.png', '/favicon.svg'])).catch(() => {}))
@@ -17,6 +27,7 @@ self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     const keys = await caches.keys()
     await Promise.all(keys.filter((k) => k.startsWith('dch-shell-') && k !== SHELL).map((k) => caches.delete(k)))
+    await Promise.all([trim(ASSETS), trim(MEDIA)]).catch(() => {})
     await self.clients.claim()
   })())
 })
@@ -52,7 +63,7 @@ self.addEventListener('fetch', (e) => {
       const hit = await caches.match(req)
       if (hit) return hit
       const res = await fetch(req)
-      if (res.ok || res.type === 'opaque') (await caches.open(ASSETS)).put(req, res.clone())
+      if (res.ok || res.type === 'opaque') { (await caches.open(ASSETS)).put(req, res.clone()); trimSoon() }
       return res
     })())
     return
@@ -62,7 +73,7 @@ self.addEventListener('fetch', (e) => {
     e.respondWith((async () => {
       const cache = await caches.open(MEDIA)
       const hit = await cache.match(req)
-      const fresh = fetch(req).then((res) => { if (res.ok) cache.put(req, res.clone()); return res }).catch(() => hit)
+      const fresh = fetch(req).then((res) => { if (res.ok) { cache.put(req, res.clone()); trimSoon() } return res }).catch(() => hit)
       return hit || fresh
     })())
   }

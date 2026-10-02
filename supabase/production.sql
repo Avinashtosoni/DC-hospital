@@ -724,6 +724,16 @@ returns text language sql stable set search_path = public as $$
   select nullif(coalesce(nullif(current_setting('request.headers', true), ''), '{}')::json ->> lower(p_name), '')
 $$;
 
+-- the visitor's connection, for rate limits on public endpoints (OTPs). Only a hash is kept (no raw IPs stored).
+-- cf-connecting-ip / x-real-ip are set by Supabase's edge (a client can't forge them); X-Forwarded-For's first entry is
+-- the fallback the Supabase docs use. NULL outside an API request (SQL editor, cron, tests).
+create or replace function public.client_ip_hash()
+returns text language sql stable set search_path = public as $$
+  select case when ip is null then null else encode(extensions.digest('dch-ip:' || ip, 'sha256'), 'hex') end
+    from (select nullif(trim(coalesce(public.request_header('cf-connecting-ip'), public.request_header('x-real-ip'),
+                                      split_part(coalesce(public.request_header('x-forwarded-for'), ''), ',', 1))), '') as ip) x
+$$;
+
 create or replace function public.primary_tenant()
 returns uuid language sql stable security definer set search_path = public as $$
   select id from public.tenants where is_primary limit 1
@@ -1485,6 +1495,8 @@ drop function if exists public.send_booking_otp(text, text) cascade;
 drop function if exists public.booking_setting(text, text, text) cascade;
 drop function if exists public.norm_phone(text) cascade;
 
+alter table public.booking_otps add column if not exists ip_hash text;   -- hashed visitor connection (per-IP OTP limit)
+create index if not exists booking_otps_ip_idx on public.booking_otps (ip_hash, created_at desc) where ip_hash is not null;
 alter table public.booking_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.booking_otps from anon, authenticated;
 
@@ -1576,6 +1588,7 @@ declare
   v_id     uuid;
   v_avail  text[] := public.booking_otp_channels();
   v_use    text[];
+  v_ip     text := public.client_ip_hash();
 begin
   if public.booking_setting('enabled', 'true') <> 'true' then
     raise exception 'Online booking is switched off right now. Please call the hospital to book.';
@@ -1589,6 +1602,11 @@ begin
   if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
   end if;
+  -- one connection can't cycle through numbers either (hashed IP; the whole-site cap below is the backstop)
+  if v_ip is not null and (select count(*) from public.booking_otps where ip_hash = v_ip and created_at > now() - interval '1 hour')
+     >= greatest(3, coalesce(nullif(public.booking_setting('otpIpHourlyLimit', '10'), '')::int, 10)) then
+    raise exception 'Too many codes requested from this connection. Please try again in an hour or call the hospital.';
+  end if;
   -- whole-site cap: stops bots cycling through thousands of numbers to run up the SMS bill ("SMS pumping")
   if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
@@ -1596,8 +1614,8 @@ begin
   end if;
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
-  insert into public.booking_otps (phone, code_hash, expires_at)
-  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
+  insert into public.booking_otps (phone, code_hash, expires_at, ip_hash)
+  values (v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes', v_ip)
   returning id into v_id;
   v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;
   v_queued := case when cardinality(v_use) > 0 then public.send_booking_otp(v_phone, v_code, v_id, v_use) else 0 end;
@@ -2740,6 +2758,32 @@ end $$;
 revoke execute on function public.financial_report(date) from public, anon;
 grant execute on function public.financial_report(date) to authenticated;
 
+-- ---- Owner / accountant dashboard money widgets: 6 months of totals + the few rows the lists show, so the
+--      dashboard never downloads every payment (a busy hospital has tens of thousands in 6 months). Caller's rights
+--      (RLS: owner / accountant). Mirrors useFinance() in src/pages/dashboard/Dashboard.tsx (demo mode).
+create or replace function public.dashboard_finance(p_from date)
+returns jsonb language plpgsql stable security invoker set search_path = public as $$
+declare r jsonb;
+begin
+  with open_inv as (
+    select i.*, greatest(0, i.total - i.amount_paid) as balance
+      from public.invoices i where i.status in ('unpaid', 'partial', 'overdue')
+  )
+  select jsonb_build_object(
+    'revenue', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(paid_on, 'YYYY-MM') m, sum(amount) v from public.payments where paid_on >= p_from group by 1) x),
+    'expenses', (select coalesce(jsonb_object_agg(m, v), '{}') from (select to_char(expense_date, 'YYYY-MM') m, sum(amount) v from public.expenses where expense_date >= p_from group by 1) x),
+    'methods', (select coalesce(jsonb_object_agg(method, v), '{}') from (select method, sum(amount) v from public.payments where paid_on >= p_from group by 1) x),
+    'outstanding', (select coalesce(sum(balance), 0) from open_inv),
+    'open_count', (select count(*) from open_inv where balance > 0),
+    'top_open', (select coalesce(jsonb_agg(to_jsonb(t) - 'balance' order by t.balance desc), '[]') from (select * from open_inv where balance > 0 order by balance desc, issue_date limit 5) t),
+    'overdue', (select coalesce(jsonb_agg(to_jsonb(t) - 'balance' order by t.balance desc), '[]') from (select * from open_inv where status = 'overdue' and balance > 0 order by balance desc, due_date limit 6) t),
+    'recent', (select coalesce(jsonb_agg(to_jsonb(t) order by t.paid_on desc, t.created_at desc), '[]') from (select * from public.payments order by paid_on desc, created_at desc limit 6) t)
+  ) into r;
+  return r;
+end $$;
+revoke execute on function public.dashboard_finance(date) from public, anon;
+grant execute on function public.dashboard_finance(date) to authenticated;
+
 
 -- =====================================================================================================
 --  16. PASSWORD RESET BY MOBILE OTP (idempotent; also shipped in supabase/upgrade-2026-10.sql)
@@ -2769,6 +2813,8 @@ create table if not exists public.password_reset_otps (
 -- tables created by this section get their hospital column right away (functions below refer to it)
 select public.ensure_tenant_columns();
 create index if not exists password_reset_otps_phone_idx on public.password_reset_otps (phone, created_at desc);
+alter table public.password_reset_otps add column if not exists ip_hash text;   -- hashed visitor connection (per-IP limit)
+create index if not exists password_reset_otps_ip_idx on public.password_reset_otps (ip_hash, created_at desc) where ip_hash is not null;
 alter table public.password_reset_otps enable row level security;   -- no policies: unreachable through the API
 revoke all on public.password_reset_otps from anon, authenticated;
 
@@ -2811,6 +2857,7 @@ declare
   v_user   uuid;
   v_code   text;
   v_id     uuid;
+  v_ip     text := public.client_ip_hash();
 begin
   if v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
     raise exception 'Please enter the e-mail you sign in with.';
@@ -2826,6 +2873,10 @@ begin
   end if;
   if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
+  end if;
+  if v_ip is not null and (select count(*) from public.password_reset_otps where ip_hash = v_ip and created_at > now() - interval '1 hour')
+     >= greatest(3, coalesce(nullif(public.booking_setting('otpIpHourlyLimit', '10'), '')::int, 10)) then
+    raise exception 'Too many reset requests from this connection. Please try again in an hour.';
   end if;
   if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
@@ -2843,8 +2894,8 @@ begin
   limit 1;
 
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
-  insert into public.password_reset_otps (user_id, phone, code_hash, expires_at)
-  values (v_user, v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes')
+  insert into public.password_reset_otps (user_id, phone, code_hash, expires_at, ip_hash)
+  values (v_user, v_phone, extensions.crypt(v_code, extensions.gen_salt('bf', 6)), now() + interval '10 minutes', v_ip)
   returning id into v_id;
 
   v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;
@@ -4203,7 +4254,7 @@ begin
           left(p_action, 80), left(p_target, 200), p_detail);
 end $$;
 
-revoke all on function public.request_header(text), public.primary_tenant(), public.keep_tenant(), public.profiles_pick_tenant() from public, anon, authenticated;
+revoke all on function public.request_header(text), public.client_ip_hash(), public.primary_tenant(), public.keep_tenant(), public.profiles_pick_tenant() from public, anon, authenticated;
 grant execute on function public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
   public.has_role(public.app_role[]), public.is_staff(), public.current_app_role(), public.my_doctor_id(), public.my_patient_id()
   to anon, authenticated, service_role;
@@ -5388,7 +5439,12 @@ returns uuid language plpgsql volatile security definer set search_path = public
 declare v_id uuid; v_pid uuid; v_name text; o record;
 begin
   if auth.uid() is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
-  if p_kind not in ('correction', 'erasure') then raise exception 'Choose correction or erasure.'; end if;
+  -- friendly messages instead of raw "null value in column …" errors
+  if public.current_tenant() is null then raise exception 'Your account is not linked to a hospital yet.' using errcode = '42501'; end if;
+  if not exists (select 1 from public.profiles where id = auth.uid() and role = 'patient') then
+    raise exception 'Only patients can do this.' using errcode = '42501';
+  end if;
+  if p_kind is null or p_kind not in ('correction', 'erasure') then raise exception 'Choose correction or erasure.'; end if;
   if p_kind = 'correction' and coalesce(trim(p_details), '') = '' then raise exception 'Tell us what is wrong and what it should say.'; end if;
   if exists (select 1 from public.privacy_requests where profile_id = auth.uid() and kind = p_kind and status = 'open' and tenant_id = public.current_tenant()) then
     raise exception 'You already have an open % request — the hospital will get back to you.', p_kind;

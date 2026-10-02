@@ -1,6 +1,6 @@
 import type { DB, Profile, TableName } from '../types'
 import { isSupabaseConfigured } from '../lib/supabase'
-import { localAdapter } from './localAdapter'
+import { loadLocal } from './local'
 import { supabaseAdapter } from './supabaseAdapter'
 import type { Query, QueryResult } from './query'
 
@@ -43,7 +43,18 @@ export interface AuthAdapter {
   onChange(cb: () => void): () => void
 }
 
-export const db: DataAdapter = isSupabaseConfigured ? supabaseAdapter : localAdapter
+/** demo mode: the same interface, loading the in-browser store on first use */
+const lazyLocal: DataAdapter = {
+  mode: 'local',
+  list: async (table) => (await loadLocal()).localAdapter.list(table),
+  query: async (table, q) => (await loadLocal()).localAdapter.query(table, q),
+  insert: async (table, row) => (await loadLocal()).localAdapter.insert(table, row),
+  update: async (table, id, patch) => (await loadLocal()).localAdapter.update(table, id, patch),
+  remove: async (table, id) => (await loadLocal()).localAdapter.remove(table, id),
+  reset: async () => { await (await loadLocal()).localAdapter.reset?.() },
+}
+
+export const db: DataAdapter = isSupabaseConfigured ? supabaseAdapter : lazyLocal
 
 /** Reads every row of a bounded query (a date window, one patient's history…) page by page, up to `cap` rows. */
 export async function queryAll<T extends TableName>(table: T, q: Query, cap = 20_000): Promise<Row<T>[]> {

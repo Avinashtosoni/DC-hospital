@@ -7,7 +7,6 @@ import { unzipSync, strFromU8 } from 'fflate'
 import { computeLicense, licenseBanner } from '../src/billing/license'
 import { toCsv } from '../src/lib/utils'
 
-const OWNER = 'd0c00000-0000-4000-8000-000000000001'
 const PATIENT = 'd0c00000-0000-4000-8000-000000000006'
 
 function stubStorage() {
