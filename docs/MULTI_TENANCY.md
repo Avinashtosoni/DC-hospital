@@ -117,9 +117,31 @@ settings and sender identity. The Hospital Comrade team works through **provider
     found: the demo clinic's Settings showed the sample legal name → it has its own letterhead now); 1.3's mock E2E
     covers domain routing with Supabase.
 
+### Phase 2 — per-hospital website & domains ✅
+- [x] **2.1 Website starter** — a new hospital's website no longer shows the sample hospital's history, founder, team,
+  patient numbers, reviews, map pin or Delhi texts. `src/site/cms/starter.ts` keeps the layout and uses `{name}` /
+  `{phone}` tokens; fact-only sections (numbers, reviews, milestones, leadership, accreditations, doctor profiles,
+  packages, support services, emergency) start empty or switched off until the hospital fills them in. The primary
+  hospital keeps its own content; saved CMS values always win. Pages hide empty blocks; per-hospital offline cache.
+- [x] **2.2 Product page** — `PLATFORM_DOMAIN` (and `www.`) with no `?hospital=` shows the Hospital Comrade page
+  (features, roles, pricing Clinic ₹999 / Hospital ₹2,999 / Enterprise ₹7,999+ / Custom — edit
+  `src/platform/plans.ts`, FAQ, call-back form, demo links). Separate 22 kB chunk, never loaded on hospital sites.
+  Leads → `platform_leads` via `submit_platform_lead()` (validated, one per number per 10 min, 60/hour ceiling;
+  readable by provider admins only). `?platform` shows the page on any host (previews).
+- [x] **2.3 Domains** — `domains` Edge Function + Settings → **Domain**. Provider admins add / remove / make primary;
+  the owner sees status and the one CNAME record to add, and can re-check. Cloudflare for SaaS custom hostnames with
+  HTTP validation (certificate issued once the CNAME is live), TXT record for zero-downtime moves, adopts hostnames
+  Cloudflare already has, "manual" mode when Cloudflare isn't configured; sub-domains of the platform domain need no
+  Cloudflare step. Demo mode simulates the flow.
+- [x] **2.4 Browser identity** — each hospital gets its own install name / icon (web-app manifest), apple title and
+  link-preview tags; with `TENANCY=multi` the container replaces the sample hospital's title in `index.html` with
+  neutral text (WhatsApp / Facebook previews don't run JavaScript).
+- [x] **2.5 Verified** — 188 unit / SQL tests, 10 Edge Function tests (Cloudflare API mocked), browser: product page
+  (desktop + mobile, call-back form), City Care's starter website, Domain tab as owner and as provider admin, manifests.
+
 ### Later phases
-2 Per-hospital website & domains · 3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel ·
-6 Owner billing page · 7 Ops & compliance · 8 Launch
+3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel · 6 Owner billing page ·
+7 Ops & compliance · 8 Launch
 
 ## Going multi-hospital (runbook)
 
@@ -129,14 +151,16 @@ Phase 1 is complete: the database, the app and the Edge Functions keep hospitals
 1. **Database** — new project: run `supabase/production.sql` (first change the owner e-mail on the line marked ✏️). Existing
    single-hospital project (September 2026 or newer): run `supabase/upgrade-2026-10.sql` — everything joins the first
    hospital, nothing changes for it.
-2. **Edge Functions** — `supabase functions deploy notify` and `supabase functions deploy whatsapp-bot --no-verify-jwt`
-   (after the SQL: the new functions need the new `claim_notifications`).
+2. **Edge Functions** — `supabase functions deploy notify`, `supabase functions deploy whatsapp-bot --no-verify-jwt`
+   and `supabase functions deploy domains` (after the SQL: the new functions need the new `claim_notifications`).
 3. **App** — Coolify → environment: `TENANCY=multi`, `PLATFORM_NAME`, `PLATFORM_DOMAIN`, `REQUIRE_BACKEND=true` → restart.
    With one hospital nothing looks different.
 4. **Add a hospital** — Supabase → SQL editor → `supabase/snippets/add-hospital.sql` (edit the ✏️ values). It creates
    the hospital, its address, its built-in website forms and name, and remembers the owner e-mail.
-5. **Its address** — DNS for the hospital's domain to the server (Coolify: add the domain to the app). Until a domain
-   is ready, `https://<app>/?hospital=<slug>` works.
+5. **Its address** — sign in as a provider admin on any hospital address, pick the hospital in the banner,
+   Settings → **Domain** → add `www.theirhospital.in` and send the owner the CNAME shown there (the owner sees it in the
+   same tab). With Cloudflare for SaaS set up (below) SSL follows automatically. Until then, `https://<app>/?hospital=<slug>`
+   works, and `<slug>.<PLATFORM_DOMAIN>` works straight away if the wildcard below exists.
 6. **Its owner** signs up on that address with the owner e-mail → owner of that hospital. The owner then fills in the
    website (if the *Website* module is theirs), settings and staff invites, and their own SMS / WhatsApp / e-mail
    credentials (Settings → Notifications; WhatsApp bot webhook: the address shown there, `…/whatsapp-bot?hospital=<slug>`).
@@ -144,7 +168,32 @@ Phase 1 is complete: the database, the app and the Edge Functions keep hospitals
 8. **Check** — sign in as the owner on the new address (sees an empty hospital), as the first hospital's owner (sees
    nothing of the new one), as support (banner, read-only patients).
 
-Known limits until later phases: a new hospital's website shows the built-in sample texts (doctors, services) until
-the owner edits them (phase 2 brings per-hospital website starters and domains via Cloudflare for SaaS); messaging
-uses each hospital's own credentials (phase 3 adds platform-paid messaging and wallets); the provider panel (phase 5)
+Known limits until later phases: messaging uses each hospital's own credentials (phase 3 adds platform-paid messaging and wallets); the provider panel (phase 5)
 replaces the snippets and must set `app.tenant_move = 'on'` while moving a profile, like `add-provider.sql` does.
+
+### The platform domain and the demo
+- `https://<PLATFORM_DOMAIN>` is the Hospital Comrade product page. Never map it (or `www.`) to a hospital.
+- Demo: point `demo.<PLATFORM_DOMAIN>` at the same app. In demo mode (no database) any host other than the platform
+  domain opens the demo hospital; with a database, map `demo.<PLATFORM_DOMAIN>` to the demo hospital in Settings → Domain.
+  The product page's "Live demo" button uses `/?hospital=main` (and `citycare` for the clinic).
+- Call-back requests: Supabase → Table editor → `platform_leads` (provider admins can also `select` them with their
+  login; the provider panel will list them in phase 5).
+
+### Cloudflare for SaaS (once, for automatic SSL on hospitals' domains)
+1. Cloudflare → the zone of `PLATFORM_DOMAIN` → **SSL/TLS → Custom Hostnames** → enable (100 hostnames included, then
+   about $0.10 per hostname per month).
+2. Add a proxied DNS record for the **fallback origin**, e.g. `origin.<PLATFORM_DOMAIN>` → the server's IP, and set it
+   as *Fallback Origin* on the same page (wait until it says *Active*). SSL/TLS mode **Full** (never *Flexible* — it loops).
+3. Add the **CNAME target** hospitals point at: `customers.<PLATFORM_DOMAIN>` CNAME → `origin.<PLATFORM_DOMAIN>` (proxied).
+   Optional wildcard for instant sub-domains: `*.<PLATFORM_DOMAIN>` → the same origin.
+4. API token: *My Profile → API Tokens → Create* with **Zone → SSL and Certificates → Edit** for that zone. Copy the Zone ID.
+5. `supabase secrets set CF_API_TOKEN=… CF_ZONE_ID=… CF_CNAME_TARGET=customers.<PLATFORM_DOMAIN> PLATFORM_DOMAIN=<PLATFORM_DOMAIN>`
+   then `supabase functions deploy domains`.
+6. Server: every hospital host must reach the app. Coolify/Traefik only routes hosts it knows, so either add each
+   hospital domain to the app's *Domains* (simple, a few hospitals) or give the app a catch-all router
+   (Traefik v3: ``HostRegexp(`.+`)``, v2: ``HostRegexp(`{host:.+}`)``, lowest priority) so any host Cloudflare forwards is served — the app picks the hospital
+   from the host. Cloudflare terminates the visitor's TLS; the origin only needs a certificate for the fallback origin.
+
+Root domains (`theirhospital.in`) can't hold a CNAME at most registrars: use `www.` and let the registrar redirect the
+root to it (the Domain tab says so).
+

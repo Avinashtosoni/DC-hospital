@@ -41,7 +41,7 @@ Optional: deploy production from **release tags** (`v1.4.0`) instead of `main` �
 | `REQUIRE_BACKEND` | `true` | refuse to fall back to demo mode (set for every real install) |
 | `TENANCY` | `single` (default) / `multi` | `multi` = Hospital Comrade SaaS: many hospitals on one database, chosen by domain |
 | `PLATFORM_NAME` | `Hospital Comrade` (default) | SaaS brand shown on platform screens (multi mode) |
-| `PLATFORM_DOMAIN` | `hospital.digitalcomrade.in` (default) | The platform's own domain — change it here when the domain changes |
+| `PLATFORM_DOMAIN` | `hospital.digitalcomrade.in` (default) | The platform's own domain — shows the Hospital Comrade product page (demo and multi mode); change it here when the domain changes |
 | `APP_ENV` | `production` (default) / `staging` | staging badge + `noindex` |
 
 All of them are read when the container starts (`/env.js`), so changing one only needs a restart, not a rebuild.
@@ -50,8 +50,11 @@ All of them are read when the container starts (`/env.js`), so changing one only
 
 - New Supabase project: `supabase/production.sql` (no demo data). Existing project: `supabase/upgrade-2026-10.sql`
   (safe to run again; oldest supported database: September 2026). Run on staging first.
-- After database changes, redeploy the functions: `supabase functions deploy notify` and
-  `supabase functions deploy whatsapp-bot --no-verify-jwt`.
+- After database changes, redeploy the functions: `supabase functions deploy notify`,
+  `supabase functions deploy whatsapp-bot --no-verify-jwt` and `supabase functions deploy domains`.
+- Hospitals' own domains (Settings → Domain) use Cloudflare for SaaS when the `domains` function has the secrets
+  `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_CNAME_TARGET`, `PLATFORM_DOMAIN` — setup in
+  [MULTI_TENANCY.md](MULTI_TENANCY.md#cloudflare-for-saas-once-for-automatic-ssl-on-hospitals-domains).
 - Many hospitals on one database (`TENANCY=multi`): see the runbook in [MULTI_TENANCY.md](MULTI_TENANCY.md#going-multi-hospital-runbook).
 
 ## Rollback

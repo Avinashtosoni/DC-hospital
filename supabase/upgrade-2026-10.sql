@@ -11,6 +11,8 @@
 --   • website forms (Settings → Forms): site_forms table, form answers on enquiries, submit_site_form() (section 17)
 --   • multi-hospital core (Hospital Comrade): every table gets its hospital, isolation policies, per-hospital numbering,
 --     platform team roles, module locks — every existing row joins the first hospital; nothing changes for it
+--   • hospitals' own domains (status / DNS target / verification columns) and product-page call-back requests
+--     (platform_leads) — deploy the `domains` Edge Function too
 --   • every function file is carried in full, so the result is exactly a fresh install (tests/sql/upgrade.test.ts)
 -- Oldest supported database: September 2026 (the release with the WhatsApp bot and visit feedback). Older ones:
 -- export your data, install production.sql fresh, import.
