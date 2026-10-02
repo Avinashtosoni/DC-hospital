@@ -1,9 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { tenantHeaders } from '../tenancy/state'
 
 declare global {
   interface Window {
     /** Runtime config injected by the Docker container (docker/40-runtime-env.sh → /env.js) */
-    __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND' | 'TENANCY' | 'APP_ENV', string>>
+    __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND' | 'TENANCY' | 'APP_ENV' | 'PLATFORM_NAME' | 'PLATFORM_DOMAIN', string>>
   }
 }
 
@@ -21,9 +22,21 @@ export const backendMissing = !isSupabaseConfigured
 export const tenancyMode: 'single' | 'multi' = String(runtime.TENANCY || import.meta.env.VITE_TENANCY || 'single').toLowerCase() === 'multi' ? 'multi' : 'single'
 /** production | staging — staging shows a badge so nobody mistakes it for the live site. */
 export const appEnv: 'production' | 'staging' = String(runtime.APP_ENV || import.meta.env.VITE_APP_ENV || 'production').toLowerCase() === 'staging' ? 'staging' : 'production'
+/** SaaS brand + domain (configurable — the domain will change) */
+export const platformName = String(runtime.PLATFORM_NAME || import.meta.env.VITE_PLATFORM_NAME || 'Hospital Comrade')
+export const platformDomain = String(runtime.PLATFORM_DOMAIN || import.meta.env.VITE_PLATFORM_DOMAIN || 'hospital.digitalcomrade.in').toLowerCase()
 /** Project URL (for showing Edge Function webhook addresses in Settings). */
 export const supabaseUrl = isSupabaseConfigured ? url! : ''
 
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(url!, key!, { auth: { persistSession: true, autoRefreshToken: true } })
+  ? createClient(url!, key!, { auth: { persistSession: true, autoRefreshToken: true }, global: { fetch: tenantFetch } })
   : null
+
+/** every request (REST, RPC, storage, Edge Functions) says which hospital it is for — multi mode only */
+function tenantFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const extra = tenantHeaders()
+  if (!Object.keys(extra).length) return fetch(input, init)
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+  for (const [k, v] of Object.entries(extra)) if (!headers.has(k)) headers.set(k, v)
+  return fetch(input, { ...init, headers })
+}

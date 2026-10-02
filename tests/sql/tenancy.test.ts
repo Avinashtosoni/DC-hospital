@@ -139,6 +139,9 @@ describe('website visitors (anon)', () => {
     const t = await db.as<{ id: string; name: string }>('anon', `select id, name from public.resolve_tenant('CityHospital.in:443')`)
     expect(t).toEqual([{ id: B, name: 'City Hospital' }])
     expect(await db.as('anon', `select * from public.resolve_tenant('unknown.example')`)).toEqual([])
+    // unmapped hosts (preview / staging) may name a hospital by slug — a mapped domain can't be overridden
+    expect(await db.as('anon', `select id from public.resolve_tenant('preview.e2b.app', 'Third')`)).toEqual([{ id: C }])
+    expect(await db.as('anon', `select id from public.resolve_tenant('cityhospital.in', 'third')`)).toEqual([{ id: B }])
     // visitors can't list hospitals or domains
     expect((await asH('anon', { 'x-tenant-id': B }, `select id from public.tenants`))).toHaveLength(1)
     await expect(db.as('anon', `select * from public.tenant_domains`)).rejects.toThrow(/permission denied/)

@@ -1,3 +1,4 @@
+import { siteTenant, tenancyEnabled } from '../tenancy/state'
 import type { Profile, TableName } from '../types'
 import { supabase } from '../lib/supabase'
 import { cleanTerm } from './query'
@@ -131,7 +132,7 @@ export const supabaseAuth: AuthAdapter = {
   },
   async signUp({ full_name, email, password, phone, invite_token }) {
     // the role comes from handle_new_user(): an accepted staff invite, otherwise patient
-    const { data, error } = await client().auth.signUp({ email, password, options: { data: { full_name, phone, ...(invite_token ? { invite_token } : {}) } } })
+    const { data, error } = await client().auth.signUp({ email, password, options: { data: { full_name, phone, ...(invite_token ? { invite_token } : {}), ...(tenancyEnabled() && siteTenant() ? { tenant_id: siteTenant()!.id } : {}) } } })
     if (error) throw new Error(error.message)
     if (!data.session) throw new ConfirmEmailError(email)
     const p = await fetchProfile(data.user!.id)

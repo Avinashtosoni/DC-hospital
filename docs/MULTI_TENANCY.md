@@ -52,8 +52,14 @@ settings and sender identity. The Hospital Comrade team works through **provider
       scheduled messages set `app.tenant_id` per hospital; the scheduler itself is set up once by the main hospital.
       `financial_report` is `security invoker` (RLS). Tenancy tables live in `tenancy_core.sql` (loaded right after
       the schema) so functions can reference `tenant_id` when they are created.
-- [ ] **1.3 App**: resolve hospital from the domain (multi mode), send `x-tenant-id` / `x-provider-mode`, `my_context()`
-      in the auth provider, provider banner + hospital switcher + mode switch, pass `tenant_id` at sign-up
+- [x] **1.3 App**: before the app renders, `resolve_tenant(host)` finds the domain's hospital (`src/tenancy/boot.ts`);
+      unknown domain → "No hospital at this address", suspended → "temporarily unavailable". Hosts without a mapped
+      domain (preview / staging / localhost) can pick one with `?hospital=<slug>` (remembered per tab; a mapped domain
+      always wins). Every Supabase request carries `x-tenant-id` (+ `x-provider-mode`) through a fetch wrapper.
+      After sign-in `my_context()` gives the role here; one account = one hospital, so a hospital account on another
+      hospital's website is signed out with a clear message. Providers get a banner with a hospital switcher and (admins)
+      a mode switch — switching is logged and reloads the app. Sign-ups send `tenant_id`. `PLATFORM_NAME` /
+      `PLATFORM_DOMAIN` runtime variables. Single mode and demo mode make no extra requests.
 - [ ] **1.4 Module locks**: hide locked tabs/menu/routes; database triggers stop owners writing locked settings
 - [ ] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store
 - [ ] **1.6 Edge functions**: `notify` / `whatsapp-bot` read settings & secrets of the message's hospital
@@ -63,9 +69,10 @@ settings and sender identity. The Hospital Comrade team works through **provider
 2 Per-hospital website & domains · 3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel ·
 6 Owner billing page · 7 Ops & compliance · 8 Launch
 
-> Until 1.3 – 1.6 are done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
+> Until 1.4 – 1.6 are done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
 > primary hospital automatically). `supabase/upgrade-2026-10.sql` is for existing single-hospital databases; a
 > multi-hospital launch starts from a fresh `supabase/production.sql`.
 >
 > Still to do with the provider panel (phase 5): the create-hospital / create-provider RPCs must set
-> `app.tenant_move = 'on'` while they move a profile, and seed the new hospital's default website forms.
+> `app.tenant_move = 'on'` while they move a profile, and seed the new hospital's default website forms and website
+> content (until then a new hospital's website shows the built-in DC Hospital sample content).

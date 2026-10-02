@@ -40,6 +40,8 @@ Optional: deploy production from **release tags** (`v1.4.0`) instead of `main` �
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | — | Supabase project (empty = demo mode in the browser) |
 | `REQUIRE_BACKEND` | `true` | refuse to fall back to demo mode (set for every real install) |
 | `TENANCY` | `single` (default) / `multi` | `multi` = Hospital Comrade SaaS: many hospitals on one database, chosen by domain |
+| `PLATFORM_NAME` | `Hospital Comrade` (default) | SaaS brand shown on platform screens (multi mode) |
+| `PLATFORM_DOMAIN` | `hospital.digitalcomrade.in` (default) | The platform's own domain — change it here when the domain changes |
 | `APP_ENV` | `production` (default) / `staging` | staging badge + `noindex` |
 
 All of them are read when the container starts (`/env.js`), so changing one only needs a restart, not a rebuild.

@@ -10,6 +10,7 @@ import { cn, ago } from '../../lib/utils'
 import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
 import { isSupabaseConfigured, appEnv } from '../../lib/supabase'
+import { ProviderBanner } from '../../tenancy/ProviderBanner'
 import { useTable } from '../../hooks/useData'
 import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
@@ -269,6 +270,7 @@ export function AppLayout() {
         </div>
       )}
       <div className="lg:pl-64">
+        <ProviderBanner />
         <Topbar onMenu={() => setMobileOpen(true)} />
         <main className="w-full min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <Announcement />

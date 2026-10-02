@@ -1808,13 +1808,18 @@ create policy provider_audit_select on public.provider_audit for select to authe
   using (public.provider_mode() = 'admin' or (user_id = auth.uid()));
 
 -- ------------------------------------------------------------------ RPCs
--- the website asks "which hospital is this domain?" before anything else (multi-tenant mode)
-create or replace function public.resolve_tenant(p_host text)
-returns table (id uuid, slug text, name text, status text)
+-- the website asks "which hospital is this domain?" before anything else (multi-tenant mode).
+-- A mapped domain always wins; only hosts without a mapping (preview / staging / localhost) may name a
+-- hospital by slug (?hospital=city), so a hospital's own domain can never be made to show another one.
+drop function if exists public.resolve_tenant(text);
+create or replace function public.resolve_tenant(p_host text, p_slug text default null)
+returns table (id uuid, slug text, name text, status text, modules jsonb, is_primary boolean)
 language sql stable security definer set search_path = public as $$
-  select t.id, t.slug, t.name, t.status
-    from public.tenant_domains d join public.tenants t on t.id = d.tenant_id
-   where d.domain = lower(split_part(trim(coalesce(p_host, '')), ':', 1))
+  select t.id, t.slug, t.name, t.status, t.modules, t.is_primary
+    from public.tenants t
+   where t.id = coalesce(
+           (select d.tenant_id from public.tenant_domains d where d.domain = lower(split_part(trim(coalesce(p_host, '')), ':', 1))),
+           (select x.id from public.tenants x where x.slug = lower(trim(coalesce(p_slug, '')))))
 $$;
 
 -- who am I here: hospital, my role in it, provider role / mode and which modules the hospital may edit itself
@@ -1855,7 +1860,7 @@ revoke all on function public.request_header(text), public.primary_tenant(), pub
 grant execute on function public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
   public.has_role(public.app_role[]), public.is_staff(), public.current_app_role(), public.my_doctor_id(), public.my_patient_id()
   to anon, authenticated, service_role;
-grant execute on function public.resolve_tenant(text) to anon, authenticated;
+grant execute on function public.resolve_tenant(text, text) to anon, authenticated;
 grant execute on function public.my_context(), public.provider_tenants(), public.provider_log(text, text, jsonb) to authenticated;
 revoke all on function public.my_context(), public.provider_tenants(), public.provider_log(text, text, jsonb) from public, anon;
 -- <<< tenancy

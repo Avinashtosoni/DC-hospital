@@ -16,6 +16,8 @@ services:
       - TENANCY=${TENANCY:-single}
       # production | staging (staging shows a badge and never indexes in search engines)
       - APP_ENV=${APP_ENV:-production}
+      - PLATFORM_NAME=${PLATFORM_NAME:-Hospital Comrade}
+      - PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-hospital.digitalcomrade.in}
     # Coolify's proxy routes to container port 80 — no host port needed.
     # For local use without Coolify, uncomment:
     # ports:

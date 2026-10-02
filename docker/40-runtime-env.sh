@@ -13,10 +13,12 @@ KEY="$(esc "${VITE_SUPABASE_ANON_KEY:-}")"
 REQ="$(esc "${REQUIRE_BACKEND:-}")"
 TEN="$(esc "${TENANCY:-single}")"
 APPENV="$(esc "${APP_ENV:-production}")"
+PNAME="$(esc "${PLATFORM_NAME:-Hospital Comrade}")"
+PDOMAIN="$(esc "${PLATFORM_DOMAIN:-hospital.digitalcomrade.in}")"
 
 cat > "$TARGET" <<JS
 // Generated at container start — do not edit.
-window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}", "TENANCY": "${TEN}", "APP_ENV": "${APPENV}" };
+window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}", "TENANCY": "${TEN}", "APP_ENV": "${APPENV}", "PLATFORM_NAME": "${PNAME}", "PLATFORM_DOMAIN": "${PDOMAIN}" };
 JS
 
 if [ -n "$URL" ] && [ -n "$KEY" ]; then

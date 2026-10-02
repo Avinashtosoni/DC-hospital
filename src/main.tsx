@@ -10,6 +10,8 @@ import { I18nProvider } from './i18n'
 import { PwaPrompt } from './pwa/PwaPrompt'
 import { ErrorBoundary, RouteError, reloadForChunkError } from './components/ErrorBoundary'
 import { appEnv, backendMissing } from './lib/supabase'
+import { bootTenancy } from './tenancy/boot'
+import { TenantScreen } from './tenancy/TenantScreens'
 import './index.css'
 
 // staging copies must never show up in search results
@@ -52,10 +54,14 @@ function SetupError() {
   )
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      {backendMissing ? <SetupError /> : <RouterProvider router={router} />}
-    </QueryClientProvider>
-  </React.StrictMode>,
-)
+const root = ReactDOM.createRoot(document.getElementById('root')!)
+// multi-hospital mode: find this domain's hospital first (a no-op for single-hospital installs and demo mode)
+;(backendMissing ? Promise.resolve(null) : bootTenancy()).then((boot) => {
+  root.render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        {backendMissing ? <SetupError /> : boot && !boot.ok ? <TenantScreen result={boot} /> : <RouterProvider router={router} />}
+      </QueryClientProvider>
+    </React.StrictMode>,
+  )
+})
