@@ -11,10 +11,12 @@ esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n\r'; }
 URL="$(esc "${VITE_SUPABASE_URL:-}")"
 KEY="$(esc "${VITE_SUPABASE_ANON_KEY:-}")"
 REQ="$(esc "${REQUIRE_BACKEND:-}")"
+TEN="$(esc "${TENANCY:-single}")"
+APPENV="$(esc "${APP_ENV:-production}")"
 
 cat > "$TARGET" <<JS
 // Generated at container start — do not edit.
-window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}" };
+window.__ENV__ = { "VITE_SUPABASE_URL": "${URL}", "VITE_SUPABASE_ANON_KEY": "${KEY}", "REQUIRE_BACKEND": "${REQ}", "TENANCY": "${TEN}", "APP_ENV": "${APPENV}" };
 JS
 
 if [ -n "$URL" ] && [ -n "$KEY" ]; then
@@ -24,3 +26,4 @@ elif [ -n "$REQ" ] && [ "$REQ" != "false" ] && [ "$REQ" != "0" ]; then
 else
   echo "[dc-hospital] No Supabase env vars set → running in DEMO mode (browser localStorage)"
 fi
+echo "[dc-hospital] tenancy=${TEN} environment=${APPENV}"

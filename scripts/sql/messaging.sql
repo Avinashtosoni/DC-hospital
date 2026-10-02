@@ -505,7 +505,7 @@ begin
   if p_url is not null and p_url <> '' then
     if p_url !~ '^https://[^ ]+/functions/v1/notify$' then raise exception 'The address should look like https://<project>.supabase.co/functions/v1/notify'; end if;
     insert into public.app_secrets (key, value, updated_at, updated_by_name) values ('notify_function_url', p_url, now(), (select full_name from public.profiles where id = auth.uid()))
-    on conflict (key) do update set value = excluded.value, updated_at = now(), updated_by_name = excluded.updated_by_name;
+    on conflict (tenant_id, key) do update set value = excluded.value, updated_at = now(), updated_by_name = excluded.updated_by_name;
   end if;
   if p_enable then
     -- Supabase lets the database owner switch these on; otherwise: Dashboard → Database → Extensions

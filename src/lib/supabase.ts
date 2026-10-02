@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 declare global {
   interface Window {
     /** Runtime config injected by the Docker container (docker/40-runtime-env.sh → /env.js) */
-    __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND', string>>
+    __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND' | 'TENANCY' | 'APP_ENV', string>>
   }
 }
 
@@ -17,6 +17,10 @@ export const isSupabaseConfigured = Boolean(url && key)
  *  falling back to demo mode (where data lives only in each browser). */
 export const backendMissing = !isSupabaseConfigured
   && /^(1|true|yes)$/i.test(String(runtime.REQUIRE_BACKEND || import.meta.env.VITE_REQUIRE_BACKEND || ''))
+/** single = one hospital per install · multi = Hospital Comrade SaaS (hospital picked by domain). */
+export const tenancyMode: 'single' | 'multi' = String(runtime.TENANCY || import.meta.env.VITE_TENANCY || 'single').toLowerCase() === 'multi' ? 'multi' : 'single'
+/** production | staging — staging shows a badge so nobody mistakes it for the live site. */
+export const appEnv: 'production' | 'staging' = String(runtime.APP_ENV || import.meta.env.VITE_APP_ENV || 'production').toLowerCase() === 'staging' ? 'staging' : 'production'
 /** Project URL (for showing Edge Function webhook addresses in Settings). */
 export const supabaseUrl = isSupabaseConfigured ? url! : ''
 

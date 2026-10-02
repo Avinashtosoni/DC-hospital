@@ -181,6 +181,8 @@ const settingsSql = readFileSync(resolve(root, 'scripts/sql/settings.sql'), 'utf
 const patientSql = readFileSync(resolve(root, 'scripts/sql/patient.sql'), 'utf8')
 const scaleSql = readFileSync(resolve(root, 'scripts/sql/scale.sql'), 'utf8')
 const authSql = readFileSync(resolve(root, 'scripts/sql/auth.sql'), 'utf8')
+// multi-tenancy runs last: it adds tenant_id + the tenant_isolation policy to every table created above
+const tenancySql = readFileSync(resolve(root, 'scripts/sql/tenancy.sql'), 'utf8')
 // built-in website forms come from src/forms/schema.ts so the app and the database never disagree
 const formRows = DEFAULT_FORMS.map((f) => `  (${[f.id, f.slug, f.name, f.description ?? null, f.kind, f.enabled, f.fields, f.settings, f.sort].map((v) => lit(v, '')).join(', ')})`).join(',\n')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
@@ -243,6 +245,8 @@ ${authSql}
 ${formsSql}
 
 ${messagingSql}
+
+${tenancySql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -300,12 +304,14 @@ ${formsSql}
 
 ${messagingSql}
 
+${tenancySql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
 -- ✏️  The first account created with this e-mail becomes the hospital Owner:
 insert into public.app_settings (key, data) values ('bootstrap', jsonb_build_object('owner_email', '${OWNER_PLACEHOLDER}'))
-on conflict (key) do update set data = excluded.data;
+on conflict (tenant_id, key) do update set data = excluded.data;
 
 -- an existing account with that e-mail (created before running this file) is promoted right away
 update public.profiles set role = 'owner'
@@ -315,7 +321,7 @@ where lower(email) = lower((select data ->> 'owner_email' from public.app_settin
 -- demo helpers off
 insert into public.site_content (key, data)
 values ('settings', '{"portal": {"showDemoLogins": false}, "booking": {"showDemoOtp": false}}'::jsonb)
-on conflict (key) do update set data = public.site_content.data
+on conflict (tenant_id, key) do update set data = public.site_content.data
   || jsonb_build_object('portal', coalesce(public.site_content.data -> 'portal', '{}'::jsonb) || '{"showDemoLogins": false}'::jsonb,
                         'booking', coalesce(public.site_content.data -> 'booking', '{}'::jsonb) || '{"showDemoOtp": false}'::jsonb);
 commit;
@@ -333,7 +339,7 @@ console.log(`✔ supabase/production.sql written (${(production.length / 1024).t
 const upgradePath = resolve(root, 'supabase/upgrade-2026-10.sql')
 const upgrade = readFileSync(upgradePath, 'utf8')
 let nextUpgrade = upgrade
-for (const [name, file, body] of [['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql]] as const) {
+for (const [name, file, body] of [['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql]] as const) {
   const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
   nextUpgrade = re.test(nextUpgrade) ? nextUpgrade.replace(re, () => block) : nextUpgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)

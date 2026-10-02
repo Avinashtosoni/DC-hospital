@@ -106,7 +106,7 @@ begin
   else
     insert into public.app_secrets (key, value, updated_at, updated_by_name)
     values (p_key, trim(p_value), now(), v_name)
-    on conflict (key) do update set value = excluded.value, updated_at = now(), updated_by_name = excluded.updated_by_name;
+    on conflict (tenant_id, key) do update set value = excluded.value, updated_at = now(), updated_by_name = excluded.updated_by_name;
   end if;
   insert into public.audit_log (table_name, record_id, action, actor_id, actor_name, actor_role, summary, changes)
   values ('app_secrets', null, case when nullif(trim(coalesce(p_value, '')), '') is null then 'delete' else 'update' end,

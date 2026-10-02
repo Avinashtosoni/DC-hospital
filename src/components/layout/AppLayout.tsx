@@ -9,7 +9,7 @@ import { ROLE_LABEL } from '../../types'
 import { cn, ago } from '../../lib/utils'
 import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
-import { isSupabaseConfigured } from '../../lib/supabase'
+import { isSupabaseConfigured, appEnv } from '../../lib/supabase'
 import { useTable } from '../../hooks/useData'
 import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
@@ -189,6 +189,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
       <div className="ml-auto flex items-center gap-2">
         {user?.role === 'patient' && <LanguageSwitch />}
         {!isSupabaseConfigured && <Badge tone="amber" className="hidden md:inline-flex"><Database className="h-3 w-3" />Demo mode</Badge>}
+        {appEnv === 'staging' && <Badge tone="violet" className="hidden md:inline-flex">Staging</Badge>}
         <div className="relative">
           <button onClick={() => setBell((b) => !b)} className="relative grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Notifications">
             <Bell className="h-5 w-5" />

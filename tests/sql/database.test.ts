@@ -209,7 +209,7 @@ describe('booking OTP channel choice + WhatsApp confirmation', () => {
   const setNotify = (mut: (n: typeof DEFAULT_APP_SETTINGS.notifications) => void) => {
     const n = structuredClone(DEFAULT_APP_SETTINGS.notifications); mut(n)
     return db.as(null, `insert into public.app_settings (key, data) values ('app', jsonb_build_object('notifications', $1::jsonb))
-      on conflict (key) do update set data = excluded.data`, [JSON.stringify(n)])
+      on conflict (tenant_id, key) do update set data = excluded.data`, [JSON.stringify(n)])
   }
   const outbox = (ref: string) => db.as<{ channel: string; body: string }>(null, 'select channel, body from public.notification_outbox where related_id = $1 order by channel', [ref])
 

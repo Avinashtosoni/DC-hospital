@@ -242,10 +242,9 @@ begin
   values (new.id, v_name, new.email, 'patient', v_phone)
   on conflict (id) do nothing;
 
-  perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
-  select coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::int), 100000) + 1 into next_mrn from public.patients;
+  -- mrn '' → assign_record_number() gives the next number of this hospital (with its prefix)
   insert into public.patients (profile_id, mrn, full_name, email, phone, gender, status)
-  values (new.id, 'DCH-' || next_mrn, v_name, new.email, v_phone, 'other', 'outpatient')
+  values (new.id, '', v_name, new.email, v_phone, 'other', 'outpatient')
   on conflict (profile_id) do nothing;
   return new;
 end $$;

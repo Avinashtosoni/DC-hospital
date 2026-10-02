@@ -15,7 +15,7 @@ n.sms.enabled = true; n.email.enabled = true; n.whatsapp.enabled = true; n.push.
 beforeAll(async () => {
   db = await freshDb('master')
   await db.as(null, `insert into public.app_settings (key, data) values ('app', jsonb_build_object('notifications', $1::jsonb))
-    on conflict (key) do update set data = excluded.data`, [JSON.stringify(n)])
+    on conflict (tenant_id, key) do update set data = excluded.data`, [JSON.stringify(n)])
 }, 180_000)
 
 const outbox = (where: string, params: unknown[] = []) =>

@@ -279,10 +279,9 @@ begin
       raise exception 'You already have a booking with this doctor on this day.';
     end if;
   else
-    perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
-    select coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::int), 100000) + 1 into v_seq from public.patients;
+    -- mrn '' → assign_record_number() numbers it per hospital
     insert into public.patients (mrn, full_name, gender, date_of_birth, phone, email, status)
-    values ('DCH-' || v_seq, v_name, p_gender, p_dob, '+91 ' || substr(v_phone, 1, 5) || ' ' || substr(v_phone, 6),
+    values ('', v_name, p_gender, p_dob, '+91 ' || substr(v_phone, 1, 5) || ' ' || substr(v_phone, 6),
             nullif(lower(trim(p_email)), ''), 'outpatient')
     returning * into v_patient;
     v_new := true;
@@ -302,10 +301,9 @@ begin
   v_fee  := d.consultation_fee;
   v_rate := coalesce(nullif(public.booking_setting('gstRate', '0', 'billing'), '')::numeric, 0);
   v_tax  := round(v_fee * v_rate / 100, 2);
-  perform pg_advisory_xact_lock(hashtext('dch_invoice_number'));
-  select coalesce(max(nullif(regexp_replace(invoice_number, '\D', '', 'g'), '')::int), 10000) + 1 into v_seq from public.invoices;
+  -- invoice_number '' → assign_record_number() numbers it per hospital
   insert into public.invoices (invoice_number, patient_id, issue_date, due_date, items, subtotal, tax, discount, total, amount_paid, status, notes)
-  values ('INV-' || lpad(v_seq::text, 5, '0'), v_patient.id, v_now::date, p_date,
+  values ('', v_patient.id, v_now::date, p_date,
           jsonb_build_array(jsonb_build_object(
             'description', format('Consultation — %s (%s) · %s, %s', d.full_name, d.specialization, to_char(p_date, 'DD Mon YYYY'), p_time),
             'quantity', 1, 'unit_price', v_fee)),

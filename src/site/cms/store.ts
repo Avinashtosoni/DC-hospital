@@ -54,7 +54,7 @@ const supabaseStore: CmsStore = {
     return out
   },
   async save(key, data) {
-    const { data: row, error } = await sb().from('site_content').upsert({ key, data }, { onConflict: 'key' }).select('key, data, updated_at, updated_by_name').single()
+    const { data: row, error } = await sb().from('site_content').upsert({ key, data }, { onConflict: 'tenant_id,key' }).select('key, data, updated_at, updated_by_name').single()
     if (error) throw new Error(error.message)
     return row as ContentRow
   },

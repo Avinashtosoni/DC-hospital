@@ -16,7 +16,7 @@ const setNotify = (mut: (n: typeof DEFAULT_APP_SETTINGS.notifications & { events
   const n = structuredClone(DEFAULT_APP_SETTINGS.notifications) as typeof DEFAULT_APP_SETTINGS.notifications & { events: Record<string, unknown> }
   mut(n)
   return db.as(null, `insert into public.app_settings (key, data) values ('app', jsonb_build_object('notifications', $1::jsonb))
-    on conflict (key) do update set data = excluded.data`, [JSON.stringify(n)])
+    on conflict (tenant_id, key) do update set data = excluded.data`, [JSON.stringify(n)])
 }
 type Req = { sent: boolean; ref: string; channels: string[]; demo_code?: string }
 const request = (email: string, phone: string, ch: string | null = 'whatsapp') =>

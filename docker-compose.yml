@@ -12,6 +12,10 @@ services:
       - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY:-}
       # set to true for real hospitals: refuse to start in demo (browser-only) mode if Supabase is missing
       - REQUIRE_BACKEND=${REQUIRE_BACKEND:-}
+      # single = one hospital per install (default) · multi = Hospital Comrade SaaS: many hospitals, chosen by domain
+      - TENANCY=${TENANCY:-single}
+      # production | staging (staging shows a badge and never indexes in search engines)
+      - APP_ENV=${APP_ENV:-production}
     # Coolify's proxy routes to container port 80 — no host port needed.
     # For local use without Coolify, uncomment:
     # ports:

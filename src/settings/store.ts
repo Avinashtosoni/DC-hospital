@@ -32,7 +32,7 @@ const remote = {
     return (data as SettingsRow) ?? { data: null }
   },
   async save(data: AppSettings): Promise<SettingsRow> {
-    const { data: row, error } = await sb().from('app_settings').upsert({ key: 'app', data }, { onConflict: 'key' }).select('data, updated_at, updated_by_name').single()
+    const { data: row, error } = await sb().from('app_settings').upsert({ key: 'app', data }, { onConflict: 'tenant_id,key' }).select('data, updated_at, updated_by_name').single()
     if (error) throw new Error(error.message)
     return row as SettingsRow
   },
