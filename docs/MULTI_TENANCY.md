@@ -139,9 +139,30 @@ settings and sender identity. The Hospital Comrade team works through **provider
 - [x] **2.5 Verified** — 188 unit / SQL tests, 10 Edge Function tests (Cloudflare API mocked), browser: product page
   (desktop + mobile, call-back form), City Care's starter website, Domain tab as owner and as provider admin, manifests.
 
+### Phase 3 — messaging per hospital ✅
+- [x] **3.1 Providers** — WhatsApp adds **AiSensy** (API campaigns; campaign name in the template field, OTP copy-code
+  button, test campaign) and **MSG91 WhatsApp** (approved templates via the bulk endpoint, free text for test / chatbot).
+  Now: SMS MSG91 · Fast2SMS · Twilio · webhook — WhatsApp OpenWA · Meta · AiSensy · MSG91 · Interakt · Twilio · webhook.
+- [x] **3.2 Hospital Comrade messaging** — each SMS / WhatsApp / e-mail channel has a **source**: the hospital's own
+  account (BYO keys, as before) or Hospital Comrade's shared account. Shared keys are Edge Function secrets
+  (`PLATFORM_*`, below), never in the database. Each hospital keeps its identity: its name in every message, its
+  e-mail as reply-to, optionally its own DLT header + DLT templates registered under the platform's entity
+  (`tenants.messaging`, set by an admin — a hospital can't use another's header). Shared template / DLT IDs:
+  `platform_settings` ('messaging'). Every delivered / failed message is counted per hospital, month (IST), channel
+  and source in `message_usage` (kept after the outbox clean-up; basis for the phase 4 wallet). Monthly allowance per
+  channel (`tenants.messaging.limits`) — OTPs always go out. New hospitals (`seed_hospital_defaults`) start with full
+  settings on the shared accounts — before this, a new hospital queued no messages at all. The chatbot needs the
+  hospital's own WhatsApp number.
+- [x] **3.3 Settings** — Notifications: *Send through* Hospital Comrade (included) / Your own account per channel;
+  the shared panel shows availability, sender ID / from-address and this month's usage against the allowance. Platform
+  admins get a card for this hospital's sender ID + allowances and the shared template IDs. Delivery log marks
+  messages sent "via Hospital Comrade".
+- [x] **3.4 Verified** — 205 unit / SQL tests (adapters, routing, allowance, usage RLS, admin-only settings,
+  new-hospital defaults), 12 Edge Function tests (shared account with the hospital's sender ID, metering, allowance,
+  missing account), browser: owner switches a channel, admin card.
+
 ### Later phases
-3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel · 6 Owner billing page ·
-7 Ops & compliance · 8 Launch
+4 Wallet / Razorpay / license · 5 Provider panel · 6 Owner billing page · 7 Ops & compliance · 8 Launch
 
 ## Going multi-hospital (runbook)
 
@@ -162,13 +183,14 @@ Phase 1 is complete: the database, the app and the Edge Functions keep hospitals
    same tab). With Cloudflare for SaaS set up (below) SSL follows automatically. Until then, `https://<app>/?hospital=<slug>`
    works, and `<slug>.<PLATFORM_DOMAIN>` works straight away if the wildcard below exists.
 6. **Its owner** signs up on that address with the owner e-mail → owner of that hospital. The owner then fills in the
-   website (if the *Website* module is theirs), settings and staff invites, and their own SMS / WhatsApp / e-mail
-   credentials (Settings → Notifications; WhatsApp bot webhook: the address shown there, `…/whatsapp-bot?hospital=<slug>`).
+   website (if the *Website* module is theirs), settings and staff invites. Messages go out through Hospital Comrade's
+   shared accounts from day one; the owner may switch any channel to their own credentials (Settings → Notifications;
+   WhatsApp bot webhook: the address shown there, `…/whatsapp-bot?hospital=<slug>` — the bot needs their own number).
 7. **Platform team** — each person signs up once, then `supabase/snippets/add-provider.sql` (admin / support / finance).
 8. **Check** — sign in as the owner on the new address (sees an empty hospital), as the first hospital's owner (sees
    nothing of the new one), as support (banner, read-only patients).
 
-Known limits until later phases: messaging uses each hospital's own credentials (phase 3 adds platform-paid messaging and wallets); the provider panel (phase 5)
+Known limits until later phases: platform messaging has a monthly allowance but no wallet / billing yet (phase 4); the provider panel (phase 5)
 replaces the snippets and must set `app.tenant_move = 'on'` while moving a profile, like `add-provider.sql` does.
 
 ### The platform domain and the demo
@@ -197,3 +219,21 @@ replaces the snippets and must set `app.tenant_move = 'on'` while moving a profi
 Root domains (`theirhospital.in`) can't hold a CNAME at most registrars: use `www.` and let the registrar redirect the
 root to it (the Domain tab says so).
 
+
+### Hospital Comrade messaging (shared accounts)
+Set once on the `notify` function (Supabase → Edge Functions → Secrets, or `supabase secrets set …`). Leave a
+channel's provider empty to not offer it — hospitals on that channel then see "not available" and messages fail
+with a clear reason. Only provider names and the public sender facts ever reach the browser.
+
+| Channel | Secrets |
+|---|---|
+| SMS | `PLATFORM_SMS_PROVIDER` = `msg91` \| `fast2sms`, `PLATFORM_SMS_SENDER_ID` (DLT header), `PLATFORM_DLT_ENTITY_ID`, `PLATFORM_MSG91_AUTH_KEY` or `PLATFORM_FAST2SMS_API_KEY` |
+| WhatsApp | `PLATFORM_WHATSAPP_PROVIDER` = `aisensy` \| `meta` \| `msg91` \| `openwa`, `PLATFORM_WHATSAPP_LANGUAGE` (default `en`), `PLATFORM_WHATSAPP_NUMBER` (shown to hospitals) and — AiSensy: `PLATFORM_AISENSY_API_KEY`, `PLATFORM_AISENSY_TEST_CAMPAIGN` · Meta: `PLATFORM_META_ACCESS_TOKEN`, `PLATFORM_META_PHONE_NUMBER_ID` · MSG91: `PLATFORM_MSG91_AUTH_KEY`, `PLATFORM_MSG91_WA_NUMBER`, `PLATFORM_MSG91_WA_NAMESPACE` · OpenWA: `PLATFORM_OPENWA_URL`, `PLATFORM_OPENWA_API_KEY`, `PLATFORM_OPENWA_SESSION` |
+| E-mail | `PLATFORM_EMAIL_PROVIDER` = `resend` \| `sendgrid`, `PLATFORM_EMAIL_FROM` (e.g. `notifications@<PLATFORM_DOMAIN>`, domain verified with the provider), `PLATFORM_RESEND_API_KEY` or `PLATFORM_SENDGRID_API_KEY` |
+
+Then, as a provider admin: Settings → Notifications → **Hospital Comrade messaging** → enter the approved WhatsApp
+template (or AiSensy campaign) names with their variables in order — start them with `hospital` so every message
+names the hospital — and the DLT template IDs; per hospital set an optional own DLT header (+ its DLT IDs) and the
+monthly allowances. India DLT: templates are registered under the platform's principal entity with a `{#var#}` for
+the hospital name. Template-only providers (AiSensy, Meta, MSG91, DLT SMS) can't send a hospital's *custom messages*
+unless a matching shared template exists; WA CRM / OpenWA sends each hospital's own wording.

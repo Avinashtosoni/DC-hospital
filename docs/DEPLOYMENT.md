@@ -55,6 +55,8 @@ All of them are read when the container starts (`/env.js`), so changing one only
 - Hospitals' own domains (Settings → Domain) use Cloudflare for SaaS when the `domains` function has the secrets
   `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_CNAME_TARGET`, `PLATFORM_DOMAIN` — setup in
   [MULTI_TENANCY.md](MULTI_TENANCY.md#cloudflare-for-saas-once-for-automatic-ssl-on-hospitals-domains).
+- Hospital Comrade's shared SMS / WhatsApp / e-mail accounts are `PLATFORM_*` secrets on the `notify` function — list in
+  [MULTI_TENANCY.md](MULTI_TENANCY.md#hospital-comrade-messaging-shared-accounts).
 - Many hospitals on one database (`TENANCY=multi`): see the runbook in [MULTI_TENANCY.md](MULTI_TENANCY.md#going-multi-hospital-runbook).
 
 ## Rollback
