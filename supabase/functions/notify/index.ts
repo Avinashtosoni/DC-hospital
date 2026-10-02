@@ -13,27 +13,36 @@
 //
 // Settings come from public.app_settings (Settings → Notifications) and credentials from public.app_secrets,
 // read with the service-role key that Supabase injects automatically. Nothing secret is ever returned.
+//
+// Multi-hospital: every message goes out with the settings, credentials, templates and push devices of *its own*
+// hospital (notification_outbox.tenant_id). One scheduler flushes every hospital's queue; a staff member's
+// "deliver now" flushes only their hospital's; a test uses the hospital the caller is working in. See ../_shared/tenant.ts.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { deliver, isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
+import { corsHeaders, groupByTenant, resolveCaller, type Caller } from '../_shared/tenant.ts'
 
-const cors = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
+const cors = corsHeaders()
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const admin = createClient(Deno.env.get('SUPABASE_URL')!, SERVICE_KEY, { auth: { persistSession: false } })
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
+const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
+/** runs as the caller (their token + hospital headers), so the database's own tenant rules apply */
+const userClient = (jwt: string, headers: Record<string, string>) => createClient(SUPABASE_URL, Deno.env.get('SUPABASE_ANON_KEY')!, {
+  auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}`, ...headers } },
+})
+const caller = (req: Request): Promise<Caller> => resolveCaller(req, { serviceKey: SERVICE_KEY, admin, userClient })
 
-async function loadCtx(events: string[] = []): Promise<Ctx> {
+/** everything needed to deliver one hospital's messages (the service role skips RLS → filter on tenant_id) */
+async function loadCtx(tenant: string, events: string[] = []): Promise<Ctx> {
   const tplIds = [...new Set(events.filter((e) => e.startsWith('tpl:')).map((e) => e.slice(4)))]
-  const [{ data: s }, { data: sec }, { data: site }, { data: tpls }] = await Promise.all([
-    admin.from('app_settings').select('data').eq('key', 'app').maybeSingle(),
-    admin.from('app_secrets').select('key, value'),
-    admin.from('site_content').select('data').eq('key', 'settings').maybeSingle(),
-    tplIds.length ? admin.from('notification_templates').select('id, wa_template, wa_params, sms_template_id').in('id', tplIds) : Promise.resolve({ data: [] as any[] }),
+  const [{ data: s }, { data: sec }, { data: site }, { data: tpls }, { data: t }] = await Promise.all([
+    admin.from('app_settings').select('data').eq('tenant_id', tenant).eq('key', 'app').maybeSingle(),
+    admin.from('app_secrets').select('key, value').eq('tenant_id', tenant),
+    admin.from('site_content').select('data').eq('tenant_id', tenant).eq('key', 'settings').maybeSingle(),
+    tplIds.length ? admin.from('notification_templates').select('id, wa_template, wa_params, sms_template_id').eq('tenant_id', tenant).in('id', tplIds) : Promise.resolve({ data: [] as any[] }),
+    admin.from('tenants').select('name').eq('id', tenant).maybeSingle(),
   ])
   const n = (s?.data as any)?.notifications ?? {}
   // custom messages look like built-in events to the providers (approved WhatsApp template, DLT ID)
@@ -43,30 +52,50 @@ async function loadCtx(events: string[] = []): Promise<Ctx> {
   return {
     n,
     secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])),
-    hospital: (site?.data as any)?.name || 'DC Hospital',
+    hospital: (site?.data as any)?.name || t?.name || 'DC Hospital',
     devices: {
       siteUrl: /^https:\/\//.test(siteUrl) ? siteUrl : undefined,
       icon: /^https:\/\//.test(siteUrl) ? `${siteUrl.replace(/\/$/, '')}/favicon.svg` : undefined,
       tokens: async (profileId) => {
-        const { data } = await admin.from('push_tokens').select('token').eq('profile_id', profileId).order('last_seen_at', { ascending: false }).limit(10)
+        const { data } = await admin.from('push_tokens').select('token').eq('tenant_id', tenant).eq('profile_id', profileId).order('last_seen_at', { ascending: false }).limit(10)
         return (data ?? []).map((r: any) => r.token)
       },
-      forget: async (tokens) => { await admin.from('push_tokens').delete().in('token', tokens) },
+      forget: async (tokens) => { await admin.from('push_tokens').delete().eq('tenant_id', tenant).in('token', tokens) },
     },
   }
 }
 
-/** 'service' for the service-role key, otherwise the caller's role (or null for anonymous / invalid). */
-async function caller(req: Request): Promise<{ role: string | null; id?: string }> {
-  const jwt = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
-  if (!jwt) return { role: null }
-  if (jwt === SERVICE_KEY) return { role: 'service' }
-  const { data: { user } } = await admin.auth.getUser(jwt)
-  if (!user) return { role: null }
-  const { data: prof } = await admin.from('profiles').select('role').eq('id', user.id).maybeSingle()
-  return { role: prof?.role ?? null, id: user.id }
+/** deliver claimed rows, each with its own hospital's settings and credentials */
+async function deliverRows(rows: any[]) {
+  let sent = 0, failed = 0
+  for (const [tenant, list] of groupByTenant(rows)) {
+    let c: Ctx
+    try { c = await loadCtx(tenant, list.map((r) => r.event)) }
+    catch (e) {   // settings unreadable → try again later (counts as an attempt)
+      for (const row of list) await finish(row, { ok: false, error: `Could not load the hospital's settings: ${(e as Error).message}` })
+      failed += list.length
+      continue
+    }
+    for (const row of list) {
+      const r = await deliver({ id: row.id, event: row.event, channel: row.channel, recipient: row.recipient, subject: row.subject, body: row.body, vars: row.vars ?? {} }, c)
+      r.ok ? sent++ : failed++
+      await finish(row, r)
+    }
+  }
+  return { processed: rows.length, sent, failed }
 }
-const callerRole = async (req: Request) => (await caller(req)).role
+
+async function finish(row: any, r: { ok: boolean; error?: string; ref?: string }) {
+  const giveUp = !r.ok && (row.attempts >= 3 || isPermanent(r.error))
+  await admin.from('notification_outbox').update({
+    status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending',
+    error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null,
+    // retry later with backoff (2, 4, 8 min after this attempt — not after the message was created)
+    ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
+    // never keep one-time codes around
+    ...((row.event === 'otp' || row.event === 'password_otp') && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
+  }).eq('id', row.id)
+}
 
 // ------------------------------------------------------------------ handler
 Deno.serve(async (req) => {
@@ -79,11 +108,11 @@ Deno.serve(async (req) => {
   if (body.test) {
     // owner only
     const who = await caller(req)
-    if (who.role !== 'owner') return json({ ok: false, message: 'Only the hospital owner can send test messages' }, 403)
+    if (who.role !== 'owner' || !who.tenant) return json({ ok: false, message: 'Only the hospital owner can send test messages' }, 403)
     const channel = body.test.channel as Channel
     const to = channel === 'push' ? who.id! : String(body.test.to ?? '').trim()
     if (!['sms', 'whatsapp', 'email', 'push'].includes(channel) || !to) return json({ ok: false, message: 'channel and to are required' }, 400)
-    const c = await loadCtx()
+    const c = await loadCtx(who.tenant)
     const m: Msg = { event: 'test', channel, recipient: channel === 'email' || channel === 'push' ? to : to.replace(/\D/g, '').slice(-10),
       subject: channel === 'push' ? `Test notification from ${c.hospital}` : `Test email from ${c.hospital}`,
       body: `This is a test message from ${c.hospital}. If you received it, ${channel.toUpperCase()} notifications are working.`, vars: { hospital: c.hospital } }
@@ -95,7 +124,7 @@ Deno.serve(async (req) => {
     }
     const r = await deliver(m, c)
     if (r.ok && st?.phone) r.ref = `${r.ref} · from ${st.phone}`
-    await admin.from('notification_outbox').insert({ event: 'test', channel, recipient: m.recipient, subject: m.subject, body: m.body, status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null })
+    await admin.from('notification_outbox').insert({ tenant_id: who.tenant, event: 'test', channel, recipient: m.recipient, subject: m.subject, body: m.body, status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null })
     return json({ ok: r.ok, message: r.ok ? `Sent via ${c.n[channel]?.provider ?? 'Firebase'}${r.ref ? ` · ${r.ref}` : ''}` : r.error, provider_ref: r.ref ?? null })
   }
 
@@ -104,30 +133,16 @@ Deno.serve(async (req) => {
     let claim
     if (ids.length) claim = await admin.rpc('claim_notifications_for', { p_ids: ids })
     else {
-      // the whole queue: pg_cron (service-role key) or hospital staff only
-      const role = await callerRole(req)
-      if (!role || role === 'patient') return json({ error: 'Not allowed — pass the ids of the messages to deliver' }, 403)
-      claim = await admin.rpc('claim_notifications', { p_limit: 25 })
+      // the whole queue: the scheduler (service-role key) → every hospital; hospital staff → their own hospital
+      const who = await caller(req)
+      if (who.kind === 'service') claim = await admin.rpc('claim_notifications', { p_limit: 25 })
+      else if (who.kind === 'user' && who.tenant && who.role && who.role !== 'patient') claim = await admin.rpc('claim_notifications', { p_limit: 25, p_tenant: who.tenant })
+      else return json({ error: 'Not allowed — pass the ids of the messages to deliver' }, 403)
     }
     const { data: rows, error } = claim
     if (error) return json({ error: error.message }, 500)
     if (!rows?.length) return json({ processed: 0, sent: 0, failed: 0 })
-    const c = await loadCtx((rows as any[]).map((r) => r.event))
-    let sent = 0, failed = 0
-    for (const row of rows as any[]) {
-      const r = await deliver({ id: row.id, event: row.event, channel: row.channel, recipient: row.recipient, subject: row.subject, body: row.body, vars: row.vars ?? {} }, c)
-      r.ok ? sent++ : failed++
-      const giveUp = !r.ok && (row.attempts >= 3 || isPermanent(r.error))
-      await admin.from('notification_outbox').update({
-        status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending',
-        error: r.error ?? null, provider_ref: r.ref ?? null, sent_at: r.ok ? new Date().toISOString() : null,
-        // retry later with backoff (2, 4, 8 min after this attempt — not after the message was created)
-        ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
-        // never keep one-time codes around
-        ...((row.event === 'otp' || row.event === 'password_otp') && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
-      }).eq('id', row.id)
-    }
-    return json({ processed: rows.length, sent, failed })
+    return json(await deliverRows(rows as any[]))
   }
 
   return json({ error: 'Unknown request' }, 400)

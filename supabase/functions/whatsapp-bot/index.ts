@@ -12,43 +12,72 @@
 //   POST JSON { simulate: { from: "98…", text: "hi" } } with a signed-in owner / receptionist token → { state, replies }
 //
 // Conversation logic lives in ../_shared/bot.ts (shared with the browser simulator and the tests).
-// Chat state is kept per phone number in public.wa_sessions (service role only).
+// Chat state is kept per hospital and phone number in public.wa_sessions (service role only).
+//
+// Multi-hospital: each hospital points its provider at its own address — `…/whatsapp-bot?hospital=<slug>` (Settings
+// shows the right one); no `?hospital` = the primary hospital. Settings, credentials, signatures, doctors, slots and
+// bookings all come from that hospital. The simulator uses the hospital the signed-in user works in.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { botReply, type BotDeps, type BotState } from '../_shared/bot.ts'
 import { deliver, type Ctx } from '../_shared/providers.ts'
 import { parseOpenwa } from '../_shared/openwa.ts'
+import { corsHeaders, resolveCaller, webhookTenantRef, type TenantRow } from '../_shared/tenant.ts'
 
-const cors = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-}
+const cors = corsHeaders('GET, POST, OPTIONS')
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const admin = createClient(Deno.env.get('SUPABASE_URL')!, SERVICE_KEY, { auth: { persistSession: false } })
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
+const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
+/** the hospital's RPCs (doctors, slots, booking) — current_tenant() takes x-tenant-id when there is no signed-in user */
+const clients = new Map<string, any>()
+const forTenant = (tenant: string) => {
+  let c = clients.get(tenant)
+  if (!c) clients.set(tenant, c = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false }, global: { headers: { 'x-tenant-id': tenant } } }))
+  return c
+}
+const userClient = (jwt: string, headers: Record<string, string>) => createClient(SUPABASE_URL, Deno.env.get('SUPABASE_ANON_KEY')!, {
+  auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}`, ...headers } },
+})
 
-interface Setup { ctx: Ctx; bot: boolean; site: any }
-async function loadSetup(): Promise<Setup> {
+const TENANT_COLS = 'id, slug, name, status, is_primary'
+async function tenantFor(url: URL): Promise<TenantRow | null> {
+  const ref = webhookTenantRef(url)
+  if ('invalid' in ref) return null
+  const q = admin.from('tenants').select(TENANT_COLS)
+  const { data } = await ('primary' in ref ? q.eq('is_primary', true) : 'id' in ref ? q.eq('id', ref.id) : q.eq('slug', ref.slug)).maybeSingle()
+  return (data as TenantRow | null) ?? null
+}
+const tenantById = async (id: string) => ((await admin.from('tenants').select(TENANT_COLS).eq('id', id).maybeSingle()).data as TenantRow | null) ?? null
+
+interface Setup { tenant: TenantRow; ctx: Ctx; bot: boolean; site: any }
+/** one hospital's settings and credentials (the service role skips RLS → filter on tenant_id) */
+async function loadSetup(tenant: TenantRow): Promise<Setup> {
   const [{ data: s }, { data: sec }, { data: site }] = await Promise.all([
-    admin.from('app_settings').select('data').eq('key', 'app').maybeSingle(),
-    admin.from('app_secrets').select('key, value'),
-    admin.from('site_content').select('data').eq('key', 'settings').maybeSingle(),
+    admin.from('app_settings').select('data').eq('tenant_id', tenant.id).eq('key', 'app').maybeSingle(),
+    admin.from('app_secrets').select('key, value').eq('tenant_id', tenant.id),
+    admin.from('site_content').select('data').eq('tenant_id', tenant.id).eq('key', 'settings').maybeSingle(),
   ])
   const n = (s?.data as any)?.notifications ?? {}
   const siteData = (site?.data as any) ?? {}
-  return { ctx: { n, secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])), hospital: siteData.name || 'DC Hospital' }, bot: !!n.whatsapp?.botEnabled, site: siteData }
+  return {
+    tenant,
+    ctx: { n, secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])), hospital: siteData.name || tenant.name || 'DC Hospital' },
+    // a suspended hospital's bot stays quiet
+    bot: !!n.whatsapp?.botEnabled && tenant.status !== 'suspended',
+    site: siteData,
+  }
 }
 
 const phone10 = (p: string) => (p ?? '').replace(/\D/g, '').slice(-10)
-const rpc = async <T,>(fn: string, args: Record<string, unknown>): Promise<T> => {
-  const { data, error } = await admin.rpc(fn, args)
-  if (error) throw new Error(error.message)
-  return data as T
-}
-
 function depsFor(phone: string, setup: Setup): BotDeps {
   const site = setup.site
+  const db = forTenant(setup.tenant.id)
+  const rpc = async <T,>(fn: string, args: Record<string, unknown>): Promise<T> => {
+    const { data, error } = await db.rpc(fn, args)
+    if (error) throw new Error(error.message)
+    return data as T
+  }
   return {
     hospital: { name: setup.ctx.hospital, phone: site.appointmentsPhone || site.phone || '', address: site.address || '', site: site.siteUrl || '' },
     doctors: async () => (await rpc<any[]>('public_doctors', {})).map((d) => ({ id: d.id, name: d.full_name, specialization: d.specialization, department: d.department, fee: Number(d.consultation_fee) })),
@@ -64,9 +93,10 @@ function depsFor(phone: string, setup: Setup): BotDeps {
 }
 
 async function converse(phone: string, text: string, setup: Setup) {
-  const { data: row } = await admin.from('wa_sessions').select('state').eq('phone', phone).maybeSingle()
+  const tenant_id = setup.tenant.id
+  const { data: row } = await admin.from('wa_sessions').select('state').eq('tenant_id', tenant_id).eq('phone', phone).maybeSingle()
   const res = await botReply((row?.state as BotState) ?? null, text, depsFor(phone, setup))
-  await admin.from('wa_sessions').upsert({ phone, state: res.state, updated_at: new Date().toISOString() })
+  await admin.from('wa_sessions').upsert({ tenant_id, phone, state: res.state, updated_at: new Date().toISOString() }, { onConflict: 'tenant_id,phone' })
   return res
 }
 
@@ -85,7 +115,28 @@ const safeEq = (a: string, b: string) => a.length === b.length && [...a].reduce(
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   const url = new URL(req.url)
-  const setup = await loadSetup()
+  const raw = req.method === 'POST' ? await req.text() : ''
+  const type = req.headers.get('content-type') ?? ''
+
+  // ---- in-app simulator (staff only) — the hospital the signed-in user works in
+  let simulate: any = null
+  if (req.method === 'POST' && !type.includes('application/x-www-form-urlencoded')) {
+    try { simulate = JSON.parse(raw || '{}').simulate ?? null } catch { /* handled below */ }
+  }
+  if (simulate) {
+    const who = await resolveCaller(req, { serviceKey: SERVICE_KEY, admin, userClient })
+    if (who.kind !== 'user' || !who.tenant || !['owner', 'receptionist'].includes(who.role ?? '')) return json({ error: 'Only the owner or reception can use the simulator.' }, 403)
+    const phone = phone10(simulate.from)
+    if (!/^[6-9]\d{9}$/.test(phone)) return json({ error: 'Enter a valid 10-digit mobile number.' }, 400)
+    const tenant = await tenantById(who.tenant)
+    if (!tenant) return json({ error: 'Hospital not found.' }, 404)
+    return json(await converse(phone, String(simulate.text ?? ''), await loadSetup(tenant)))
+  }
+
+  // ---- webhooks: the hospital comes from the address (?hospital=<slug>)
+  const tenant = await tenantFor(url)
+  if (!tenant) return new Response('unknown hospital', { status: 404 })
+  const setup = await loadSetup(tenant)
 
   // Meta webhook verification handshake
   if (req.method === 'GET') {
@@ -97,15 +148,13 @@ Deno.serve(async (req) => {
   }
   if (req.method !== 'POST') return new Response('method not allowed', { status: 405 })
 
-  const raw = await req.text()
-  const type = req.headers.get('content-type') ?? ''
-
   // ---- Twilio (form-encoded)
   if (type.includes('application/x-www-form-urlencoded')) {
     const form = new URLSearchParams(raw)
     const tok = setup.ctx.secrets.twilio_auth_token
     if (tok) {   // https://www.twilio.com/docs/usage/security#validating-requests
-      const publicUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/whatsapp-bot`
+      // Twilio signs the full address it calls, including ?hospital=…
+      const publicUrl = `${SUPABASE_URL}/functions/v1/whatsapp-bot${url.search}`
       const data = publicUrl + [...form.keys()].sort().map((k) => k + form.get(k)).join('')
       const sig = b64(await hmac('SHA-1', tok, data))
       if (!safeEq(sig, req.headers.get('x-twilio-signature') ?? '')) return new Response('bad signature', { status: 403 })
@@ -118,17 +167,6 @@ Deno.serve(async (req) => {
 
   let body: any = {}
   try { body = JSON.parse(raw || '{}') } catch { return json({ error: 'invalid JSON' }, 400) }
-
-  // ---- in-app simulator (staff only)
-  if (body.simulate) {
-    const jwt = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
-    const { data: { user } } = jwt ? await admin.auth.getUser(jwt) : { data: { user: null } }
-    const { data: prof } = user ? await admin.from('profiles').select('role').eq('id', user.id).maybeSingle() : { data: null }
-    if (!prof || !['owner', 'receptionist'].includes(prof.role)) return json({ error: 'Only the owner or reception can use the simulator.' }, 403)
-    const phone = phone10(body.simulate.from)
-    if (!/^[6-9]\d{9}$/.test(phone)) return json({ error: 'Enter a valid 10-digit mobile number.' }, 400)
-    return json(await converse(phone, String(body.simulate.text ?? ''), setup))
-  }
 
   // ---- OpenWA / WA CRM (self-hosted WhatsApp Web gateway) — see ../_shared/openwa.ts
   const owaSig = req.headers.get('x-openwa-signature')

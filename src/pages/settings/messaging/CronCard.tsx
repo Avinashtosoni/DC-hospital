@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useAuth } from '../../../auth/AuthProvider'
 import { CheckCircle2, CircleAlert, CircleDashed, Power, RefreshCw, Timer } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge, Button, Field, Input, Skeleton } from '../../../components/ui'
@@ -19,6 +20,7 @@ const JOBS: Record<string, string> = {
 
 export function CronCard({ secrets }: { ctx: TabCtx; secrets: SecretStatus[] | undefined }) {
   const qc = useQueryClient()
+  const tenant = useAuth().context?.tenant ?? null
   const st = useQuery({ queryKey: QK, queryFn: cronStatus, refetchInterval: 60_000 })
   const defaultUrl = supabaseUrl ? `${supabaseUrl.replace(/\/$/, '')}/functions/v1/notify` : ''
   const [url, setUrl] = useState(defaultUrl)
@@ -32,6 +34,13 @@ export function CronCard({ secrets }: { ctx: TabCtx; secrets: SecretStatus[] | u
   const on = !!s?.jobs?.some((j) => j.active)
   const step = (done: boolean, label: React.ReactNode) => (
     <li className="flex gap-2.5">{done ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />}<div className="min-w-0 flex-1">{label}</div></li>
+  )
+  // one scheduler (set up on the main hospital) delivers every hospital's messages
+  if (tenant && tenant.is_primary === false) return (
+    <Section title={<span className="flex items-center gap-2">Automatic delivery<Badge tone="green" dot>Managed</Badge></span>} icon={<Timer className="h-4 w-4" />}
+      description="Delivers the queue every minute, sends scheduled messages and queues tomorrow's reminders every evening — no browser needs to be open.">
+      <p className="text-sm text-slate-600">The platform runs this for your hospital — nothing to set up. Your messages go out with your own providers and credentials above.</p>
+    </Section>
   )
   return (
     <Section title={<span className="flex items-center gap-2">Automatic delivery (Supabase cron)<Badge tone={s?.demo ? 'slate' : on ? 'green' : 'amber'} dot>{s?.demo ? 'Demo' : on ? 'On' : 'Off'}</Badge></span>} icon={<Timer className="h-4 w-4" />}

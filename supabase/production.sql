@@ -2114,25 +2114,7 @@ revoke all on function public.queue_appointment_reminders() from public, anon;
 grant execute on function public.queue_appointment_reminders() to authenticated, service_role;
 
 -- Used by the Edge Function (service role) to take a batch of messages to deliver.
-drop function if exists public.claim_notifications(int) cascade;
-create function public.claim_notifications(p_limit int default 25)
-returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
-begin
-  -- give up on messages that got stuck mid-delivery three times
-  update public.notification_outbox set status = 'failed', error = coalesce(error, 'Delivery timed out')
-  where status = 'sending' and attempts >= 3 and coalesce(last_attempt_at, created_at) < now() - interval '10 minutes';
-
-  return query
-    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
-    where o.id in (
-      select x.id from public.notification_outbox x
-      where (x.status = 'pending' and x.next_attempt_at <= now())
-         or (x.status = 'sending' and x.attempts < 3 and coalesce(x.last_attempt_at, x.created_at) < now() - interval '10 minutes')
-      order by x.created_at
-      limit greatest(1, least(p_limit, 100))
-      for update skip locked)
-    returning o.*;
-end $$;
+-- claim_notifications(p_limit, p_tenant) — the queue for the notify Edge Function — lives in messaging.sql.
 
 -- Deliver specific fresh messages right away (e.g. the OTP a visitor just requested). Used by the notify
 -- function for callers that may not flush the whole queue (anonymous visitors, patients).
@@ -2154,8 +2136,6 @@ end $$;
 revoke all on function public.claim_notifications_for(uuid[]) from public, anon, authenticated;
 grant execute on function public.claim_notifications_for(uuid[]) to service_role;
 
-revoke all on function public.claim_notifications(int) from public, anon, authenticated;
-grant execute on function public.claim_notifications(int) to service_role;
 
 
 -- =====================================================================================================
@@ -3566,6 +3546,35 @@ begin
 end $$;
 revoke all on function public.notification_usage(date, date) from public, anon;
 grant execute on function public.notification_usage(date, date) to authenticated;
+
+-- ------------------------------------------------------------------ the queue for the notify Edge Function
+-- Used by the Edge Function (service role) to take a batch of messages to deliver.
+-- p_tenant: only that hospital's queue (a staff member's "deliver now"); null = every hospital (the scheduler).
+-- Suspended hospitals' messages wait (they go out if the hospital is reactivated, or expire with the cleanup job).
+drop function if exists public.claim_notifications(int) cascade;
+drop function if exists public.claim_notifications(int, uuid) cascade;
+create function public.claim_notifications(p_limit int default 25, p_tenant uuid default null)
+returns setof public.notification_outbox language plpgsql volatile security definer set search_path = public as $$
+begin
+  -- give up on messages that got stuck mid-delivery three times
+  update public.notification_outbox set status = 'failed', error = coalesce(error, 'Delivery timed out')
+  where status = 'sending' and attempts >= 3 and coalesce(last_attempt_at, created_at) < now() - interval '10 minutes';
+
+  return query
+    update public.notification_outbox o set status = 'sending', attempts = o.attempts + 1, last_attempt_at = now()
+    where o.id in (
+      select x.id from public.notification_outbox x
+      where ((x.status = 'pending' and x.next_attempt_at <= now())
+          or (x.status = 'sending' and x.attempts < 3 and coalesce(x.last_attempt_at, x.created_at) < now() - interval '10 minutes'))
+        and (p_tenant is null or x.tenant_id = p_tenant)
+        and not exists (select 1 from public.tenants t where t.id = x.tenant_id and t.status = 'suspended')
+      order by x.created_at
+      limit greatest(1, least(p_limit, 100))
+      for update skip locked)
+    returning o.*;
+end $$;
+revoke all on function public.claim_notifications(int, uuid) from public, anon, authenticated;
+grant execute on function public.claim_notifications(int, uuid) to service_role;
 
 -- ------------------------------------------------------------------ Supabase cron (pg_cron + pg_net)
 -- The job calls the `notify` Edge Function with the service-role key the owner saved (write-only, like every credential).

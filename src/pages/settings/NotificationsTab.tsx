@@ -19,6 +19,7 @@ import { CustomMessages } from './messaging/CustomMessages'
 import { CronCard } from './messaging/CronCard'
 import { UsageCard } from './messaging/UsageCard'
 import { supabaseUrl } from '../../lib/supabase'
+import { webhookUrl } from '../../../supabase/functions/_shared/tenant'
 
 const LOG_QK = ['notify-log'] as const
 const CH = CHANNEL_META
@@ -447,7 +448,9 @@ export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
 function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | undefined }) {
   const w = ctx.app.notifications.whatsapp
   const on = w.botEnabled
-  const hook = supabaseUrl ? `${supabaseUrl.replace(/\/$/, '')}/functions/v1/whatsapp-bot` : '(connect Supabase to get the webhook URL)'
+  // each hospital has its own webhook address (…/whatsapp-bot?hospital=<slug>; none for the main hospital)
+  const tenant = useAuth().context?.tenant ?? null
+  const hook = supabaseUrl ? webhookUrl(supabaseUrl, tenant) : '(connect Supabase to get the webhook URL)'
   const copy = () => navigator.clipboard?.writeText(hook).then(() => toast.success('Webhook URL copied'))
   return (
     <Section title={<span className="flex items-center gap-2">WhatsApp booking chatbot<Badge tone={on ? (w.enabled ? 'green' : 'amber') : 'slate'} dot>{on ? (w.enabled ? 'On' : 'Needs WhatsApp') : 'Off'}</Badge></span>} icon={<Bot className="h-4 w-4" />}

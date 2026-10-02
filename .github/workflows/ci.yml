@@ -36,6 +36,9 @@ jobs:
       - name: Tests (database in PGlite, notify providers, WhatsApp bot)
         run: npm test
 
+      - name: Edge Functions (notify + whatsapp-bot in Deno, two hospitals)
+        run: npm run test:edge
+
       - name: Production build
         run: npx vite build
 

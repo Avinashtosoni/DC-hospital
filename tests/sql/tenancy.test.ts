@@ -287,6 +287,24 @@ describe('definer functions stay inside the hospital', () => {
     const [a] = await asH<{ p: unknown }>('service', {}, `select public.bot_patient('9800000001') p`)
     expect(a.p).toBeNull()
   })
+
+  test("the notify queue: a staff flush takes one hospital's messages, the scheduler all — suspended hospitals wait", async () => {
+    await db.as(null, `update public.notification_outbox set status = 'skipped' where status in ('pending', 'sending')`)
+    await db.as(null, `insert into public.notification_outbox (tenant_id, event, channel, recipient, body) values
+      ($1, 'edge', 'sms', 'a-1', 'x'), ($2, 'edge', 'sms', 'b-1', 'x'), ($2, 'edge', 'sms', 'b-2', 'x'), ($3, 'edge', 'sms', 'c-1', 'x')`, [A, B, C])
+    await db.as(null, `update public.tenants set status = 'suspended' where id = $1`, [C])
+    try {
+      const mine = await db.as<{ recipient: string; tenant_id: string }>('service', `select recipient, tenant_id from public.claim_notifications(25, $1) order by recipient`, [B])
+      expect(mine.map((r) => r.recipient)).toEqual(['b-1', 'b-2'])
+      const rest = await db.as<{ recipient: string }>('service', `select recipient from public.claim_notifications(25) order by recipient`)
+      expect(rest.map((r) => r.recipient)).toEqual(['a-1'])          // B's are already taken; C is suspended
+      await expect(db.as(B_OWNER, `select * from public.claim_notifications(25, $1)`, [B])).rejects.toThrow(/permission denied/)
+    } finally {
+      await db.as(null, `update public.tenants set status = 'active' where id = $1`, [C])
+    }
+    const [c] = await db.as<{ status: string }>(null, `select status from public.notification_outbox where recipient = 'c-1'`)
+    expect(c.status).toBe('pending')
+  })
 })
 
 // locked modules are hidden in the app AND refused by the database (phase 1.4)

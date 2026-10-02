@@ -75,14 +75,33 @@ settings and sender identity. The Hospital Comrade team works through **provider
     (`admin@` all hospitals, `support@` City only, `finance@` both, all `@hospitalcomrade.demo`) work on any site,
     use the provider banner, can't open unassigned hospitals, and support can't change patient records.
   - Demo mode always runs multi-hospital (no `TENANCY` needed) — single-hospital installs with Supabase are unaffected.
-- [ ] **1.6 Edge functions**: `notify` / `whatsapp-bot` read settings & secrets of the message's hospital
+- [x] **1.6 Edge functions**: `notify` / `whatsapp-bot` read settings & secrets of the message's hospital
+  - `supabase/functions/_shared/tenant.ts`: signed-in callers → `my_context()` run as the caller with the forwarded
+    `x-tenant-id` / `x-provider-mode` (same rules as the database); queue rows → `notification_outbox.tenant_id`;
+    webhooks → `?hospital=<slug>` on the address (none = primary). The service role skips RLS, so every table read
+    filters on `tenant_id`; bot RPCs run with `x-tenant-id` (trusted only without a signed-in user). CORS now allows
+    the two headers (multi mode preflights failed before).
+  - **notify**: claimed rows are grouped per hospital and sent with that hospital's settings, credentials, custom
+    templates, push devices and name. The scheduler (service key) flushes every hospital; a staff member's "deliver
+    now" only their own (`claim_notifications(p_limit, p_tenant)`, moved to `messaging.sql` so the upgrade script gets
+    it too); suspended hospitals' messages wait. Tests run as the owner's hospital (providers: the chosen one) and
+    log with its `tenant_id`.
+  - **whatsapp-bot**: settings, Meta verify token / signatures, Twilio signature (full URL incl. `?hospital`), doctors,
+    slots, bookings and chat state (`wa_sessions` per hospital + phone) all come from the address' hospital; unknown
+    hospital → 404; a suspended hospital's bot stays quiet; the simulator uses the signed-in user's hospital.
+    Settings → WhatsApp chatbot shows each hospital its own webhook address. Non-primary hospitals see "Automatic
+    delivery: managed" instead of the cron setup.
+  - Tests: `npm run test:edge` runs both real functions in Deno against an in-memory Supabase with two hospitals
+    (also in CI); `tests/notify/tenant.test.ts`; SQL test for the per-hospital queue.
+  - Deploy: `supabase functions deploy notify` and `supabase functions deploy whatsapp-bot --no-verify-jwt` again
+    after applying the SQL (old functions + new SQL keep working; new functions need the new `claim_notifications`).
 - [ ] **1.7 Verify**: SQL + E2E across hospitals and providers, upgrade path, docs
 
 ### Later phases
 2 Per-hospital website & domains · 3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel ·
 6 Owner billing page · 7 Ops & compliance · 8 Launch
 
-> Until 1.5 – 1.6 are done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
+> Until 1.7 (verification) is done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
 > primary hospital automatically). `supabase/upgrade-2026-10.sql` is for existing single-hospital databases; a
 > multi-hospital launch starts from a fresh `supabase/production.sql`.
 >
