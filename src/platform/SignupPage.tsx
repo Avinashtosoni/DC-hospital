@@ -81,7 +81,7 @@ export default function SignupPage() {
                 <Field label="City"><input className="input" value={f.city} onChange={set('city')} autoComplete="address-level2" maxLength={80} /></Field>
                 <Field label="Plan to try">
                   <select className="input" value={f.plan} onChange={set('plan')}>
-                    {info.plans.map((id) => { const p = PLANS.find((x) => x.id === id); return <option key={id} value={id}>{p?.name ?? id}{p?.price ? ` — ₹${p.price.toLocaleString('en-IN')}${p.suffix ?? ''}/month after the trial` : ''}</option> })}
+                    {info.plans.map((id) => { const p = PLANS.find((x) => x.id === id); return <option key={id} value={id}>{p?.name ?? id}{p?.price ? ` — ₹${p.price.toLocaleString('en-IN')}${p.suffix ?? ''}/month` : ''}</option> })}
                   </select>
                 </Field>
                 {/* honeypot: people never see it, bots fill it */}
