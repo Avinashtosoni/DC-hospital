@@ -40,7 +40,7 @@ settings and sender identity. The Hospital Comrade team works through **provider
 - [x] `docs/DEPLOYMENT.md` — production on `main`, staging on the working branch, rollback
 - [ ] Owner: merge PR, switch Coolify production to `main`, create the staging app (manual steps in the guide)
 
-### Phase 1 — multi-tenant core + roles + locks
+### Phase 1 — multi-tenant core + roles + locks ✅
 - [x] **1.1 Database core**: tenancy tables, `current_tenant()`, tenant_id + restrictive policy on all 33 tables,
       per-hospital roles, provider roles/modes, support read-only, per-hospital uniques & numbering, sign-up routing,
       `resolve_tenant` / `my_context` / `provider_tenants` / `provider_log`, isolation test suite
@@ -95,16 +95,56 @@ settings and sender identity. The Hospital Comrade team works through **provider
     (also in CI); `tests/notify/tenant.test.ts`; SQL test for the per-hospital queue.
   - Deploy: `supabase functions deploy notify` and `supabase functions deploy whatsapp-bot --no-verify-jwt` again
     after applying the SQL (old functions + new SQL keep working; new functions need the new `claim_notifications`).
-- [ ] **1.7 Verify**: SQL + E2E across hospitals and providers, upgrade path, docs
+- [x] **1.7 Verify**: SQL + E2E across hospitals and providers, upgrade path, docs
+  - **Upgrade path** (`tests/sql/upgrade.test.ts`): real databases of two older releases (fixtures in
+    `tests/sql/fixtures/`) are upgraded twice and compared with a fresh `production.sql` — functions (source, definer,
+    settings), function and table grants, policies, triggers, columns, constraints, RLS, indexes: identical. Plus a
+    live hospital upgraded with data: rows join the first hospital, numbering continues, a second hospital is isolated.
+    Found and fixed: the upgrade did not carry `audit/cms/booking/settings/patient.sql`, so upgraded databases kept
+    ~27 definer functions *without* hospital filters (website doctors, booking, bot, sign-up routing); databases from
+    before `push_tokens` failed to upgrade; a missing `notices` check.
+  - **Grants**: `tenant_secret()` (credentials), `tenant_setting()`, `tenant_content()` and `ensure_tenant_columns()` were
+    executable by signed-in users / visitors on fresh installs (master's blanket grant ran after their revoke). Revoked
+    at the very end of the build; tested on master, production and upgraded databases.
+  - **Onboarding** (`tests/sql/onboarding.test.ts`): `supabase/snippets/add-hospital.sql` and `add-provider.sql` run as
+    shipped on a fresh production database. Found and fixed: a new hospital's bootstrap owner e-mail was ignored
+    (only the first hospital had one) and a new hospital had no website forms — `seed_hospital_defaults()` now copies
+    the built-in forms (from `src/forms/schema.ts`) and the hospital's identity — its name, and blank contacts, GSTIN, PAN,
+    registration number and UPI id instead of the sample hospital's (they printed on a new hospital's invoices); the
+    Enquiries inbox finds each hospital's own Contact form.
+  - **Browser**: every role of both demo hospitals and the three platform logins open every page of their menu —
+    (282 page visits) — no error screens, no script errors, no other hospital's names / MRNs / e-mails (demo mode;
+    found: the demo clinic's Settings showed the sample legal name → it has its own letterhead now); 1.3's mock E2E
+    covers domain routing with Supabase.
 
 ### Later phases
 2 Per-hospital website & domains · 3 Messaging per hospital · 4 Wallet / Razorpay / license · 5 Provider panel ·
 6 Owner billing page · 7 Ops & compliance · 8 Launch
 
-> Until 1.7 (verification) is done, keep `TENANCY=single`. Single-hospital installs are unaffected (everything joins the
-> primary hospital automatically). `supabase/upgrade-2026-10.sql` is for existing single-hospital databases; a
-> multi-hospital launch starts from a fresh `supabase/production.sql`.
->
-> Still to do with the provider panel (phase 5): the create-hospital / create-provider RPCs must set
-> `app.tenant_move = 'on'` while they move a profile, and seed the new hospital's default website forms and website
-> content (until then a new hospital's website shows the built-in DC Hospital sample content).
+## Going multi-hospital (runbook)
+
+Phase 1 is complete: the database, the app and the Edge Functions keep hospitals apart. Until the provider panel
+(phase 5) exists, hospitals and team members are added with SQL snippets.
+
+1. **Database** — new project: run `supabase/production.sql` (first change the owner e-mail on the line marked ✏️). Existing
+   single-hospital project (September 2026 or newer): run `supabase/upgrade-2026-10.sql` — everything joins the first
+   hospital, nothing changes for it.
+2. **Edge Functions** — `supabase functions deploy notify` and `supabase functions deploy whatsapp-bot --no-verify-jwt`
+   (after the SQL: the new functions need the new `claim_notifications`).
+3. **App** — Coolify → environment: `TENANCY=multi`, `PLATFORM_NAME`, `PLATFORM_DOMAIN`, `REQUIRE_BACKEND=true` → restart.
+   With one hospital nothing looks different.
+4. **Add a hospital** — Supabase → SQL editor → `supabase/snippets/add-hospital.sql` (edit the ✏️ values). It creates
+   the hospital, its address, its built-in website forms and name, and remembers the owner e-mail.
+5. **Its address** — DNS for the hospital's domain to the server (Coolify: add the domain to the app). Until a domain
+   is ready, `https://<app>/?hospital=<slug>` works.
+6. **Its owner** signs up on that address with the owner e-mail → owner of that hospital. The owner then fills in the
+   website (if the *Website* module is theirs), settings and staff invites, and their own SMS / WhatsApp / e-mail
+   credentials (Settings → Notifications; WhatsApp bot webhook: the address shown there, `…/whatsapp-bot?hospital=<slug>`).
+7. **Platform team** — each person signs up once, then `supabase/snippets/add-provider.sql` (admin / support / finance).
+8. **Check** — sign in as the owner on the new address (sees an empty hospital), as the first hospital's owner (sees
+   nothing of the new one), as support (banner, read-only patients).
+
+Known limits until later phases: a new hospital's website shows the built-in sample texts (doctors, services) until
+the owner edits them (phase 2 brings per-hospital website starters and domains via Cloudflare for SaaS); messaging
+uses each hospital's own credentials (phase 3 adds platform-paid messaging and wallets); the provider panel (phase 5)
+replaces the snippets and must set `app.tenant_move = 'on'` while moving a profile, like `add-provider.sql` does.

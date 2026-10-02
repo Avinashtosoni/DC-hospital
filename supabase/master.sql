@@ -5220,8 +5220,9 @@ $$;
 revoke all on function public.invite_lookup(text) from public;
 grant execute on function public.invite_lookup(text) to anon, authenticated;
 
--- New auth users: an accepted staff invite gives the invited role; the production bootstrap e-mail
--- (supabase/production.sql) becomes the first owner; everyone else is a patient.
+-- New auth users: an accepted staff invite gives the invited role; the hospital's bootstrap e-mail (app_settings
+-- 'bootstrap' — set by production.sql for the first hospital, by supabase/snippets/add-hospital.sql for later ones)
+-- becomes that hospital's first owner; everyone else is a patient.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
@@ -5229,7 +5230,7 @@ declare
   v_name   text := coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(new.email, '@', 1));
   v_phone  text := nullif(new.raw_user_meta_data ->> 'phone', '');
   v_inv    public.staff_invites;
-  v_owner  text := lower((public.tenant_setting('bootstrap') ->> 'owner_email'));
+  v_owner  text;
   v_meta   text := new.raw_user_meta_data ->> 'tenant_id';
   v_tenant uuid;
 begin
@@ -5238,6 +5239,7 @@ begin
     select id into v_tenant from public.tenants where id = v_meta::uuid and status <> 'suspended';
   end if;
   v_tenant := coalesce(v_tenant, public.current_tenant(), public.primary_tenant());
+  select lower(data ->> 'owner_email') into v_owner from public.app_settings where tenant_id = v_tenant and key = 'bootstrap';
 
   select * into v_inv from public.staff_invites
   where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email) and tenant_id = v_tenant
@@ -5258,7 +5260,7 @@ begin
     return new;
   end if;
 
-  if v_owner is not null and lower(new.email) = v_owner and v_tenant = public.primary_tenant()
+  if v_owner is not null and lower(new.email) = v_owner
      and not exists (select 1 from public.profiles where role = 'owner' and tenant_id = v_tenant) then
     insert into public.profiles (id, full_name, email, role, phone) values (new.id, v_name, new.email, 'owner', v_phone)
     on conflict (id) do update set role = 'owner';
@@ -7072,6 +7074,34 @@ grant execute on function public.module_locked(text) to anon, authenticated;
 -- private settings (gateway URLs, sessions); ensure_tenant_columns changes the schema.
 revoke all on function public.tenant_secret(text), public.tenant_setting(text), public.tenant_content(text),
   public.ensure_tenant_columns() from public, anon, authenticated;
+
+-- ------------------------------------------------------------------ a new hospital's starting point (phase 1.7)
+-- Platform only (SQL editor / provider panel): the built-in website forms (Contact, Review — from src/forms/schema.ts)
+-- and the hospital's identity on its website and invoices. Safe to run again; keeps whatever the hospital already changed.
+create or replace function public.seed_hospital_defaults(p_tenant uuid)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare t public.tenants;
+begin
+  select * into t from public.tenants where id = p_tenant;
+  if not found then raise exception 'No hospital with id %', p_tenant; end if;
+  insert into public.site_forms (tenant_id, slug, name, description, kind, enabled, fields, settings, sort)
+  select p_tenant, v.slug, v.name, v.description, v.kind, v.enabled::boolean, v.fields::jsonb, v.settings::jsonb, v.sort::int
+    from (values
+  ('f0000000-0000-4000-8000-000000000001', 'contact', 'Contact form', 'The form on the Contact page. Topics come from Website CMS → Contact page unless you set options here.', 'contact', true, '[{"id":"name","type":"text","label":"Full name","placeholder":"Priya Sharma","required":true,"role":"name","width":"half"},{"id":"phone","type":"phone","label":"Mobile number","placeholder":"98100 12345","required":true,"role":"phone","width":"half"},{"id":"email","type":"email","label":"Email","placeholder":"you@example.com","role":"email","width":"half"},{"id":"speciality","type":"select","label":"Speciality","placeholder":"Not sure / general","optionsFrom":"services","role":"speciality","width":"half"},{"id":"topic","type":"radio","label":"How can we help?","required":true,"options":[],"role":"topic"},{"id":"message","type":"textarea","label":"Message","placeholder":"Tell us how we can help…","required":true,"role":"message"},{"id":"consent","type":"consent","label":"I agree to be contacted about my enquiry and accept the privacy policy.","required":true}]'::jsonb, '{"submitLabel":"Send message","color":"brand"}'::jsonb, 0),
+  ('f0000000-0000-4000-8000-000000000002', 'review', 'Patient review', 'Share your experience at our hospital. Reviews are read by the management.', 'review', true, '[{"id":"rating","type":"rating","label":"Overall experience","required":true},{"id":"name","type":"text","label":"Full name","placeholder":"Priya Sharma","required":true,"role":"name","width":"half"},{"id":"phone","type":"phone","label":"Mobile number","placeholder":"98100 12345","required":true,"role":"phone","width":"half"},{"id":"doctor","type":"text","label":"Doctor or department you visited","placeholder":"e.g. Dr. Arjun Mehta, Cardiology","width":"half"},{"id":"visit_date","type":"date","label":"Date of visit","width":"half"},{"id":"liked","type":"checkboxes","label":"What went well?","options":["Doctor consultation","Nursing care","Cleanliness","Waiting time","Billing & front desk"]},{"id":"message","type":"textarea","label":"Your review","placeholder":"Tell us about your visit…","required":true,"role":"message"},{"id":"publish","type":"consent","label":"You may publish my first name with this review on the website."}]'::jsonb, '{"topic":"Patient review","submitLabel":"Submit review","successTitle":"Thank you for your review!","successText":"Your feedback helps us care better for every patient.","color":"amber"}'::jsonb, 1)
+    ) as v (id, slug, name, description, kind, enabled, fields, settings, sort)
+   where not exists (select 1 from public.site_forms f where f.tenant_id = p_tenant and f.slug = v.slug);
+  -- the hospital's identity: its own name, and none of the sample hospital's contacts, tax / registration numbers or
+  -- UPI id (they would print on its invoices); the owner fills them in under Settings → General / Billing
+  insert into public.site_content (tenant_id, key, data)
+  values (p_tenant, 'settings', jsonb_build_object(
+    'name', t.name, 'tagline', '', 'about', '', 'address', '', 'phone', '', 'appointmentsPhone', '', 'whatsapp', '', 'email', '',
+    'seoDescription', t.name, 'brand', jsonb_build_object('shortName', left(t.name, 30)),
+    'booking', jsonb_build_object('showDemoOtp', false),
+    'billing', jsonb_build_object('legalName', t.name, 'gstin', '', 'regNo', '', 'pan', '', 'upiId', '')))
+  on conflict (tenant_id, key) do nothing;
+end $$;
+revoke all on function public.seed_hospital_defaults(uuid) from public, anon, authenticated;
 
 commit;
 

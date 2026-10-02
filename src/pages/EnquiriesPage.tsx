@@ -73,10 +73,13 @@ const FOLDER_WHERE: Record<Folder, Filter[]> = {
   spam: [['status', 'eq', 'spam']],
   all: [['status', 'neq', 'spam']],
 }
+/** this hospital's built-in Contact form (each hospital has its own copy; the first hospital's has the fixed id) */
+let contactFormId = CONTACT_FORM_ID
+const isContactForm = (id?: string | null) => !!id && id === contactFormId
 /** a Contact-form topic; the catch-all label also holds topics that are no longer offered */
 const labelWhere = (name: string, labels: Label[]): Filter[] => {
   const last = labels[labels.length - 1]?.name
-  return [['status', 'neq', 'spam'], ['form_id', 'eq', CONTACT_FORM_ID],
+  return [['status', 'neq', 'spam'], ['form_id', 'eq', contactFormId],
     name === last && labels.length > 1 ? ['topic', 'nin', labels.slice(0, -1).map((t) => t.name)] : ['topic', 'eq', name]]
 }
 const SEARCH_COLS = ['ref', 'name', 'phone', 'email', 'topic', 'speciality', 'message', 'notes', 'form_name']
@@ -183,16 +186,17 @@ export default function EnquiriesPage() {
   const formsQ = useTable('site_forms')
   const forms = useMemo(() => [...(formsQ.data ?? [])].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)), [formsQ.data])
   const formMap = useMemo(() => new Map(forms.map((f) => [f.id, f])), [forms])
+  contactFormId = forms.find((f) => f.kind === 'contact' && f.slug === 'contact')?.id ?? CONTACT_FORM_ID
   const lists = useFormLists()
   const labels = useMemo(() => {
-    const topicField = (formMap.get(CONTACT_FORM_ID)?.fields as FormField[] | undefined)?.find((f) => f.role === 'topic')
+    const topicField = (formMap.get(contactFormId)?.fields as FormField[] | undefined)?.find((f) => f.role === 'topic')
     const own = (topicField?.options ?? []).filter((o) => o.trim())
     return topicLabels(own.length ? own : lists.topics.length ? lists.topics : DEFAULT_TOPICS)
   }, [formMap, lists.topics])
   const lookup = useMemo<LabelLookup>(() => ({
     forms: formMap,
     style: (r) => {
-      if (r.form_id && r.form_id !== CONTACT_FORM_ID) return { name: r.topic, ...formColor(formMap.get(r.form_id)) }
+      if (r.form_id && !isContactForm(r.form_id)) return { name: r.topic, ...formColor(formMap.get(r.form_id)) }
       return labels.find((l) => l.name === r.topic) ?? labels[labels.length - 1] ?? SLATE
     },
   }), [formMap, labels])
@@ -528,7 +532,7 @@ function Row({ r, index, compact, active, focused, selected, showStatus, showFor
   const unread = isUnread(r)
   const stars = ratingOf(r)
   // a form whose topic is a question (not its own name) also shows which form it came from
-  const formBadge = showForm && r.form_id && r.form_id !== CONTACT_FORM_ID && r.form_name && r.form_name !== r.topic
+  const formBadge = showForm && r.form_id && !isContactForm(r.form_id) && r.form_name && r.form_name !== r.topic
     ? <span className="hidden shrink-0 items-center gap-1 truncate rounded bg-slate-100 px-1.5 py-px text-[11px] text-slate-600 lg:inline-flex"><ClipboardList className="h-3 w-3" />{r.form_name}</span> : null
   const hover = (
     <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
@@ -669,7 +673,7 @@ function Reader({ r, pos, total, canDelete, hospital, onClose, onPrev, onNext, o
         <div className="whitespace-pre-wrap break-words px-4 pb-2 sm:pl-[4.75rem] sm:pr-6 text-[15px] leading-relaxed text-slate-800">{r.message}</div>
 
         {/* every answer as it was sent (forms other than the Contact form) */}
-        {r.form_id && r.form_id !== CONTACT_FORM_ID && !!r.data?.length && <Answers r={r} />}
+        {r.form_id && !isContactForm(r.form_id) && !!r.data?.length && <Answers r={r} />}
 
         {/* reply actions */}
         <div className="flex flex-wrap gap-2 px-4 pb-6 pt-4 sm:pl-[4.75rem] sm:pr-6">

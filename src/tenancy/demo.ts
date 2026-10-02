@@ -71,4 +71,6 @@ export const CITY_SITE_SETTINGS = {
   whatsapp: '+91 98100 50001', email: 'hello@citycareclinic.in',
   seoDescription: 'City Care Clinic, Patna — book a consultation online in 30 seconds.',
   brand: { shortName: 'City Care', appSubtitle: 'Clinic Management', logoUrl: '', faviconUrl: '', showName: true },
+  // its own invoice letterhead (sample values)
+  billing: { legalName: 'City Care Clinic LLP', gstin: '10AAKFC4321M1Z2', regNo: 'BR/CE/2022/001187', pan: 'AAKFC4321M', upiId: 'citycareclinic@sbi' },
 }

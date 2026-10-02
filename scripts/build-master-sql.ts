@@ -182,11 +182,14 @@ const patientSql = readFileSync(resolve(root, 'scripts/sql/patient.sql'), 'utf8'
 const scaleSql = readFileSync(resolve(root, 'scripts/sql/scale.sql'), 'utf8')
 const authSql = readFileSync(resolve(root, 'scripts/sql/auth.sql'), 'utf8')
 // multi-tenancy runs last: it adds tenant_id + the tenant_isolation policy to every table created above
-const tenancySql = readFileSync(resolve(root, 'scripts/sql/tenancy.sql'), 'utf8')
+let tenancySql = readFileSync(resolve(root, 'scripts/sql/tenancy.sql'), 'utf8')
 // …but current_tenant() and the hospital helpers must exist before any later function uses them
 const tenancyCoreSql = readFileSync(resolve(root, 'scripts/sql/tenancy_core.sql'), 'utf8')
 // built-in website forms come from src/forms/schema.ts so the app and the database never disagree
 const formRows = DEFAULT_FORMS.map((f) => `  (${[f.id, f.slug, f.name, f.description ?? null, f.kind, f.enabled, f.fields, f.settings, f.sort].map((v) => lit(v, '')).join(', ')})`).join(',\n')
+// a new hospital gets the same built-in forms (seed_hospital_defaults in tenancy.sql)
+tenancySql = tenancySql.replace('@@DEFAULT_FORM_VALUES@@', formRows)
+if (tenancySql.includes('@@DEFAULT_FORM_VALUES@@')) throw new Error('default forms placeholder missing')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 

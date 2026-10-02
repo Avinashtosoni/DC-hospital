@@ -46,6 +46,14 @@ Optional: deploy production from **release tags** (`v1.4.0`) instead of `main` �
 
 All of them are read when the container starts (`/env.js`), so changing one only needs a restart, not a rebuild.
 
+## Database & Edge Functions
+
+- New Supabase project: `supabase/production.sql` (no demo data). Existing project: `supabase/upgrade-2026-10.sql`
+  (safe to run again; oldest supported database: September 2026). Run on staging first.
+- After database changes, redeploy the functions: `supabase functions deploy notify` and
+  `supabase functions deploy whatsapp-bot --no-verify-jwt`.
+- Many hospitals on one database (`TENANCY=multi`): see the runbook in [MULTI_TENANCY.md](MULTI_TENANCY.md#going-multi-hospital-runbook).
+
 ## Rollback
 
 Coolify → app → *Deployments* → pick the previous successful deployment → *Redeploy*. The database is not touched by a rollback.

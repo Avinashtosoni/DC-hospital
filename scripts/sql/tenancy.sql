@@ -383,3 +383,30 @@ grant execute on function public.module_locked(text) to anon, authenticated;
 -- private settings (gateway URLs, sessions); ensure_tenant_columns changes the schema.
 revoke all on function public.tenant_secret(text), public.tenant_setting(text), public.tenant_content(text),
   public.ensure_tenant_columns() from public, anon, authenticated;
+
+-- ------------------------------------------------------------------ a new hospital's starting point (phase 1.7)
+-- Platform only (SQL editor / provider panel): the built-in website forms (Contact, Review — from src/forms/schema.ts)
+-- and the hospital's identity on its website and invoices. Safe to run again; keeps whatever the hospital already changed.
+create or replace function public.seed_hospital_defaults(p_tenant uuid)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare t public.tenants;
+begin
+  select * into t from public.tenants where id = p_tenant;
+  if not found then raise exception 'No hospital with id %', p_tenant; end if;
+  insert into public.site_forms (tenant_id, slug, name, description, kind, enabled, fields, settings, sort)
+  select p_tenant, v.slug, v.name, v.description, v.kind, v.enabled::boolean, v.fields::jsonb, v.settings::jsonb, v.sort::int
+    from (values
+@@DEFAULT_FORM_VALUES@@
+    ) as v (id, slug, name, description, kind, enabled, fields, settings, sort)
+   where not exists (select 1 from public.site_forms f where f.tenant_id = p_tenant and f.slug = v.slug);
+  -- the hospital's identity: its own name, and none of the sample hospital's contacts, tax / registration numbers or
+  -- UPI id (they would print on its invoices); the owner fills them in under Settings → General / Billing
+  insert into public.site_content (tenant_id, key, data)
+  values (p_tenant, 'settings', jsonb_build_object(
+    'name', t.name, 'tagline', '', 'about', '', 'address', '', 'phone', '', 'appointmentsPhone', '', 'whatsapp', '', 'email', '',
+    'seoDescription', t.name, 'brand', jsonb_build_object('shortName', left(t.name, 30)),
+    'booking', jsonb_build_object('showDemoOtp', false),
+    'billing', jsonb_build_object('legalName', t.name, 'gstin', '', 'regNo', '', 'pan', '', 'upiId', '')))
+  on conflict (tenant_id, key) do nothing;
+end $$;
+revoke all on function public.seed_hospital_defaults(uuid) from public, anon, authenticated;
