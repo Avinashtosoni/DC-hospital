@@ -87,7 +87,7 @@ begin
   end if;
   return query
     select s.key, '••••' || case when length(s.value) >= 12 then right(s.value, 4) else '' end, s.updated_at, s.updated_by_name
-    from public.app_secrets s order by s.key;
+    from public.app_secrets s where s.tenant_id = public.current_tenant() order by s.key;
 end $$;
 
 drop function if exists public.set_app_secret(text, text) cascade;
@@ -102,7 +102,7 @@ begin
     raise exception 'Invalid credential name';
   end if;
   if nullif(trim(coalesce(p_value, '')), '') is null then
-    delete from public.app_secrets where key = p_key;
+    delete from public.app_secrets where key = p_key and tenant_id = public.current_tenant();
   else
     insert into public.app_secrets (key, value, updated_at, updated_by_name)
     values (p_key, trim(p_value), now(), v_name)
@@ -161,8 +161,8 @@ drop function if exists public.notify_enqueue(text, text, text, jsonb, text, uui
 create function public.notify_enqueue(p_event text, p_phone text, p_email text, p_vars jsonb, p_related_table text default null, p_related_id uuid default null, p_only text[] default null)
 returns int language plpgsql volatile security definer set search_path = public as $$
 declare
-  n        jsonb := (select data -> 'notifications' from public.app_settings where key = 'app');
-  site     jsonb := (select data from public.site_content where key = 'settings');
+  n        jsonb := (public.tenant_setting('app') -> 'notifications');
+  site     jsonb := public.tenant_content('settings');
   tpl      jsonb;
   ch       text;
   v_to     text;
@@ -310,17 +310,27 @@ returns int language plpgsql volatile security definer set search_path = public 
 declare
   r record;
   v_count int := 0;
+  v_t uuid;
   v_day date := (now() at time zone 'Asia/Kolkata')::date + 1;
 begin
   if auth.uid() is not null and not public.has_role('owner', 'receptionist') then
     raise exception 'Not allowed';
+  end if;
+  -- the daily cron job: once per hospital, so each reminder uses that hospital's templates and providers
+  if auth.uid() is null and nullif(current_setting('app.tenant_id', true), '') is null then
+    for v_t in select id from public.tenants where status <> 'suspended' order by created_at loop
+      perform set_config('app.tenant_id', v_t::text, true);
+      v_count := v_count + public.queue_appointment_reminders();
+    end loop;
+    perform set_config('app.tenant_id', '', true);
+    return v_count;
   end if;
   for r in
     select a.*, p.full_name as p_name, p.phone as p_phone, p.email as p_email, d.full_name as d_name
     from public.appointments a
     join public.patients p on p.id = a.patient_id
     join public.doctors d on d.id = a.doctor_id
-    where a.appointment_date = v_day and a.status in ('scheduled', 'confirmed')
+    where a.tenant_id = public.current_tenant() and a.appointment_date = v_day and a.status in ('scheduled', 'confirmed')
       and not exists (select 1 from public.notification_outbox o where o.related_id = a.id and o.event = 'appointment_reminder')
   loop
     v_count := v_count + public.notify_enqueue('appointment_reminder', r.p_phone, r.p_email, jsonb_build_object(

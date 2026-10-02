@@ -40,7 +40,7 @@ $$;
 -- reads site_content.settings → <group> → <key> (the CMS "Online booking" / "Billing" groups)
 create or replace function public.booking_setting(p_key text, p_default text, p_group text default 'booking')
 returns text language sql stable security definer set search_path = public as $$
-  select coalesce((select data -> p_group ->> p_key from public.site_content where key = 'settings'), p_default)
+  select coalesce((public.tenant_content('settings') -> p_group ->> p_key), p_default)
 $$;
 
 -- Queues the code on the channels enabled in Settings → Notifications (SMS / WhatsApp) and returns how many
@@ -65,7 +65,7 @@ declare
   out text[] := '{}';
 begin
   -- plpgsql (not sql): app_settings is created later in this file set (settings.sql)
-  select data -> 'notifications' into n from public.app_settings where key = 'app';
+  n := public.tenant_setting('app') -> 'notifications';
   if n is null then return out; end if;
   foreach ch in array array['whatsapp', 'sms'] loop
     if coalesce((n -> ch ->> 'enabled')::boolean, false)
@@ -84,7 +84,7 @@ language sql stable security definer set search_path = public as $$
   select d.id, d.full_name, d.specialization, dep.name, d.consultation_fee, d.available_days, d.shift, d.status
   from public.doctors d
   left join public.departments dep on dep.id = d.department_id
-  where d.status = 'active'
+  where d.status = 'active' and d.tenant_id = public.current_tenant()
   order by d.full_name
 $$;
 
@@ -96,18 +96,18 @@ returns jsonb language sql stable security definer set search_path = public as $
       select jsonb_agg(jsonb_build_object('doctor_id', a.doctor_id, 'appointment_date', a.appointment_date,
                                           'appointment_time', a.appointment_time, 'status', a.status))
       from public.appointments a, r
-      where (p_doctor is null or a.doctor_id = p_doctor) and a.appointment_date between r.f and r.t
+      where a.tenant_id = public.current_tenant() and (p_doctor is null or a.doctor_id = p_doctor) and a.appointment_date between r.f and r.t
         and a.status not in ('cancelled', 'no_show')), '[]'::jsonb),
     'leaves', coalesce((
       select jsonb_agg(jsonb_build_object('id', l.id, 'doctor_id', l.doctor_id, 'kind', l.kind, 'status', l.status,
                                           'start_date', l.start_date, 'end_date', l.end_date,
                                           'start_time', l.start_time, 'end_time', l.end_time))
       from public.doctor_leaves l, r
-      where (p_doctor is null or l.doctor_id = p_doctor) and l.status = 'approved'
+      where l.tenant_id = public.current_tenant() and (p_doctor is null or l.doctor_id = p_doctor) and l.status = 'approved'
         and l.start_date <= r.t and l.end_date >= r.f), '[]'::jsonb),
     'holidays', coalesce((
       select jsonb_agg(jsonb_build_object('id', h.id, 'holiday_date', h.holiday_date, 'name', h.name))
-      from public.holidays h, r where h.holiday_date between r.f and r.t), '[]'::jsonb))
+      from public.holidays h, r where h.tenant_id = public.current_tenant() and h.holiday_date between r.f and r.t), '[]'::jsonb))
 $$;
 
 -- p_channel: 'whatsapp' or 'sms' as picked by the visitor; null / unavailable → every available channel
@@ -127,14 +127,14 @@ begin
   if v_phone !~ '^[6-9][0-9]{9}$' then
     raise exception 'Please enter a valid 10-digit Indian mobile number.';
   end if;
-  if exists (select 1 from public.booking_otps where phone = v_phone and created_at > now() - interval '30 seconds') then
+  if exists (select 1 from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before requesting another code.';
   end if;
-  if (select count(*) from public.booking_otps where phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
+  if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
   end if;
   -- whole-site cap: stops bots cycling through thousands of numbers to run up the SMS bill ("SMS pumping")
-  if (select count(*) from public.booking_otps where created_at > now() - interval '1 hour')
+  if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
     raise exception 'Online booking is very busy right now. Please try again in a few minutes or call the hospital.';
   end if;
@@ -162,7 +162,7 @@ declare
   v_token uuid;
 begin
   select * into o from public.booking_otps
-  where phone = v_phone and verified_at is null
+  where tenant_id = public.current_tenant() and phone = v_phone and verified_at is null
   order by created_at desc limit 1
   for update;
 
@@ -199,7 +199,7 @@ declare
 begin
   if coalesce(p_time, '') !~ '^[0-2][0-9]:[0-5][0-9]$' then return 'Invalid time.'; end if;
   v_min := split_part(p_time, ':', 1)::int * 60 + split_part(p_time, ':', 2)::int;
-  select * into d from public.doctors where id = p_doctor;
+  select * into d from public.doctors where id = p_doctor and tenant_id = public.current_tenant();
   if not found or d.status <> 'active' then return 'This doctor is not taking bookings right now.'; end if;
   if p_date < v_now::date then return 'This date is in the past.'; end if;
   if p_enforce_window and p_date > v_now::date + v_advance then return format('Please choose a date within the next %s days.', v_advance); end if;
@@ -208,7 +208,7 @@ begin
   end if;
   if not p_enforce_window and p_date + make_interval(mins => v_min) < v_now then return 'This time has already passed.'; end if;
   if v_min % 30 <> 0 or v_min < 480 or v_min > 1110 then return 'Invalid time.'; end if;
-  if exists (select 1 from public.holidays where holiday_date = p_date) then return 'The OPD is closed on this day.'; end if;
+  if exists (select 1 from public.holidays where tenant_id = public.current_tenant() and holiday_date = p_date) then return 'The OPD is closed on this day.'; end if;
   if not (to_char(p_date, 'Dy') = any (coalesce(nullif(d.available_days, '{}'), array['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']))) then
     return 'The doctor does not consult on this day.';
   end if;
@@ -266,11 +266,11 @@ begin
   -- the slot must really be free
   v_problem := public.slot_problem(p_doctor, p_date, p_time, true);
   if v_problem is not null then raise exception 'SLOT_UNAVAILABLE: %', v_problem; end if;
-  select * into d from public.doctors where id = p_doctor;
+  select * into d from public.doctors where id = p_doctor and tenant_id = public.current_tenant();
 
   -- patient: same mobile AND same name → existing record (families often share one phone)
   select * into v_patient from public.patients
-  where public.norm_phone(phone) = v_phone and lower(regexp_replace(trim(full_name), '\s+', ' ', 'g')) = lower(v_name)
+  where tenant_id = public.current_tenant() and public.norm_phone(phone) = v_phone and lower(regexp_replace(trim(full_name), '\s+', ' ', 'g')) = lower(v_name)
   order by created_at limit 1;
 
   if v_patient.id is not null then
@@ -337,7 +337,7 @@ begin
     raise exception 'Online booking is switched off right now. Please call the hospital to book.';
   end if;
   -- verified phone (one booking per verification, valid 30 minutes)
-  select * into o from public.booking_otps where token = p_token for update;
+  select * into o from public.booking_otps where token = p_token and tenant_id = public.current_tenant() for update;
   if not found or o.verified_at is null or o.token_used_at is not null or o.verified_at < now() - interval '30 minutes' then
     raise exception 'OTP_REQUIRED: Please verify your mobile number again.';
   end if;

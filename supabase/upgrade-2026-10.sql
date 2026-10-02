@@ -13,6 +13,190 @@
 -- ============================================================================================================
 begin;
 
+-- >>> tenant-core (generated from scripts/sql/tenancy_core.sql — do not edit here)
+-- =====================================================================================================
+--  19a. MULTI-TENANCY CORE — loaded right after the schema so every later function can call current_tenant()
+--  (see tenancy.sql for the full story; that file adds tenant_id + the isolation policy to every table at the end)
+-- =====================================================================================================
+-- ------------------------------------------------------------------ tables
+create table if not exists public.tenants (
+  id          uuid primary key default gen_random_uuid(),
+  slug        text not null unique check (slug ~ '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$'),
+  name        text not null check (char_length(name) between 2 and 120),
+  code        text not null default 'HSP' check (code ~ '^[A-Z]{2,6}$'),           -- MRN prefix, e.g. DCH-100001
+  status      text not null default 'active' check (status in ('trial', 'active', 'grace', 'read_only', 'suspended')),
+  plan        text not null default 'clinic',
+  -- module → 'provider' (managed by the Hospital Comrade team, hidden from the hospital) | 'hospital' (owner may edit)
+  modules     jsonb not null default '{}'::jsonb,
+  is_primary  boolean not null default false,
+  notes       text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create unique index if not exists tenants_one_primary on public.tenants (is_primary) where is_primary;
+
+-- the hospital every existing row belongs to (fixed id so upgrades and seeds agree)
+insert into public.tenants (id, slug, name, code, is_primary, modules)
+values ('a0000000-0000-4000-8000-000000000001', 'main', 'DC Hospital', 'DCH', true,
+        '{"general":"hospital","appearance":"hospital","dashboard":"hospital","notifications":"hospital","forms":"hospital","security":"hospital","data":"hospital","cms":"hospital"}'::jsonb)
+on conflict (id) do nothing;
+
+create table if not exists public.tenant_domains (
+  domain          text primary key check (domain ~ '^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$'),   -- lower-case host, no port
+  tenant_id       uuid not null references public.tenants (id) on delete cascade,
+  is_primary      boolean not null default false,
+  method          text not null default 'manual' check (method in ('manual', 'cloudflare')),
+  verified_at     timestamptz,
+  ssl_status      text,
+  cf_hostname_id  text,
+  created_at      timestamptz not null default now()
+);
+create index if not exists tenant_domains_tenant_idx on public.tenant_domains (tenant_id);
+
+create table if not exists public.provider_users (
+  user_id         uuid primary key references auth.users (id) on delete cascade,
+  role            text not null check (role in ('admin', 'support', 'finance')),
+  active          boolean not null default true,
+  elevated_until  timestamptz,                       -- "sudo" window for admin-only actions (provider panel)
+  created_at      timestamptz not null default now()
+);
+
+create table if not exists public.provider_assignments (
+  user_id     uuid not null references public.provider_users (user_id) on delete cascade,
+  tenant_id   uuid not null references public.tenants (id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  primary key (user_id, tenant_id)
+);
+
+create table if not exists public.provider_audit (
+  id          uuid primary key default gen_random_uuid(),
+  at          timestamptz not null default now(),
+  user_id     uuid,
+  user_name   text,
+  mode        text,
+  tenant_id   uuid,
+  action      text not null,
+  target      text,
+  detail      jsonb
+);
+create index if not exists provider_audit_at_idx on public.provider_audit (tenant_id, at desc);
+
+-- ------------------------------------------------------------------ request context
+create or replace function public.request_header(p_name text)
+returns text language sql stable set search_path = public as $$
+  select nullif(coalesce(nullif(current_setting('request.headers', true), ''), '{}')::json ->> lower(p_name), '')
+$$;
+
+create or replace function public.primary_tenant()
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.tenants where is_primary limit 1
+$$;
+
+-- 'admin' | 'support' | 'finance' | null — the signed-in user's provider role
+create or replace function public.provider_role()
+returns text language sql stable security definer set search_path = public as $$
+  select role from public.provider_users where user_id = auth.uid() and active
+$$;
+
+-- may the signed-in provider manage this hospital?
+create or replace function public.provider_can(p_tenant uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select p_tenant is not null and exists (
+    select 1 from public.provider_users u
+     where u.user_id = auth.uid() and u.active
+       and (u.role = 'admin' or exists (select 1 from public.provider_assignments a where a.user_id = u.user_id and a.tenant_id = p_tenant)))
+$$;
+
+-- the mode a provider is working in right now: support / finance users always their own; an admin picks one
+create or replace function public.provider_mode()
+returns text language plpgsql stable security definer set search_path = public as $$
+declare r text := public.provider_role(); m text := public.request_header('x-provider-mode');
+begin
+  if r is null then return null; end if;
+  if r <> 'admin' then return r; end if;
+  return case when m in ('admin', 'support', 'finance') then m else 'admin' end;
+end $$;
+
+create or replace function public.current_tenant()
+returns uuid language plpgsql stable security definer set search_path = public as $$
+declare v uuid; h text; uid uuid := auth.uid();
+begin
+  h := nullif(current_setting('app.tenant_id', true), '');
+  if h is not null then return h::uuid; end if;
+
+  h := public.request_header('x-tenant-id');
+  if h is not null and h !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then h := null; end if;
+
+  if uid is not null then
+    if public.provider_role() is not null then
+      return case when public.provider_can(h::uuid) then h::uuid end;   -- no hospital picked → sees nothing
+    end if;
+    select tenant_id into v from public.profiles where id = uid;
+    return v;                                                            -- a header never moves a hospital user
+  end if;
+
+  if h is not null and exists (select 1 from public.tenants where id = h::uuid) then return h::uuid; end if;
+  return public.primary_tenant();
+end $$;
+
+
+-- ------------------------------------------------------------------ this hospital's settings / content / secrets
+-- SECURITY DEFINER functions skip RLS, so they read singletons through these helpers instead of "where key = …"
+create or replace function public.tenant_setting(p_key text)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  select data into v from public.app_settings where key = p_key and tenant_id = public.current_tenant();
+  return v;
+end $$;
+
+create or replace function public.tenant_content(p_key text)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  select data into v from public.site_content where key = p_key and tenant_id = public.current_tenant();
+  return v;
+end $$;
+
+create or replace function public.tenant_secret(p_key text)
+returns text language plpgsql stable security definer set search_path = public as $$
+declare v text;
+begin
+  select value into v from public.app_secrets where key = p_key and tenant_id = public.current_tenant();
+  return v;
+end $$;
+revoke all on function public.tenant_secret(text) from public, anon, authenticated;
+
+-- ------------------------------------------------------------------ tenant_id columns
+-- Called right here (schema tables) and again at the end of the build (tables created later). Idempotent.
+-- Existing rows join the primary hospital through a constant default first — no table rewrite, no triggers.
+create or replace function public.ensure_tenant_columns()
+returns void language plpgsql security definer set search_path = public as $f$
+declare
+  t text;
+  tables text[] := array[
+    'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds',
+    'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'notification_templates', 'site_enquiries',
+    'site_forms', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites', 'wa_sessions', 'booking_otps',
+    'password_reset_otps', 'site_content', 'site_content_revisions', 'app_settings', 'app_secrets', 'notification_outbox',
+    'push_tokens'];
+begin
+  foreach t in array tables loop
+    continue when to_regclass('public.' || t) is null;
+    execute format('alter table public.%I add column if not exists tenant_id uuid default %L references public.tenants (id) on delete cascade',
+                   t, 'a0000000-0000-4000-8000-000000000001');
+    execute format('alter table public.%I alter column tenant_id set default public.current_tenant()', t);
+    if t <> 'profiles' then   -- provider accounts have a profile without a hospital
+      execute format('alter table public.%I alter column tenant_id set not null', t);
+    end if;
+    execute format('create index if not exists %I on public.%I (tenant_id)', t || '_tenant_idx', t);
+  end loop;
+end $f$;
+revoke all on function public.ensure_tenant_columns() from public, anon, authenticated;
+
+select public.ensure_tenant_columns();
+-- <<< tenant-core
+
 alter table public.site_enquiries add column if not exists starred boolean not null default false;
 alter table public.site_enquiries add column if not exists read_at timestamptz;
 -- existing messages that were already handled count as read
@@ -159,6 +343,7 @@ end $$;
 revoke all on function public.clear_demo_data() from public, anon;
 grant execute on function public.clear_demo_data() to authenticated;
 
+-- >>> scale (generated from scripts/sql/scale.sql — do not edit here)
 -- =====================================================================================================
 --  15. SCALE — server-side pagination support (idempotent; also shipped in supabase/upgrade-2026-10.sql)
 --
@@ -277,7 +462,9 @@ begin
 end $$;
 revoke execute on function public.financial_report(date) from public, anon;
 grant execute on function public.financial_report(date) to authenticated;
+-- <<< scale
 
+-- >>> auth (generated from scripts/sql/auth.sql — do not edit here)
 -- =====================================================================================================
 --  16. PASSWORD RESET BY MOBILE OTP (idempotent; also shipped in supabase/upgrade-2026-10.sql)
 --
@@ -311,7 +498,7 @@ revoke all on public.password_reset_otps from anon, authenticated;
 create or replace function public.password_otp_event()
 returns text language plpgsql stable security definer set search_path = public as $$
 begin
-  return case when (select data -> 'notifications' -> 'events' ? 'password_otp' from public.app_settings where key = 'app')
+  return case when (public.tenant_setting('app') -> 'notifications' -> 'events' ? 'password_otp')
               then 'password_otp' else 'otp' end;
 end $$;
 
@@ -324,7 +511,7 @@ declare
   ch  text;
   out text[] := '{}';
 begin
-  select data -> 'notifications' into n from public.app_settings where key = 'app';
+  n := public.tenant_setting('app') -> 'notifications';
   if n is null then return out; end if;
   foreach ch in array array['whatsapp', 'sms'] loop
     if coalesce((n -> ch ->> 'enabled')::boolean, false)
@@ -356,13 +543,13 @@ begin
   if cardinality(v_avail) = 0 then
     raise exception 'MOBILE_RESET_OFF: Reset by mobile is not set up at this hospital yet. Please use the e-mail link.';
   end if;
-  if exists (select 1 from public.password_reset_otps where phone = v_phone and created_at > now() - interval '30 seconds') then
+  if exists (select 1 from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before requesting another code.';
   end if;
-  if (select count(*) from public.password_reset_otps where phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
+  if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
   end if;
-  if (select count(*) from public.password_reset_otps where created_at > now() - interval '1 hour')
+  if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
     raise exception 'Too many reset requests right now. Please try again in a few minutes.';
   end if;
@@ -371,7 +558,7 @@ begin
   select u.id into v_user
   from auth.users u
   join public.profiles p on p.id = u.id
-  where lower(u.email) = v_email
+  where lower(u.email) = v_email and p.tenant_id = public.current_tenant()
     and (u.banned_until is null or u.banned_until < now())
     and (public.norm_phone(p.phone) = v_phone
          or exists (select 1 from public.patients pt where pt.profile_id = p.id and public.norm_phone(pt.phone) = v_phone))
@@ -399,7 +586,7 @@ declare
   v_token uuid;
 begin
   select * into o from public.password_reset_otps
-  where phone = v_phone and verified_at is null
+  where tenant_id = public.current_tenant() and phone = v_phone and verified_at is null
   order by created_at desc limit 1
   for update;
   if not found or o.expires_at < now() then
@@ -430,7 +617,7 @@ begin
   if length(coalesce(p_password, '')) < 8 then
     raise exception 'Use at least 8 characters.';
   end if;
-  select * into o from public.password_reset_otps where token = p_token for update;
+  select * into o from public.password_reset_otps where token = p_token and tenant_id = public.current_tenant() for update;
   if not found or o.user_id is null or o.verified_at is null or o.token_used_at is not null
      or o.verified_at < now() - interval '15 minutes' then
     raise exception 'OTP_REQUIRED: This reset has expired. Please verify your mobile number again.';
@@ -455,6 +642,7 @@ grant execute on function public.password_otp_channels() to anon, authenticated;
 grant execute on function public.request_password_otp(text, text, text) to anon, authenticated;
 grant execute on function public.verify_password_otp(text, text, text) to anon, authenticated;
 grant execute on function public.reset_password_with_otp(uuid, text) to anon, authenticated;
+-- <<< auth
 
 -- >>> forms (generated from scripts/sql/forms.sql — do not edit here)
 -- =====================================================================================================
@@ -502,8 +690,10 @@ create or replace function public.site_enquiry_default_form()
 returns trigger language plpgsql as $$
 begin
   if new.form_id is null then
-    new.form_id := 'f0000000-0000-4000-8000-000000000001';
-    new.form_name := coalesce(new.form_name, (select name from public.site_forms where id = new.form_id), 'Contact form');
+    -- this hospital's Contact form
+    select id, coalesce(new.form_name, name) into new.form_id, new.form_name
+      from public.site_forms where kind = 'contact' and tenant_id = new.tenant_id order by sort, created_at limit 1;
+    new.form_name := coalesce(new.form_name, 'Contact form');
   end if;
   return new;
 end $$;
@@ -567,7 +757,7 @@ declare
   v_msg    text := '';
   v_ref    text;
 begin
-  select * into f from public.site_forms where id = p_form and enabled;
+  select * into f from public.site_forms where id = p_form and enabled and tenant_id = public.current_tenant();
   if not found then raise exception 'This form is not available any more. Please refresh the page.'; end if;
   if p_answers is null or jsonb_typeof(p_answers) <> 'object' then raise exception 'Please fill in the form.'; end if;
 
@@ -802,8 +992,8 @@ create or replace function public.notify_enqueue_raw(p_event text, p_tpl jsonb, 
   p_vars jsonb, p_related_table text default null, p_related_id uuid default null, p_template uuid default null)
 returns int language plpgsql volatile security definer set search_path = public as $$
 declare
-  n        jsonb := (select data -> 'notifications' from public.app_settings where key = 'app');
-  site     jsonb := (select data from public.site_content where key = 'settings');
+  n        jsonb := (public.tenant_setting('app') -> 'notifications');
+  site     jsonb := public.tenant_content('settings');
   ch       text;
   v_to     text;
   v_body   text;
@@ -860,7 +1050,7 @@ create or replace function public.notify_enqueue(p_event text, p_phone text, p_e
   p_related_id uuid default null, p_only text[] default null, p_profile uuid default null)
 returns int language plpgsql volatile security definer set search_path = public as $$
 declare
-  n    jsonb := (select data -> 'notifications' from public.app_settings where key = 'app');
+  n    jsonb := (public.tenant_setting('app') -> 'notifications');
   chs  text[];
 begin
   if n is null or n -> 'events' -> p_event is null then return 0; end if;
@@ -969,6 +1159,7 @@ begin
         or (new.audience = 'staff' and p.role <> 'patient')
         or (new.audience = 'doctors' and p.role = 'doctor')
         or (new.audience = 'patients' and p.role = 'patient'))
+      and p.tenant_id = new.tenant_id
       and p.id is distinct from auth.uid()
     limit 5000
   loop
@@ -1044,11 +1235,12 @@ returns table (profile_id uuid, full_name text, phone text, email text)
 language sql stable security definer set search_path = public as $$
   with people as (
     select p.profile_id, p.full_name, p.phone, p.email, 1 as pri from public.patients p
-     where (t.audience in ('patients', 'everyone') or t.schedule = 'birthday' or (t.audience = 'roles' and 'patient' = any (t.roles)))
+     where p.tenant_id = t.tenant_id
+       and (t.audience in ('patients', 'everyone') or t.schedule = 'birthday' or (t.audience = 'roles' and 'patient' = any (t.roles)))
        and (t.schedule <> 'birthday' or to_char(p.date_of_birth, 'MM-DD') = to_char(now() at time zone 'Asia/Kolkata', 'MM-DD'))
     union all
     select pr.id, pr.full_name, pr.phone, pr.email, 2 from public.profiles pr
-     where t.schedule <> 'birthday' and pr.role <> 'patient'
+     where pr.tenant_id = t.tenant_id and t.schedule <> 'birthday' and pr.role <> 'patient'
        and (t.audience in ('staff', 'everyone') or (t.audience = 'roles' and pr.role::text = any (t.roles)))
   )
   select distinct on (coalesce(right(regexp_replace(phone, '\D', '', 'g'), 10), lower(email), profile_id::text))
@@ -1080,7 +1272,7 @@ returns int language plpgsql volatile security definer set search_path = public 
 declare t public.notification_templates;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can send messages'; end if;
-  select * into t from public.notification_templates where id = p_id;
+  select * into t from public.notification_templates where id = p_id and tenant_id = public.current_tenant();
   if not found then raise exception 'Message not found'; end if;
   return public.notify_run_template(t);
 end $$;
@@ -1089,7 +1281,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare t public.notification_templates;
 begin
   if not public.has_role('owner') then raise exception 'Not allowed'; end if;
-  select * into t from public.notification_templates where id = p_id;
+  select * into t from public.notification_templates where id = p_id and tenant_id = public.current_tenant();
   if not found then return jsonb_build_object('total', 0); end if;
   return (select jsonb_build_object('total', count(*), 'phone', count(*) filter (where right(regexp_replace(coalesce(phone, ''), '\D', '', 'g'), 10) ~ '^[6-9][0-9]{9}$'),
             'email', count(*) filter (where email ~ '@'), 'push', count(*) filter (where exists (select 1 from public.push_tokens k where k.profile_id = r.profile_id)))
@@ -1103,17 +1295,22 @@ grant execute on function public.notify_template_audience(uuid) to authenticated
 -- every few minutes (Supabase cron): send whatever is due and work out the next run
 create or replace function public.run_scheduled_notifications()
 returns int language plpgsql volatile security definer set search_path = public as $$
-declare t public.notification_templates; v_total int := 0;
+declare t public.notification_templates; v_total int := 0; v_all boolean;
 begin
   if auth.uid() is not null and not public.has_role('owner') then raise exception 'Not allowed'; end if;
+  -- the cron job serves every hospital; an owner's "run now" only their own
+  v_all := auth.uid() is null and nullif(current_setting('app.tenant_id', true), '') is null;
   for t in select * from public.notification_templates where enabled and next_run_at is not null and next_run_at <= now()
-           order by next_run_at limit 20 for update skip locked loop
+             and (v_all or tenant_id = public.current_tenant())
+           order by next_run_at limit 50 for update skip locked loop
+    if v_all then perform set_config('app.tenant_id', t.tenant_id::text, true); end if;   -- messages queue under that hospital
     v_total := v_total + public.notify_run_template(t);
     update public.notification_templates
        set next_run_at = public.notify_next_run(t, greatest(now(), t.next_run_at)),
            enabled = case when t.schedule = 'once' then false else enabled end
      where id = t.id;
   end loop;
+  if v_all then perform set_config('app.tenant_id', '', true); end if;
   return v_total;
 end $$;
 revoke all on function public.run_scheduled_notifications() from public, anon;
@@ -1130,7 +1327,8 @@ begin
     select (o.created_at at time zone 'Asia/Kolkata')::date, o.channel,
            case when o.event like 'tpl:%' then 'custom' else o.event end, o.status, count(*)
       from public.notification_outbox o
-     where o.created_at >= (p_from::timestamp at time zone 'Asia/Kolkata')
+     where o.tenant_id = public.current_tenant()
+       and o.created_at >= (p_from::timestamp at time zone 'Asia/Kolkata')
        and o.created_at < ((p_to + 1)::timestamp at time zone 'Asia/Kolkata')
      group by 1, 2, 3, 4
      order by 1;
@@ -1145,8 +1343,8 @@ returns void language plpgsql volatile security definer set search_path = public
 declare v_url text; v_key text;
 begin
   if not exists (select 1 from public.notification_outbox where status = 'pending' and next_attempt_at <= now()) then return; end if;
-  select value into v_url from public.app_secrets where key = 'notify_function_url';
-  select value into v_key from public.app_secrets where key = 'service_role_key';
+  v_url := public.tenant_secret('notify_function_url');
+  v_key := public.tenant_secret('service_role_key');
   if v_url is null or v_key is null then return; end if;
   execute 'select net.http_post(url := $1, headers := $2, body := $3, timeout_milliseconds := 55000)'
     using v_url, jsonb_build_object('Authorization', 'Bearer ' || v_key, 'Content-Type', 'application/json'), '{"flush":true}'::jsonb;
@@ -1168,10 +1366,10 @@ begin
           where j.jobname like 'dch-%' $q$ into v_jobs;
   end if;
   return jsonb_build_object('pg_cron', v_cron, 'pg_net', v_net, 'jobs', v_jobs,
-    'url_set', exists (select 1 from public.app_secrets where key = 'notify_function_url'),
-    'key_set', exists (select 1 from public.app_secrets where key = 'service_role_key'),
-    'pending', (select count(*) from public.notification_outbox where status = 'pending'),
-    'scheduled', (select count(*) from public.notification_templates where enabled and next_run_at is not null));
+    'url_set', public.tenant_secret('notify_function_url') is not null,
+    'key_set', public.tenant_secret('service_role_key') is not null,
+    'pending', (select count(*) from public.notification_outbox where status = 'pending' and tenant_id = public.current_tenant()),
+    'scheduled', (select count(*) from public.notification_templates where enabled and next_run_at is not null and tenant_id = public.current_tenant()));
 end $$;
 
 create or replace function public.notify_cron_setup(p_enable boolean, p_url text default null)
@@ -1179,6 +1377,10 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare j record;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can change automatic delivery'; end if;
+  -- one scheduler serves every hospital, using the main hospital's notify address and key
+  if public.current_tenant() is distinct from public.primary_tenant() then
+    raise exception 'Automatic delivery is managed by the platform — it already runs for your hospital.';
+  end if;
   if p_url is not null and p_url <> '' then
     if p_url !~ '^https://[^ ]+/functions/v1/notify$' then raise exception 'The address should look like https://<project>.supabase.co/functions/v1/notify'; end if;
     insert into public.app_secrets (key, value, updated_at, updated_by_name) values ('notify_function_url', p_url, now(), (select full_name from public.profiles where id = auth.uid()))
@@ -1190,8 +1392,8 @@ begin
     begin execute 'create extension if not exists pg_net'; exception when others then null; end;
     if not exists (select 1 from pg_extension where extname = 'pg_cron') then raise exception 'CRON_MISSING: Turn on the pg_cron extension (Supabase → Database → Extensions) and try again.'; end if;
     if not exists (select 1 from pg_extension where extname = 'pg_net') then raise exception 'CRON_MISSING: Turn on the pg_net extension (Supabase → Database → Extensions) and try again.'; end if;
-    if not exists (select 1 from public.app_secrets where key = 'service_role_key') then raise exception 'Save the service-role key first (it lets the scheduler call the notify function).'; end if;
-    if not exists (select 1 from public.app_secrets where key = 'notify_function_url') then raise exception 'Save the notify function address first.'; end if;
+    if not public.tenant_secret('service_role_key') is not null then raise exception 'Save the service-role key first (it lets the scheduler call the notify function).'; end if;
+    if not public.tenant_secret('notify_function_url') is not null then raise exception 'Save the notify function address first.'; end if;
     execute $c$ select cron.schedule('dch-notify-flush', '* * * * *', 'select public.notify_cron_flush()') $c$;
     execute $c$ select cron.schedule('dch-scheduled-messages', '*/5 * * * *', 'select public.run_scheduled_notifications()') $c$;
     execute $c$ select cron.schedule('dch-appointment-reminders', '30 12 * * *', 'select public.queue_appointment_reminders()') $c$;  -- 18:00 IST
@@ -1228,6 +1430,16 @@ begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can manage user accounts'; end if;
 end $$;
 
+-- the account must belong to the hospital the owner is managing
+create or replace function public.admin_target(p_id uuid)
+returns void language plpgsql stable security definer set search_path = public as $$
+begin
+  if not exists (select 1 from public.profiles where id = p_id and tenant_id = public.current_tenant()) then
+    raise exception 'User not found';
+  end if;
+end $$;
+revoke all on function public.admin_target(uuid) from public, anon, authenticated;
+
 create or replace function public.admin_create_user(p_email text, p_full_name text, p_role text, p_phone text default null, p_password text default null)
 returns uuid language plpgsql volatile security definer set search_path = public, extensions as $$
 declare
@@ -1245,7 +1457,7 @@ begin
   insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
                           created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token)
   values ('00000000-0000-0000-0000-000000000000', v_id, 'authenticated', 'authenticated', v_email, crypt(v_pass, gen_salt('bf')), now(),
-          '{"provider":"email","providers":["email"]}'::jsonb, jsonb_build_object('full_name', trim(p_full_name), 'phone', nullif(trim(coalesce(p_phone, '')), '')),
+          '{"provider":"email","providers":["email"]}'::jsonb, jsonb_build_object('full_name', trim(p_full_name), 'phone', nullif(trim(coalesce(p_phone, '')), ''), 'tenant_id', public.current_tenant()),
           now(), now(), '', '', '', '');
   insert into auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
   values (gen_random_uuid(), v_id, v_id::text, jsonb_build_object('sub', v_id, 'email', v_email, 'email_verified', true), 'email', null, now(), now());
@@ -1254,8 +1466,8 @@ begin
   update public.profiles set role = p_role::public.app_role, full_name = trim(p_full_name), phone = nullif(trim(coalesce(p_phone, '')), '') where id = v_id;
   if p_role <> 'patient' then
     delete from public.patients where profile_id = v_id;
-    if p_role = 'doctor' then update public.doctors set profile_id = v_id where lower(email) = v_email and profile_id is null;
-    else update public.staff set profile_id = v_id where lower(email) = v_email and profile_id is null; end if;
+    if p_role = 'doctor' then update public.doctors set profile_id = v_id where lower(email) = v_email and profile_id is null and tenant_id = public.current_tenant();
+    else update public.staff set profile_id = v_id where lower(email) = v_email and profile_id is null and tenant_id = public.current_tenant(); end if;
   end if;
   return v_id;
 end $$;
@@ -1265,11 +1477,11 @@ returns void language plpgsql volatile security definer set search_path = public
 declare p public.profiles; v_email text := lower(trim(coalesce(p_email, '')));
 begin
   perform public.admin_guard();
-  select * into p from public.profiles where id = p_id for update;
+  select * into p from public.profiles where id = p_id and tenant_id = public.current_tenant() for update;
   if not found then raise exception 'User not found'; end if;
   if char_length(trim(coalesce(p_full_name, ''))) < 2 then raise exception 'Enter the full name'; end if;
   if p_role not in ('owner', 'doctor', 'receptionist', 'accountant', 'staff', 'patient') then raise exception 'Choose a role'; end if;
-  if p.role = 'owner' and p_role <> 'owner' and (p_id = auth.uid() or (select count(*) from public.profiles where role = 'owner') <= 1) then
+  if p.role = 'owner' and p_role <> 'owner' and (p_id = auth.uid() or (select count(*) from public.profiles where role = 'owner' and tenant_id = public.current_tenant()) <= 1) then
     raise exception 'You can''t remove your own owner access or the last owner';
   end if;
   if v_email <> '' and v_email <> lower(p.email) then
@@ -1290,6 +1502,7 @@ returns void language plpgsql volatile security definer set search_path = public
 begin
   perform public.admin_guard();
   if char_length(coalesce(p_password, '')) < 8 then raise exception 'Use at least 8 characters'; end if;
+  perform public.admin_target(p_id);
   update auth.users set encrypted_password = crypt(p_password, gen_salt('bf')), updated_at = now() where id = p_id;
   if not found then raise exception 'User not found'; end if;
 end $$;
@@ -1300,6 +1513,7 @@ returns void language plpgsql volatile security definer set search_path = public
 begin
   perform public.admin_guard();
   if p_id = auth.uid() then raise exception 'You can''t disable your own account'; end if;
+  perform public.admin_target(p_id);
   update auth.users set banned_until = case when p_active then null else 'infinity'::timestamptz end, updated_at = now() where id = p_id;
   if not found then raise exception 'User not found'; end if;
   if not p_active and to_regclass('auth.sessions') is not null then execute 'delete from auth.sessions where user_id = $1' using p_id; end if;
@@ -1315,7 +1529,7 @@ begin
     case when exists (select 1 from information_schema.columns where table_schema = 'auth' and table_name = 'users' and column_name = 'last_sign_in_at')
          then 'select u.id, coalesce(u.banned_until > now(), false), u.last_sign_in_at from auth.users u where u.id = any ($1)'
          else 'select u.id, coalesce(u.banned_until > now(), false), null::timestamptz from auth.users u where u.id = any ($1)' end
-    using p_ids[1:200];
+    using array(select x.id from public.profiles x where x.id = any (p_ids[1:200]) and x.tenant_id = public.current_tenant());
 end $$;
 
 -- deletes the login; patient / doctor / staff records and their history stay (they are unlinked)
@@ -1325,8 +1539,9 @@ declare p public.profiles;
 begin
   perform public.admin_guard();
   if p_id = auth.uid() then raise exception 'You can''t delete your own account'; end if;
-  select * into p from public.profiles where id = p_id;
-  if p.role = 'owner' and (select count(*) from public.profiles where role = 'owner') <= 1 then raise exception 'You can''t delete the last owner'; end if;
+  select * into p from public.profiles where id = p_id and tenant_id = public.current_tenant();
+  if not found then raise exception 'User not found'; end if;
+  if p.role = 'owner' and (select count(*) from public.profiles where role = 'owner' and tenant_id = public.current_tenant()) <= 1 then raise exception 'You can''t delete the last owner'; end if;
   delete from public.profiles where id = p_id;   -- fires the account_deleted message while the details still exist
   delete from auth.users where id = p_id;
 end $$;
@@ -1371,126 +1586,7 @@ grant execute on function public.admin_delete_user(uuid) to authenticated;
 --  Idempotent: safe on a fresh database (master / production) and on a live one (upgrade).
 -- =====================================================================================================
 
--- ------------------------------------------------------------------ tables
-create table if not exists public.tenants (
-  id          uuid primary key default gen_random_uuid(),
-  slug        text not null unique check (slug ~ '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$'),
-  name        text not null check (char_length(name) between 2 and 120),
-  code        text not null default 'HSP' check (code ~ '^[A-Z]{2,6}$'),           -- MRN prefix, e.g. DCH-100001
-  status      text not null default 'active' check (status in ('trial', 'active', 'grace', 'read_only', 'suspended')),
-  plan        text not null default 'clinic',
-  -- module → 'provider' (managed by the Hospital Comrade team, hidden from the hospital) | 'hospital' (owner may edit)
-  modules     jsonb not null default '{}'::jsonb,
-  is_primary  boolean not null default false,
-  notes       text,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
-);
-create unique index if not exists tenants_one_primary on public.tenants (is_primary) where is_primary;
-
--- the hospital every existing row belongs to (fixed id so upgrades and seeds agree)
-insert into public.tenants (id, slug, name, code, is_primary, modules)
-values ('a0000000-0000-4000-8000-000000000001', 'main', 'DC Hospital', 'DCH', true,
-        '{"general":"hospital","appearance":"hospital","dashboard":"hospital","notifications":"hospital","forms":"hospital","security":"hospital","data":"hospital","cms":"hospital"}'::jsonb)
-on conflict (id) do nothing;
-
-create table if not exists public.tenant_domains (
-  domain          text primary key check (domain ~ '^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$'),   -- lower-case host, no port
-  tenant_id       uuid not null references public.tenants (id) on delete cascade,
-  is_primary      boolean not null default false,
-  method          text not null default 'manual' check (method in ('manual', 'cloudflare')),
-  verified_at     timestamptz,
-  ssl_status      text,
-  cf_hostname_id  text,
-  created_at      timestamptz not null default now()
-);
-create index if not exists tenant_domains_tenant_idx on public.tenant_domains (tenant_id);
-
-create table if not exists public.provider_users (
-  user_id         uuid primary key references auth.users (id) on delete cascade,
-  role            text not null check (role in ('admin', 'support', 'finance')),
-  active          boolean not null default true,
-  elevated_until  timestamptz,                       -- "sudo" window for admin-only actions (provider panel)
-  created_at      timestamptz not null default now()
-);
-
-create table if not exists public.provider_assignments (
-  user_id     uuid not null references public.provider_users (user_id) on delete cascade,
-  tenant_id   uuid not null references public.tenants (id) on delete cascade,
-  created_at  timestamptz not null default now(),
-  primary key (user_id, tenant_id)
-);
-
-create table if not exists public.provider_audit (
-  id          uuid primary key default gen_random_uuid(),
-  at          timestamptz not null default now(),
-  user_id     uuid,
-  user_name   text,
-  mode        text,
-  tenant_id   uuid,
-  action      text not null,
-  target      text,
-  detail      jsonb
-);
-create index if not exists provider_audit_at_idx on public.provider_audit (tenant_id, at desc);
-
--- ------------------------------------------------------------------ request context
-create or replace function public.request_header(p_name text)
-returns text language sql stable set search_path = public as $$
-  select nullif(coalesce(nullif(current_setting('request.headers', true), ''), '{}')::json ->> lower(p_name), '')
-$$;
-
-create or replace function public.primary_tenant()
-returns uuid language sql stable security definer set search_path = public as $$
-  select id from public.tenants where is_primary limit 1
-$$;
-
--- 'admin' | 'support' | 'finance' | null — the signed-in user's provider role
-create or replace function public.provider_role()
-returns text language sql stable security definer set search_path = public as $$
-  select role from public.provider_users where user_id = auth.uid() and active
-$$;
-
--- may the signed-in provider manage this hospital?
-create or replace function public.provider_can(p_tenant uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select p_tenant is not null and exists (
-    select 1 from public.provider_users u
-     where u.user_id = auth.uid() and u.active
-       and (u.role = 'admin' or exists (select 1 from public.provider_assignments a where a.user_id = u.user_id and a.tenant_id = p_tenant)))
-$$;
-
--- the mode a provider is working in right now: support / finance users always their own; an admin picks one
-create or replace function public.provider_mode()
-returns text language plpgsql stable security definer set search_path = public as $$
-declare r text := public.provider_role(); m text := public.request_header('x-provider-mode');
-begin
-  if r is null then return null; end if;
-  if r <> 'admin' then return r; end if;
-  return case when m in ('admin', 'support', 'finance') then m else 'admin' end;
-end $$;
-
-create or replace function public.current_tenant()
-returns uuid language plpgsql stable security definer set search_path = public as $$
-declare v uuid; h text; uid uuid := auth.uid();
-begin
-  h := nullif(current_setting('app.tenant_id', true), '');
-  if h is not null then return h::uuid; end if;
-
-  h := public.request_header('x-tenant-id');
-  if h is not null and h !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then h := null; end if;
-
-  if uid is not null then
-    if public.provider_role() is not null then
-      return case when public.provider_can(h::uuid) then h::uuid end;   -- no hospital picked → sees nothing
-    end if;
-    select tenant_id into v from public.profiles where id = uid;
-    return v;                                                            -- a header never moves a hospital user
-  end if;
-
-  if h is not null and exists (select 1 from public.tenants where id = h::uuid) then return h::uuid; end if;
-  return public.primary_tenant();
-end $$;
+-- (tenants, provider tables and current_tenant() live in tenancy_core.sql, loaded right after the schema)
 
 -- ------------------------------------------------------------------ roles are per hospital
 create or replace function public.has_role(variadic roles public.app_role[])
@@ -1522,27 +1618,16 @@ begin
   return r;
 end $$;
 
--- ------------------------------------------------------------------ tenant_id on every hospital table
+-- ------------------------------------------------------------------ tenant_id on every hospital table + isolation policy
+select public.ensure_tenant_columns();   -- tables created after the core section (CMS, settings, forms, messaging…)
+
 do $tenancy$
-declare
-  t text;
-  tables text[] := array[
-    'profiles', 'departments', 'doctors', 'staff', 'patients', 'appointments', 'prescriptions', 'lab_tests', 'wards', 'beds',
-    'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'notification_templates', 'site_enquiries',
-    'site_forms', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites', 'wa_sessions', 'booking_otps',
-    'password_reset_otps', 'site_content', 'site_content_revisions', 'app_settings', 'app_secrets', 'notification_outbox',
-    'push_tokens'];
+declare t text;
 begin
-  foreach t in array tables loop
-    continue when to_regclass('public.' || t) is null;
-    -- constant default first: existing rows join the primary hospital without a table rewrite or firing triggers
-    execute format('alter table public.%I add column if not exists tenant_id uuid default %L references public.tenants (id) on delete cascade',
-                   t, 'a0000000-0000-4000-8000-000000000001');
-    execute format('alter table public.%I alter column tenant_id set default public.current_tenant()', t);
-    if t <> 'profiles' then   -- provider accounts have a profile without a hospital
-      execute format('alter table public.%I alter column tenant_id set not null', t);
-    end if;
-    execute format('create index if not exists %I on public.%I (tenant_id)', t || '_tenant_idx', t);
+  for t in select c.table_name from information_schema.columns c
+            join information_schema.tables x on x.table_schema = c.table_schema and x.table_name = c.table_name and x.table_type = 'BASE TABLE'
+           where c.table_schema = 'public' and c.column_name = 'tenant_id' and c.table_name not in ('tenant_domains', 'provider_assignments', 'provider_audit')
+  loop
     execute format('drop policy if exists tenant_isolation on public.%I', t);
     if t = 'profiles' then
       execute 'create policy tenant_isolation on public.profiles as restrictive for all to anon, authenticated

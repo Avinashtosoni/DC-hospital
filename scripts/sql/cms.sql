@@ -45,11 +45,11 @@ create function public.site_content_revision()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if tg_op = 'UPDATE' and new.data = old.data then return new; end if;
-  insert into public.site_content_revisions (key, data, created_at, created_by_name)
-  values (old.key, old.data, old.updated_at, old.updated_by_name);
+  insert into public.site_content_revisions (tenant_id, key, data, created_at, created_by_name)
+  values (old.tenant_id, old.key, old.data, old.updated_at, old.updated_by_name);
   delete from public.site_content_revisions r
-  where r.key = old.key
-    and r.id not in (select id from public.site_content_revisions where key = old.key order by created_at desc limit 30);
+  where r.key = old.key and r.tenant_id = old.tenant_id
+    and r.id not in (select id from public.site_content_revisions where key = old.key and tenant_id = old.tenant_id order by created_at desc limit 30);
   return coalesce(new, old);
 end $$;
 create trigger trg_site_content_revision after update or delete on public.site_content
@@ -83,11 +83,11 @@ returns trigger language plpgsql security definer set search_path = public as $$
 declare v_digits text := right(regexp_replace(new.phone, '\D', '', 'g'), 10);
 begin
   if auth.uid() is not null and public.is_staff() then return new; end if;
-  if (select count(*) from public.site_enquiries where created_at > now() - interval '1 hour'
+  if (select count(*) from public.site_enquiries where tenant_id = new.tenant_id and created_at > now() - interval '1 hour'
         and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits) >= 3 then
     raise exception 'You have already sent us a few messages in the last hour — we will get back to you soon. For anything urgent please call us.';
   end if;
-  if (select count(*) from public.site_enquiries where created_at > now() - interval '1 hour') >= 60 then
+  if (select count(*) from public.site_enquiries where tenant_id = new.tenant_id and created_at > now() - interval '1 hour') >= 60 then
     raise exception 'We are receiving a lot of messages right now. Please try again shortly or call us.';
   end if;
   return new;

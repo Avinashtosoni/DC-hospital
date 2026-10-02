@@ -5,7 +5,7 @@
 -- ------------------------------------------------------------------ helpers
 create or replace function public.site_url()
 returns text language sql stable security definer set search_path = public as $$
-  select rtrim(coalesce((select data ->> 'siteUrl' from public.site_content where key = 'settings'), ''), '/')
+  select rtrim(coalesce((public.tenant_content('settings') ->> 'siteUrl'), ''), '/')
 $$;
 
 -- ------------------------------------------------------------------ patients book / reschedule / cancel their own visits
@@ -100,7 +100,7 @@ declare
   p public.patients;
   d public.doctors;
 begin
-  select * into a from public.appointments where id = p_appt;
+  select * into a from public.appointments where id = p_appt and tenant_id = public.current_tenant();
   if not found or a.status <> 'completed' or a.appointment_date < current_date - 60 then
     return jsonb_build_object('ok', false, 'error', 'This feedback link has expired.');
   end if;
@@ -119,7 +119,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare a public.appointments;
 begin
   perform set_config('app.actor_name', 'Patient feedback', true);
-  select * into a from public.appointments where id = p_appt;
+  select * into a from public.appointments where id = p_appt and tenant_id = public.current_tenant();
   if not found or a.status <> 'completed' or a.appointment_date < current_date - 60 then
     raise exception 'This feedback link has expired.';
   end if;
@@ -196,7 +196,7 @@ create function public.invite_lookup(p_token text)
 returns jsonb language sql stable security definer set search_path = public as $$
   select coalesce(
     (select jsonb_build_object('ok', true, 'email', email, 'full_name', full_name, 'role', role, 'phone', phone)
-     from public.staff_invites where token = p_token and status = 'pending' and expires_at > now()),
+     from public.staff_invites where token = p_token and status = 'pending' and expires_at > now() and tenant_id = public.current_tenant()),
     jsonb_build_object('ok', false, 'error', 'This invitation link is invalid or has expired. Ask the hospital to send a new one.'))
 $$;
 revoke all on function public.invite_lookup(text) from public;
@@ -211,10 +211,18 @@ declare
   v_name   text := coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(new.email, '@', 1));
   v_phone  text := nullif(new.raw_user_meta_data ->> 'phone', '');
   v_inv    public.staff_invites;
-  v_owner  text := lower((select data ->> 'owner_email' from public.app_settings where key = 'bootstrap'));
+  v_owner  text := lower((public.tenant_setting('bootstrap') ->> 'owner_email'));
+  v_meta   text := new.raw_user_meta_data ->> 'tenant_id';
+  v_tenant uuid;
 begin
+  -- the hospital this sign-up belongs to (same rule as profiles_pick_tenant): an invite only counts there
+  if v_meta ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    select id into v_tenant from public.tenants where id = v_meta::uuid and status <> 'suspended';
+  end if;
+  v_tenant := coalesce(v_tenant, public.current_tenant(), public.primary_tenant());
+
   select * into v_inv from public.staff_invites
-  where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email)
+  where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email) and tenant_id = v_tenant
     and status = 'pending' and expires_at > now()
   for update;
 
@@ -225,14 +233,15 @@ begin
     update public.staff_invites set status = 'accepted', accepted_at = now() where id = v_inv.id;
     -- link an existing doctor / staff record with the same e-mail
     if v_inv.role = 'doctor' then
-      update public.doctors set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null;
+      update public.doctors set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null and tenant_id = v_tenant;
     else
-      update public.staff set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null;
+      update public.staff set profile_id = new.id where lower(email) = lower(new.email) and profile_id is null and tenant_id = v_tenant;
     end if;
     return new;
   end if;
 
-  if v_owner is not null and lower(new.email) = v_owner and not exists (select 1 from public.profiles where role = 'owner') then
+  if v_owner is not null and lower(new.email) = v_owner and v_tenant = public.primary_tenant()
+     and not exists (select 1 from public.profiles where role = 'owner' and tenant_id = v_tenant) then
     insert into public.profiles (id, full_name, email, role, phone) values (new.id, v_name, new.email, 'owner', v_phone)
     on conflict (id) do update set role = 'owner';
     return new;
@@ -260,6 +269,9 @@ returns jsonb language plpgsql stable security definer set search_path = public,
 declare u auth.users;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  if public.current_tenant() is distinct from public.primary_tenant() then
+    return jsonb_build_object('demo_accounts_active', 0, 'owner_is_demo_email', false, 'owner_has_demo_password', false, 'demo_rows', 0);
+  end if;
   select * into u from auth.users where id = auth.uid();
   return jsonb_build_object(
     'demo_accounts_active', (select count(*) from auth.users a where public.is_demo_id(a.id) and a.id <> auth.uid()
@@ -278,6 +290,7 @@ returns int language plpgsql volatile security definer set search_path = public,
 declare v_count int;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo logins live in the main hospital
   update auth.users set encrypted_password = extensions.crypt(encode(extensions.gen_random_bytes(24), 'hex'), extensions.gen_salt('bf')),
                         banned_until = 'infinity'
   where public.is_demo_id(id) and id <> auth.uid();
@@ -295,6 +308,7 @@ returns int language plpgsql volatile security definer set search_path = public 
 declare v_total int := 0; v_n int; t text; v_id uuid;
 begin
   if not public.has_role('owner') then raise exception 'Only the hospital owner can do this.'; end if;
+  if public.current_tenant() is distinct from public.primary_tenant() then return 0; end if;   -- demo rows live in the main hospital
   perform set_config('app.actor_name', 'Go-live cleanup', true);
   foreach t in array array['visit_feedback', 'payments', 'invoices', 'admissions', 'lab_tests', 'prescriptions', 'appointments',
                            'doctor_leaves', 'site_enquiries', 'site_forms', 'notices', 'expenses', 'inventory', 'beds', 'wards', 'patients']
@@ -348,7 +362,7 @@ language sql stable security definer set search_path = public as $$
   from days cross join times
   where public.slot_problem(p_doctor, days.d, times.t, true) is null
     and not exists (select 1 from public.appointments a
-                    where a.doctor_id = p_doctor and a.appointment_date = days.d and left(a.appointment_time, 5) = times.t
+                    where a.tenant_id = public.current_tenant() and a.doctor_id = p_doctor and a.appointment_date = days.d and left(a.appointment_time, 5) = times.t
                       and a.status not in ('cancelled', 'no_show'))
   order by 1, 2
   limit greatest(1, least(p_limit, 20))
@@ -358,7 +372,7 @@ create or replace function public.bot_patient(p_phone text)
 returns jsonb language sql stable security definer set search_path = public as $$
   select jsonb_build_object('id', p.id, 'full_name', p.full_name, 'mrn', p.mrn)
   from public.patients p
-  where public.norm_phone(p.phone) = public.norm_phone(p_phone)
+  where p.tenant_id = public.current_tenant() and public.norm_phone(p.phone) = public.norm_phone(p_phone)
   order by p.created_at
   limit 1
 $$;
@@ -371,7 +385,7 @@ returns jsonb language sql stable security definer set search_path = public as $
   from public.appointments a
   join public.patients p on p.id = a.patient_id
   join public.doctors d on d.id = a.doctor_id
-  where public.norm_phone(p.phone) = public.norm_phone(p_phone)
+  where a.tenant_id = public.current_tenant() and public.norm_phone(p.phone) = public.norm_phone(p_phone)
     and a.appointment_date >= (now() at time zone 'Asia/Kolkata')::date
     and a.status in ('scheduled', 'confirmed')
 $$;
@@ -384,7 +398,7 @@ begin
   perform set_config('app.actor_role', 'public', true);
   update public.appointments a set status = 'cancelled'
   from public.patients p
-  where a.id = p_appt and p.id = a.patient_id and public.norm_phone(p.phone) = public.norm_phone(p_phone)
+  where a.id = p_appt and a.tenant_id = public.current_tenant() and p.id = a.patient_id and public.norm_phone(p.phone) = public.norm_phone(p_phone)
     and a.status in ('scheduled', 'confirmed') and a.appointment_date >= (now() at time zone 'Asia/Kolkata')::date
   returning a.id into v_id;
   if v_id is null then raise exception 'This appointment cannot be cancelled here. Please call the hospital.'; end if;

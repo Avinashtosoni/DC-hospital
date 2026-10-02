@@ -31,7 +31,7 @@ revoke all on public.password_reset_otps from anon, authenticated;
 create or replace function public.password_otp_event()
 returns text language plpgsql stable security definer set search_path = public as $$
 begin
-  return case when (select data -> 'notifications' -> 'events' ? 'password_otp' from public.app_settings where key = 'app')
+  return case when (public.tenant_setting('app') -> 'notifications' -> 'events' ? 'password_otp')
               then 'password_otp' else 'otp' end;
 end $$;
 
@@ -44,7 +44,7 @@ declare
   ch  text;
   out text[] := '{}';
 begin
-  select data -> 'notifications' into n from public.app_settings where key = 'app';
+  n := public.tenant_setting('app') -> 'notifications';
   if n is null then return out; end if;
   foreach ch in array array['whatsapp', 'sms'] loop
     if coalesce((n -> ch ->> 'enabled')::boolean, false)
@@ -76,13 +76,13 @@ begin
   if cardinality(v_avail) = 0 then
     raise exception 'MOBILE_RESET_OFF: Reset by mobile is not set up at this hospital yet. Please use the e-mail link.';
   end if;
-  if exists (select 1 from public.password_reset_otps where phone = v_phone and created_at > now() - interval '30 seconds') then
+  if exists (select 1 from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before requesting another code.';
   end if;
-  if (select count(*) from public.password_reset_otps where phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
+  if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'Too many codes requested for this number. Please try again in an hour.';
   end if;
-  if (select count(*) from public.password_reset_otps where created_at > now() - interval '1 hour')
+  if (select count(*) from public.password_reset_otps where tenant_id = public.current_tenant() and created_at > now() - interval '1 hour')
      >= greatest(10, coalesce(nullif(public.booking_setting('otpHourlyLimit', '200'), '')::int, 200)) then
     raise exception 'Too many reset requests right now. Please try again in a few minutes.';
   end if;
@@ -91,7 +91,7 @@ begin
   select u.id into v_user
   from auth.users u
   join public.profiles p on p.id = u.id
-  where lower(u.email) = v_email
+  where lower(u.email) = v_email and p.tenant_id = public.current_tenant()
     and (u.banned_until is null or u.banned_until < now())
     and (public.norm_phone(p.phone) = v_phone
          or exists (select 1 from public.patients pt where pt.profile_id = p.id and public.norm_phone(pt.phone) = v_phone))
@@ -119,7 +119,7 @@ declare
   v_token uuid;
 begin
   select * into o from public.password_reset_otps
-  where phone = v_phone and verified_at is null
+  where tenant_id = public.current_tenant() and phone = v_phone and verified_at is null
   order by created_at desc limit 1
   for update;
   if not found or o.expires_at < now() then
@@ -150,7 +150,7 @@ begin
   if length(coalesce(p_password, '')) < 8 then
     raise exception 'Use at least 8 characters.';
   end if;
-  select * into o from public.password_reset_otps where token = p_token for update;
+  select * into o from public.password_reset_otps where token = p_token and tenant_id = public.current_tenant() for update;
   if not found or o.user_id is null or o.verified_at is null or o.token_used_at is not null
      or o.verified_at < now() - interval '15 minutes' then
     raise exception 'OTP_REQUIRED: This reset has expired. Please verify your mobile number again.';

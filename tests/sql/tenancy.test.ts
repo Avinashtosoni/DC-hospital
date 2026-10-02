@@ -197,3 +197,89 @@ describe('providers', () => {
     expect(log).toEqual([{ user_name: 'Provider support', mode: 'support', tenant_id: B, action: 'open_patient' }])
   })
 })
+
+// SECURITY DEFINER functions skip RLS, so each one filters by current_tenant() itself (phase 1.2)
+describe('definer functions stay inside the hospital', () => {
+  const B_DOC = 'b0d00000-0000-4000-8000-000000000001'
+  beforeAll(async () => {
+    await db.as(B_OWNER, `insert into public.doctors (id, full_name, specialization, available_days, shift) values ($1, 'Dr. City', 'General', '{Mon,Tue,Wed,Thu,Fri,Sat,Sun}', 'morning')`, [B_DOC])
+  })
+
+  test('website doctors and availability are per hospital', async () => {
+    const b = await asH<{ id: string }>('anon', { 'x-tenant-id': B }, `select id from public.public_doctors()`)
+    expect(b.map((d) => d.id)).toEqual([B_DOC])
+    const a = await asH<{ id: string }>('anon', {}, `select id from public.public_doctors()`)
+    expect(a.length).toBeGreaterThan(5)
+    expect(a.map((d) => d.id)).not.toContain(B_DOC)
+    // a booking on A's website can't use B's doctor
+    expect(await asH<{ p: string | null }>(null, {}, `select public.slot_problem($1, current_date + 3, '10:00', false) p`, [B_DOC]))
+      .not.toEqual([{ p: null }])
+  })
+
+  test("an OTP from one hospital's website can't be verified or used on another", async () => {
+    const phone = '9876577777'
+    const [otp] = await asH<{ r: { demo_code: string } }>('anon', {}, `select public.request_booking_otp($1) r`, [phone])
+    expect(otp.r.demo_code).toMatch(/^\d{6}$/)
+    const [onB] = await asH<{ r: { ok: boolean } }>('anon', { 'x-tenant-id': B }, `select public.verify_booking_otp($1, $2) r`, [phone, otp.r.demo_code])
+    expect(onB.r.ok).toBe(false)
+    const [onA] = await asH<{ r: { ok: boolean; token: string } }>('anon', {}, `select public.verify_booking_otp($1, $2) r`, [phone, otp.r.demo_code])
+    expect(onA.r.ok).toBe(true)
+    await expect(asH('anon', { 'x-tenant-id': B }, `select public.public_book_appointment($1, $2, current_date + 3, '10:00', 'X Y', 'male', null, null, null)`,
+      [onA.r.token, B_DOC])).rejects.toThrow(/OTP_REQUIRED/)
+  })
+
+  test("an owner can't manage another hospital's accounts", async () => {
+    await expect(db.as(B_OWNER, `select public.admin_set_user_password($1, 'Hacked@1234')`, [USER.patient])).rejects.toThrow(/User not found/)
+    await expect(db.as(B_OWNER, `select public.admin_set_user_active($1, false)`, [USER.doctor])).rejects.toThrow(/User not found/)
+    await expect(db.as(B_OWNER, `select public.admin_update_user($1, 'Hacked', 'owner')`, [USER.staff])).rejects.toThrow(/User not found/)
+    await expect(db.as(B_OWNER, `select public.admin_delete_user($1)`, [USER.receptionist])).rejects.toThrow(/User not found/)
+    expect(await db.as(B_OWNER, `select * from public.admin_user_status($1::uuid[])`, [[USER.owner, B_PATIENT]])).toHaveLength(1)
+    // and a new account made by B's owner joins B
+    const [made] = await db.as<{ id: string }>(B_OWNER, `select public.admin_create_user('nurse@cityhospital.in', 'City Nurse', 'staff') id`)
+    expect((await db.one<{ tenant_id: string; role: string }>(null, `select tenant_id, role from public.profiles where id = $1`, [made.id])))
+      .toEqual({ tenant_id: B, role: 'staff' })
+  })
+
+  test("a staff invite only works on its own hospital's website", async () => {
+    await db.as(USER.owner, `insert into public.staff_invites (full_name, email, role) values ('Sneaky Doc', 'sneaky@example.com', 'owner')`)
+    const { token } = await db.one<{ token: string }>(null, `select token from public.staff_invites where email = 'sneaky@example.com'`)
+    expect((await asH<{ r: { ok: boolean } }>('anon', { 'x-tenant-id': B }, `select public.invite_lookup($1) r`, [token]))[0].r.ok).toBe(false)
+    const id = 'f0f00000-0000-4000-8000-000000000010'
+    await signUp(id, 'sneaky@example.com', { full_name: 'Sneaky Doc', invite_token: token, tenant_id: B })
+    expect(await db.one(null, `select tenant_id, role from public.profiles where id = $1`, [id])).toEqual({ tenant_id: B, role: 'patient' })
+    expect((await db.one<{ status: string }>(null, `select status from public.staff_invites where token = $1`, [token])).status).toBe('pending')
+  })
+
+  test('message templates reach only their hospital; the cron runs every hospital, an owner only their own', async () => {
+    const mk = async (who: string, name: string) => {
+      const [t] = await db.as<{ id: string }>(who, `insert into public.notification_templates (name, text, audience, schedule, enabled) values ($1, 'Hello', 'everyone', 'daily', true) returning id`, [name])
+      await db.as(null, `update public.notification_templates set next_run_at = now() - interval '1 minute' where id = $1`, [t.id])
+      return t.id
+    }
+    const ta = await mk(USER.owner, 'A daily'), tb = await mk(B_OWNER, 'B daily')
+    const names = await db.as<{ full_name: string }>(null, `select r.full_name from public.notification_templates t, public.notify_template_recipients(t) r where t.id = $1 order by 1`, [tb])
+    expect(names.map((r) => r.full_name)).toEqual(['City Nurse', 'City Owner', 'Ravi Kumar', 'Sneaky Doc', 'Sunita Devi'])
+    expect((await db.one<{ r: { total: number } }>(B_OWNER, `select public.notify_template_audience($1) r`, [ta])).r.total).toBe(0)
+    await expect(db.as(B_OWNER, `select public.notify_send_template($1)`, [ta])).rejects.toThrow(/not found/)
+
+    await db.as(B_OWNER, `select public.run_scheduled_notifications()`)
+    const ran = async () => (await db.as<{ id: string }>(null, `select id from public.notification_templates where id = any ($1::uuid[]) and last_run_at is not null`, [[ta, tb]])).map((r) => r.id)
+    expect(await ran()).toEqual([tb])
+    await db.as(null, `update public.notification_templates set next_run_at = now() - interval '1 minute' where id = $1`, [tb])
+    await db.as(null, `select public.run_scheduled_notifications()`)              // the cron job (no user)
+    expect((await ran()).sort()).toEqual([ta, tb].sort())
+    // whatever got queued sits under the template's own hospital
+    const bad = await db.as(null, `select 1 from public.notification_outbox o join public.notification_templates t on o.event = 'tpl:' || t.id
+                                   where t.id = any ($1::uuid[]) and o.tenant_id <> t.tenant_id`, [[ta, tb]])
+    expect(bad).toEqual([])
+    expect(await db.one<{ n: number }>(null, `select public.queue_appointment_reminders() n`)).toBeTruthy()
+    await expect(db.as(B_OWNER, `select public.notify_cron_setup(false)`)).rejects.toThrow(/managed by the platform/)
+  })
+
+  test('the WhatsApp bot only sees patients of the hospital it answers for', async () => {
+    const [r] = await asH<{ p: unknown }>('service', { 'x-tenant-id': B }, `select public.bot_patient('9800000001') p`)
+    expect(r.p).toMatchObject({ full_name: 'Sunita Devi' })
+    const [a] = await asH<{ p: unknown }>('service', {}, `select public.bot_patient('9800000001') p`)
+    expect(a.p).toBeNull()
+  })
+})

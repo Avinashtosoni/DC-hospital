@@ -40,8 +40,10 @@ create or replace function public.site_enquiry_default_form()
 returns trigger language plpgsql as $$
 begin
   if new.form_id is null then
-    new.form_id := 'f0000000-0000-4000-8000-000000000001';
-    new.form_name := coalesce(new.form_name, (select name from public.site_forms where id = new.form_id), 'Contact form');
+    -- this hospital's Contact form
+    select id, coalesce(new.form_name, name) into new.form_id, new.form_name
+      from public.site_forms where kind = 'contact' and tenant_id = new.tenant_id order by sort, created_at limit 1;
+    new.form_name := coalesce(new.form_name, 'Contact form');
   end if;
   return new;
 end $$;
@@ -105,7 +107,7 @@ declare
   v_msg    text := '';
   v_ref    text;
 begin
-  select * into f from public.site_forms where id = p_form and enabled;
+  select * into f from public.site_forms where id = p_form and enabled and tenant_id = public.current_tenant();
   if not found then raise exception 'This form is not available any more. Please refresh the page.'; end if;
   if p_answers is null or jsonb_typeof(p_answers) <> 'object' then raise exception 'Please fill in the form.'; end if;
 

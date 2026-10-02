@@ -183,6 +183,8 @@ const scaleSql = readFileSync(resolve(root, 'scripts/sql/scale.sql'), 'utf8')
 const authSql = readFileSync(resolve(root, 'scripts/sql/auth.sql'), 'utf8')
 // multi-tenancy runs last: it adds tenant_id + the tenant_isolation policy to every table created above
 const tenancySql = readFileSync(resolve(root, 'scripts/sql/tenancy.sql'), 'utf8')
+// …but current_tenant() and the hospital helpers must exist before any later function uses them
+const tenancyCoreSql = readFileSync(resolve(root, 'scripts/sql/tenancy_core.sql'), 'utf8')
 // built-in website forms come from src/forms/schema.ts so the app and the database never disagree
 const formRows = DEFAULT_FORMS.map((f) => `  (${[f.id, f.slug, f.name, f.description ?? null, f.kind, f.enabled, f.fields, f.settings, f.sort].map((v) => lit(v, '')).join(', ')})`).join(',\n')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
@@ -220,6 +222,8 @@ const sql = `${header}
 begin;
 
 ${schema}
+
+${tenancyCoreSql}
 
 ${rls}
 
@@ -272,6 +276,8 @@ const production = `-- =========================================================
 begin;
 
 ${schema}
+
+${tenancyCoreSql}
 
 ${rls}
 
@@ -339,10 +345,13 @@ console.log(`✔ supabase/production.sql written (${(production.length / 1024).t
 const upgradePath = resolve(root, 'supabase/upgrade-2026-10.sql')
 const upgrade = readFileSync(upgradePath, 'utf8')
 let nextUpgrade = upgrade
-for (const [name, file, body] of [['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql]] as const) {
+for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql], ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql]] as const) {
   const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
-  nextUpgrade = re.test(nextUpgrade) ? nextUpgrade.replace(re, () => block) : nextUpgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)
+  // the tenancy core goes first (every later section may call current_tenant())
+  nextUpgrade = re.test(nextUpgrade) ? nextUpgrade.replace(re, () => block)
+    : name === 'tenant-core' ? nextUpgrade.replace(/\nbegin;\n/, () => `\nbegin;\n\n${block}\n`)
+    : nextUpgrade.replace(/\ncommit;\s*$/, () => `\n${block}\n\ncommit;\n`)
   if (!nextUpgrade.includes(`-- <<< ${name}`)) throw new Error(`could not place the ${name} section in upgrade-2026-10.sql`)
 }
 if (nextUpgrade !== upgrade) { writeFileSync(upgradePath, nextUpgrade); console.log('✔ supabase/upgrade-2026-10.sql generated sections updated') }
