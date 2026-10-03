@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "DC Hospital — Patient app",
+  "short_name": "DC Hospital",
+  "description": "Book appointments, reschedule visits, download lab reports and bills, and rate your visit.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#f5f5ff",
+  "theme_color": "#292966",
+  "lang": "en-IN",
+  "categories": ["health", "medical"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Book appointment", "short_name": "Book", "url": "/book?source=pwa", "icons": [{ "src": "/icons/shortcut-book.png", "sizes": "96x96" }] },
+    { "name": "My appointments", "short_name": "Visits", "url": "/appointments?source=pwa", "icons": [{ "src": "/icons/shortcut-book.png", "sizes": "96x96" }] },
+    { "name": "My lab reports", "short_name": "Reports", "url": "/lab-tests?source=pwa", "icons": [{ "src": "/icons/shortcut-book.png", "sizes": "96x96" }] }
+  ]
+}

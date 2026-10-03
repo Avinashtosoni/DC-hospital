@@ -1,0 +1,613 @@
+-- =====================================================================================================
+--  1. EXTENSIONS & RESET
+--  Re-running this file DROPS and recreates every DC Hospital table (all app data is replaced by demo data).
+-- =====================================================================================================
+create extension if not exists pgcrypto with schema extensions;
+
+drop trigger if exists on_auth_user_created on auth.users;
+
+drop table if exists
+  public.visit_feedback, public.staff_invites, public.wa_sessions,
+  public.audit_log, public.booking_otps, public.holidays, public.doctor_leaves,
+  public.site_enquiries, public.site_forms, public.notification_templates, public.notices, public.inventory, public.expenses, public.payments, public.invoices, public.admissions,
+  public.beds, public.wards, public.lab_tests, public.prescriptions, public.appointments, public.patients,
+  public.staff, public.doctors, public.departments, public.profiles
+cascade;
+
+drop function if exists public.handle_new_user() cascade;
+drop function if exists public.set_updated_at() cascade;
+drop function if exists public.protect_profile_role() cascade;
+drop function if exists public.sync_admission() cascade;
+drop function if exists public.has_role(public.app_role[]) cascade;
+drop function if exists public.is_staff() cascade;
+drop function if exists public.my_patient_id() cascade;
+drop function if exists public.current_app_role() cascade;
+drop function if exists public.my_doctor_id() cascade;
+drop function if exists public.protect_patient_fields() cascade;
+drop function if exists public.assign_record_number() cascade;
+drop function if exists public.today_ist() cascade;
+drop type if exists public.app_role cascade;
+
+-- =====================================================================================================
+--  2. TYPES
+-- =====================================================================================================
+create type public.app_role as enum ('owner', 'doctor', 'receptionist', 'accountant', 'staff', 'patient');
+
+-- =====================================================================================================
+--  3. TABLES
+-- =====================================================================================================
+-- Calendar date in India. Supabase servers run on UTC, so plain current_date is still "yesterday" until 05:30 IST.
+create or replace function public.today_ist() returns date language sql stable as $$ select (now() at time zone 'Asia/Kolkata')::date $$;
+
+create table public.profiles (
+  id          uuid primary key references auth.users (id) on delete cascade,
+  full_name   text not null,
+  email       text not null,
+  role        public.app_role not null default 'patient',
+  phone       text,
+  avatar_url  text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table public.departments (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null unique,
+  description text,
+  location    text,
+  phone       text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table public.doctors (
+  id                uuid primary key default gen_random_uuid(),
+  profile_id        uuid unique references public.profiles (id) on delete set null,
+  full_name         text not null,
+  email             text,
+  phone             text,
+  department_id     uuid references public.departments (id) on delete set null,
+  specialization    text not null,
+  qualification     text,
+  experience_years  int check (experience_years >= 0),
+  consultation_fee  numeric(12,2) not null default 0 check (consultation_fee >= 0),
+  available_days    text[] not null default '{}',
+  shift             text,
+  status            text not null default 'active' check (status in ('active', 'on_leave', 'inactive')),
+  bio               text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+create table public.staff (
+  id             uuid primary key default gen_random_uuid(),
+  profile_id     uuid unique references public.profiles (id) on delete set null,
+  full_name      text not null,
+  email          text,
+  phone          text,
+  designation    text not null,
+  department_id  uuid references public.departments (id) on delete set null,
+  shift          text not null default 'morning' check (shift in ('morning', 'evening', 'night')),
+  salary         numeric(12,2) not null default 0 check (salary >= 0),
+  join_date      date,
+  status         text not null default 'active' check (status in ('active', 'on_leave', 'inactive')),
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+create table public.patients (
+  id                       uuid primary key default gen_random_uuid(),
+  profile_id               uuid unique references public.profiles (id) on delete set null,
+  mrn                      text not null unique,
+  full_name                text not null,
+  gender                   text not null default 'other' check (gender in ('male', 'female', 'other')),
+  date_of_birth            date,
+  blood_group              text check (blood_group in ('A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-')),
+  phone                    text,
+  email                    text,
+  address                  text,
+  emergency_contact_name   text,
+  emergency_contact_phone  text,
+  allergies                text,
+  insurance_provider       text,
+  status                   text not null default 'outpatient' check (status in ('outpatient', 'inpatient', 'discharged')),
+  created_at               timestamptz not null default now(),
+  updated_at               timestamptz not null default now()
+);
+
+create table public.appointments (
+  id                uuid primary key default gen_random_uuid(),
+  patient_id        uuid not null references public.patients (id) on delete restrict,
+  doctor_id         uuid not null references public.doctors (id) on delete restrict,
+  appointment_date  date not null,
+  appointment_time  text not null check (appointment_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  type              text not null default 'consultation' check (type in ('consultation', 'follow_up', 'emergency', 'checkup')),
+  status            text not null default 'scheduled' check (status in ('scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show')),
+  reason            text,
+  notes             text,
+  source            text not null default 'desk' check (source in ('desk', 'website', 'portal', 'whatsapp')),
+  booking_ref       text unique,
+  contacted_at      timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+create table public.prescriptions (
+  id              uuid primary key default gen_random_uuid(),
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  doctor_id       uuid not null references public.doctors (id) on delete restrict,
+  diagnosis       text not null,
+  symptoms        text,
+  medications     jsonb not null default '[]'::jsonb,
+  advice          text,
+  follow_up_date  date,
+  prescribed_on   date not null default public.today_ist(),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create table public.lab_tests (
+  id            uuid primary key default gen_random_uuid(),
+  patient_id    uuid not null references public.patients (id) on delete restrict,
+  doctor_id     uuid references public.doctors (id) on delete set null,
+  test_name     text not null,
+  category      text not null default 'Biochemistry',
+  priority      text not null default 'routine' check (priority in ('routine', 'urgent', 'stat')),
+  status        text not null default 'requested' check (status in ('requested', 'sample_collected', 'in_progress', 'completed', 'cancelled')),
+  result        text,
+  price         numeric(12,2) not null default 0 check (price >= 0),
+  requested_on  date not null default public.today_ist(),
+  completed_on  date,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create table public.wards (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null unique,
+  type        text not null default 'general' check (type in ('general', 'icu', 'private', 'semi_private', 'maternity', 'pediatric', 'emergency')),
+  floor       text not null,
+  daily_rate  numeric(12,2) not null default 0 check (daily_rate >= 0),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table public.beds (
+  id          uuid primary key default gen_random_uuid(),
+  ward_id     uuid not null references public.wards (id) on delete cascade,
+  bed_number  text not null unique,
+  status      text not null default 'available' check (status in ('available', 'occupied', 'maintenance', 'reserved')),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table public.admissions (
+  id              uuid primary key default gen_random_uuid(),
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  doctor_id       uuid references public.doctors (id) on delete set null,
+  bed_id          uuid references public.beds (id) on delete set null,
+  admission_date  date not null default public.today_ist(),
+  discharge_date  date,
+  reason          text,
+  status          text not null default 'admitted' check (status in ('admitted', 'discharged')),
+  notes           text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  check (discharge_date is null or discharge_date >= admission_date)
+);
+
+create table public.invoices (
+  id              uuid primary key default gen_random_uuid(),
+  invoice_number  text not null unique,
+  patient_id      uuid not null references public.patients (id) on delete restrict,
+  issue_date      date not null default public.today_ist(),
+  due_date        date,
+  items           jsonb not null default '[]'::jsonb,
+  subtotal        numeric(12,2) not null default 0,
+  tax             numeric(12,2) not null default 0,
+  discount        numeric(12,2) not null default 0,
+  total           numeric(12,2) not null default 0,
+  amount_paid     numeric(12,2) not null default 0 check (amount_paid >= 0),
+  status          text not null default 'unpaid' check (status in ('draft', 'unpaid', 'partial', 'paid', 'overdue', 'cancelled')),
+  notes           text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create table public.payments (
+  id          uuid primary key default gen_random_uuid(),
+  invoice_id  uuid not null references public.invoices (id) on delete restrict,
+  patient_id  uuid not null references public.patients (id) on delete restrict,
+  amount      numeric(12,2) not null check (amount > 0),
+  method      text not null default 'cash' check (method in ('cash', 'card', 'upi', 'insurance', 'bank_transfer')),
+  paid_on     date not null default public.today_ist(),
+  reference   text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table public.expenses (
+  id            uuid primary key default gen_random_uuid(),
+  category      text not null check (category in ('salaries', 'supplies', 'utilities', 'equipment', 'maintenance', 'rent', 'other')),
+  description   text not null,
+  amount        numeric(14,2) not null check (amount >= 0),
+  expense_date  date not null default public.today_ist(),
+  vendor        text,
+  status        text not null default 'paid' check (status in ('paid', 'pending')),
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create table public.inventory (
+  id             uuid primary key default gen_random_uuid(),
+  name           text not null,
+  category       text not null default 'medicine' check (category in ('medicine', 'consumable', 'equipment', 'surgical')),
+  sku            text not null unique,
+  quantity       int not null default 0 check (quantity >= 0),
+  unit           text not null default 'units',
+  reorder_level  int not null default 0 check (reorder_level >= 0),
+  unit_price     numeric(12,2) not null default 0 check (unit_price >= 0),
+  supplier       text,
+  expiry_date    date,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+create table public.notices (
+  id            uuid primary key default gen_random_uuid(),
+  title         text not null,
+  body          text not null,
+  audience      text not null default 'all' check (audience in ('all', 'staff', 'doctors', 'patients')),
+  priority      text not null default 'normal' check (priority in ('normal', 'important', 'urgent')),
+  published_on  date not null default public.today_ist(),
+  pinned        boolean not null default false,          -- stays at the top of the board
+  expires_on    date,                                    -- hidden after this day (null = never)
+  author_name   text,                                    -- stamped from the signed-in user
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  check (expires_on is null or expires_on >= published_on)
+);
+
+-- Custom / scheduled messages written in Settings → Notifications (sent by Supabase cron — scripts/sql/messaging.sql)
+create table public.notification_templates (
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null check (char_length(name) between 2 and 80),
+  description     text,
+  channels        text[] not null default array['sms']::text[] check (channels <@ array['sms', 'whatsapp', 'email', 'push']::text[] and cardinality(channels) > 0),
+  subject         text check (subject is null or char_length(subject) <= 200),
+  text            text not null check (char_length(text) between 1 and 2000),
+  wa_text         text check (wa_text is null or char_length(wa_text) <= 2000),
+  wa_template     text,
+  wa_params       text,
+  sms_template_id text,
+  audience        text not null default 'patients' check (audience in ('patients', 'staff', 'everyone', 'roles')),
+  roles           text[] not null default '{}'::text[],
+  schedule        text not null default 'manual' check (schedule in ('manual', 'once', 'daily', 'weekly', 'monthly', 'birthday')),
+  send_at         timestamptz,
+  time_of_day     text not null default '10:00' check (time_of_day ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  weekday         int check (weekday between 0 and 6),
+  month_day       int check (month_day between 1 and 28),
+  enabled         boolean not null default false,
+  last_run_at     timestamptz,
+  last_run_count  int,
+  next_run_at     timestamptz,
+  created_by_name text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+-- Messages sent from the public website's Contact form (anyone may insert; owner/receptionist manage them)
+create table public.site_enquiries (
+  id          uuid primary key default gen_random_uuid(),
+  ref         text not null default ('DCH-' || lpad((floor(random() * 1000000))::int::text, 6, '0')),
+  name        text not null check (char_length(name) between 2 and 120),
+  phone       text not null check (char_length(phone) between 6 and 30),
+  email       text check (email is null or char_length(email) <= 200),
+  topic       text not null default 'General enquiry' check (char_length(topic) <= 80),
+  speciality  text check (speciality is null or char_length(speciality) <= 80),
+  message     text not null check (char_length(message) between 1 and 2000),
+  status      text not null default 'new' check (status in ('new', 'in_progress', 'resolved', 'spam')),
+  notes       text,
+  starred     boolean not null default false,   -- inbox: staff flag for follow-up
+  read_at     timestamptz,                       -- inbox: null = unread (bold)
+  form_id     uuid,                              -- which website form (site_forms); kept when a form is deleted
+  form_name   text,                              -- the form's name when it was sent
+  data        jsonb,                             -- every answer: [{id, label, type, value}]
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+-- Website forms built in Settings → Forms (Contact form, Patient review, custom forms). Submissions → site_enquiries.
+create table public.site_forms (
+  id          uuid primary key default gen_random_uuid(),
+  slug        text not null unique check (slug ~ '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$'),
+  name        text not null check (char_length(name) between 2 and 80),
+  description text check (description is null or char_length(description) <= 500),
+  kind        text not null default 'custom' check (kind in ('contact', 'review', 'custom')),
+  enabled     boolean not null default true,
+  fields      jsonb not null default '[]'::jsonb check (jsonb_typeof(fields) = 'array'),
+  settings    jsonb not null default '{}'::jsonb check (jsonb_typeof(settings) = 'object'),
+  sort        int not null default 0,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+-- Doctor leave (whole days) and blocked time (surgery, meetings…). Only approved rows affect availability.
+create table public.doctor_leaves (
+  id          uuid primary key default gen_random_uuid(),
+  doctor_id   uuid not null references public.doctors (id) on delete cascade,
+  kind        text not null default 'leave' check (kind in ('leave', 'surgery', 'meeting', 'conference', 'training', 'other')),
+  start_date  date not null,
+  end_date    date not null,
+  start_time  text check (start_time is null or start_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  end_time    text check (end_time is null or end_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  status      text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  reason      text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  check (end_date >= start_date),
+  check ((start_time is null) = (end_time is null)),
+  check (start_time is null or end_time > start_time)
+);
+
+-- Hospital-wide OPD closures (emergency stays open)
+create table public.holidays (
+  id            uuid primary key default gen_random_uuid(),
+  holiday_date  date not null unique,
+  name          text not null check (char_length(name) between 2 and 80),
+  note          text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+-- Append-only change history, written only by the audit triggers (see section 7d)
+create table public.audit_log (
+  id           uuid primary key default gen_random_uuid(),
+  table_name   text not null,
+  record_id    uuid,
+  action       text not null check (action in ('insert', 'update', 'delete')),
+  actor_id     uuid,
+  actor_name   text,
+  actor_role   text,
+  summary      text,
+  changes      jsonb not null default '{}'::jsonb,
+  created_at   timestamptz not null default now()
+);
+
+-- Patient rating after a completed visit (one per appointment)
+create table public.visit_feedback (
+  id               uuid primary key default gen_random_uuid(),
+  appointment_id   uuid not null unique references public.appointments (id) on delete cascade,
+  patient_id       uuid not null references public.patients (id) on delete cascade,
+  doctor_id        uuid references public.doctors (id) on delete set null,
+  rating           int not null check (rating between 1 and 5),
+  comment          text check (char_length(comment) <= 1000),
+  tags             text[] not null default '{}',
+  would_recommend  boolean,
+  source           text not null default 'portal' check (source in ('portal', 'link', 'whatsapp')),
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+-- Staff invitations: the invited person signs up with the link and gets the role automatically
+create table public.staff_invites (
+  id               uuid primary key default gen_random_uuid(),
+  full_name        text not null check (char_length(full_name) between 2 and 80),
+  email            text not null check (email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+  phone            text,
+  role             public.app_role not null check (role <> 'patient'),
+  token            text not null unique default encode(extensions.gen_random_bytes(18), 'hex'),
+  status           text not null default 'pending' check (status in ('pending', 'accepted', 'revoked')),
+  expires_at       timestamptz not null default now() + interval '14 days',
+  invited_by_name  text,
+  accepted_at      timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create unique index staff_invites_one_pending on public.staff_invites (lower(email)) where status = 'pending';
+
+-- WhatsApp chatbot conversation state (service role only)
+create table public.wa_sessions (
+  phone       text primary key,
+  state       jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now()
+);
+
+-- One-time codes for online booking (never readable through the API; see section 9)
+create table public.booking_otps (
+  id             uuid primary key default gen_random_uuid(),
+  phone          text not null,
+  code_hash      text not null,
+  attempts       int not null default 0,
+  expires_at     timestamptz not null,
+  verified_at    timestamptz,
+  token          uuid unique,
+  token_used_at  timestamptz,
+  created_at     timestamptz not null default now()
+);
+
+-- Indexes for foreign keys and common filters
+create index on public.doctors (department_id);
+create index on public.staff (department_id);
+create index on public.appointments (patient_id);
+create index on public.appointments (doctor_id, appointment_date);
+create index on public.appointments (appointment_date);
+create index on public.prescriptions (patient_id);
+create index on public.prescriptions (doctor_id);
+create index on public.lab_tests (patient_id);
+create index on public.lab_tests (status);
+create index on public.beds (ward_id);
+create index on public.admissions (patient_id);
+create index on public.admissions (bed_id) where status = 'admitted';
+create index on public.invoices (patient_id);
+create index on public.invoices (status);
+create index on public.payments (invoice_id);
+create index on public.payments (patient_id);
+create index on public.expenses (expense_date);
+create index on public.site_enquiries (status, created_at desc);
+create index on public.site_enquiries (form_id, created_at desc);
+create index on public.doctor_leaves (doctor_id, start_date, end_date);
+create index on public.visit_feedback (doctor_id, created_at desc);
+create index on public.visit_feedback (patient_id);
+create index on public.audit_log (created_at desc);
+create index on public.audit_log (table_name, record_id);
+create index on public.audit_log (actor_id, created_at desc);
+create index on public.booking_otps (phone, created_at desc);
+-- a doctor can never hold two live bookings in the same slot (desk, portal or website)
+create unique index appointments_one_per_slot on public.appointments (doctor_id, appointment_date, appointment_time)
+  where status not in ('cancelled', 'no_show');
+
+-- =====================================================================================================
+--  4. HELPER FUNCTIONS (security definer so they can be used inside RLS without recursion)
+-- =====================================================================================================
+create or replace function public.current_app_role()
+returns public.app_role language sql stable security definer set search_path = public as $$
+  select role from public.profiles where id = auth.uid()
+$$;
+
+create or replace function public.has_role(variadic roles public.app_role[])
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role = any (roles))
+$$;
+
+create or replace function public.is_staff()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role <> 'patient')
+$$;
+
+create or replace function public.my_doctor_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.doctors where profile_id = auth.uid() limit 1
+$$;
+
+create or replace function public.my_patient_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.patients where profile_id = auth.uid() limit 1
+$$;
+
+-- =====================================================================================================
+--  5. TRIGGERS
+-- =====================================================================================================
+-- 5a. keep updated_at fresh
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end $$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['profiles','departments','doctors','staff','patients','appointments','prescriptions','lab_tests',
+                           'wards','beds','admissions','invoices','payments','expenses','inventory','notices','site_enquiries','site_forms','notification_templates',
+                           'doctor_leaves','holidays','visit_feedback','staff_invites']
+  loop
+    execute format('create trigger trg_%1$s_updated_at before update on public.%1$I for each row execute function public.set_updated_at()', t);
+  end loop;
+end $$;
+
+-- 5b. every new auth user gets a profile (+ patient record). Self sign-ups are ALWAYS patients;
+--     the hospital owner promotes staff from the "Users & Roles" screen.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  next_mrn int;
+  v_name   text := coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(new.email, '@', 1));
+  v_phone  text := nullif(new.raw_user_meta_data ->> 'phone', '');
+begin
+  insert into public.profiles (id, full_name, email, role, phone)
+  values (new.id, v_name, new.email, 'patient', v_phone)
+  on conflict (id) do nothing;
+
+  select coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::int), 100000) + 1 into next_mrn from public.patients;
+  insert into public.patients (profile_id, mrn, full_name, email, phone, gender, status)
+  values (new.id, 'DCH-' || next_mrn, v_name, new.email, v_phone, 'other', 'outpatient')
+  on conflict (profile_id) do nothing;
+  return new;
+end $$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- 5c. only the owner may change roles (SQL editor / service role — auth.uid() is null — is allowed)
+create or replace function public.protect_profile_role()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.role is distinct from old.role and auth.uid() is not null and not public.has_role('owner') then
+    raise exception 'Only the hospital owner can change user roles';
+  end if;
+  if new.email is distinct from old.email and auth.uid() is not null then
+    new.email := old.email;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_profiles_protect_role before update on public.profiles
+  for each row execute function public.protect_profile_role();
+
+-- 5c-2. patients may update their own contact details, but never their MRN, status or account link
+create or replace function public.protect_patient_fields()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and public.has_role('patient') then
+    new.mrn := old.mrn;
+    new.status := old.status;
+    new.profile_id := old.profile_id;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_patients_protect before update on public.patients
+  for each row execute function public.protect_patient_fields();
+
+-- 5c-3. MRN and invoice numbers are assigned by the database, under a lock, so two desks saving at the same moment
+--       never get the same number (GST needs unique invoice serials). A number the client proposes is kept if still free.
+create or replace function public.assign_record_number()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_table_name = 'patients' then
+    perform pg_advisory_xact_lock(hashtext('dch_patient_mrn'));
+    if coalesce(new.mrn, '') = '' or exists (select 1 from public.patients where mrn = new.mrn) then
+      select 'DCH-' || (coalesce(max(nullif(regexp_replace(mrn, '\D', '', 'g'), '')::bigint), 100000) + 1) into new.mrn from public.patients;
+    end if;
+  else
+    perform pg_advisory_xact_lock(hashtext('dch_invoice_number'));
+    if coalesce(new.invoice_number, '') = '' or exists (select 1 from public.invoices where invoice_number = new.invoice_number) then
+      select 'INV-' || lpad((coalesce(max(nullif(regexp_replace(invoice_number, '\D', '', 'g'), '')::bigint), 10000) + 1)::text, 5, '0')
+        into new.invoice_number from public.invoices;
+    end if;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_patients_number before insert on public.patients
+  for each row execute function public.assign_record_number();
+create trigger trg_invoices_number before insert on public.invoices
+  for each row execute function public.assign_record_number();
+
+-- 5d. admissions keep bed + patient status consistent (idempotent with the client-side updates)
+create or replace function public.sync_admission()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    if old.status = 'admitted' and old.bed_id is not null then
+      update public.beds set status = 'available' where id = old.bed_id;
+      update public.patients set status = 'outpatient' where id = old.patient_id;
+    end if;
+    return old;
+  end if;
+
+  if tg_op = 'UPDATE' and old.bed_id is distinct from new.bed_id and old.bed_id is not null then
+    update public.beds set status = 'available' where id = old.bed_id;
+  end if;
+  if new.bed_id is not null then
+    update public.beds set status = case when new.status = 'admitted' then 'occupied' else 'available' end where id = new.bed_id;
+  end if;
+  update public.patients set status = case when new.status = 'admitted' then 'inpatient' else 'discharged' end where id = new.patient_id;
+  return new;
+end $$;
+
+create trigger trg_admissions_sync after insert or update or delete on public.admissions
+  for each row execute function public.sync_admission();
