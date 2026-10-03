@@ -41,12 +41,15 @@ const staffNoticeCondition = "(audience in ('all', 'staff') or (audience = 'doct
 
 const CMD: Record<Action, 'select' | 'insert' | 'update' | 'delete'> = { read: 'select', create: 'insert', update: 'update', delete: 'delete' }
 
-function policies(): string {
+/** the role policies from src/auth/permissions.ts. `upgrade`: drop + recreate them (an existing database picks up
+ *  permission changes — e.g. who may read salaries); profiles' hand-written policies are left alone. */
+function policies(upgrade = false): string {
   const out: string[] = []
   for (const [table, matrix] of Object.entries(PERMISSIONS) as [TableName, Partial<Record<Role, Action[]>>][]) {
     out.push(`\n-- ${table}`)
     out.push(`alter table public.${table} enable row level security;`)
     if (table === 'profiles') continue // handled manually below
+    if (upgrade) for (const cmd of Object.values(CMD)) out.push(`drop policy if exists ${table}_${cmd} on public.${table};`)
     for (const action of ['read', 'create', 'update', 'delete'] as Action[]) {
       const staffRoles = (Object.keys(matrix) as Role[]).filter((r) => r !== 'patient' && matrix[r]!.includes(action))
       const conds: string[] = []
@@ -73,6 +76,7 @@ function policies(): string {
       out.push(`create policy ${name} on public.${table} for ${cmd} to authenticated\n  ${clause};`)
     }
   }
+  if (upgrade) return out.join('\n')
   // profiles: everyone reads their own; staff can read all (to show names); users update themselves; owner manages all
   out.push(`
 create policy profiles_select on public.profiles for select to authenticated
@@ -398,8 +402,9 @@ let nextUpgrade = upgrade
 const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
 for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
-  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql]] as const) {
-  const block = `-- >>> ${name} (generated from scripts/sql/${file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
+  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql],
+  ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
+  const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
   // the tenancy core goes first (every later section may call current_tenant())
   nextUpgrade = re.test(nextUpgrade) ? nextUpgrade.replace(re, () => block)

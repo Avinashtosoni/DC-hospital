@@ -944,7 +944,7 @@ create policy doctors_delete on public.doctors for delete to authenticated
 -- staff
 alter table public.staff enable row level security;
 create policy staff_select on public.staff for select to authenticated
-  using (public.has_role('owner', 'accountant', 'receptionist'));
+  using (public.has_role('owner', 'accountant'));
 create policy staff_insert on public.staff for insert to authenticated
   with check (public.has_role('owner'));
 create policy staff_update on public.staff for update to authenticated
@@ -4947,7 +4947,11 @@ revoke all on function public.billing_summary(), public.my_billing_quote(text, i
   public.provider_billing(text, jsonb), public.change_trial_plan(text), public.billing_usage_history(int) from public, anon;
 grant execute on function public.billing_summary(), public.my_billing_quote(text, int, numeric, text), public.set_billing_details(text, text, text),
   public.provider_billing(text, jsonb), public.change_trial_plan(text), public.billing_usage_history(int) to authenticated;
-grant execute on function public.tenant_license(uuid), public.tenant_license_dates(uuid) to anon, authenticated, service_role;
+-- tenant_license (status word only) is needed by license_guard(), which runs as the caller. The dates (trial / paid until /
+-- purge) are only handed out through my_context() / billing_summary() / the control panel — never for any hospital id.
+grant execute on function public.tenant_license(uuid) to anon, authenticated, service_role;
+revoke all on function public.tenant_license_dates(uuid) from public, anon, authenticated;
+grant execute on function public.tenant_license_dates(uuid) to service_role;
 
 
 -- =====================================================================================================

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import type { FieldDef, ResourceCtx, ResourceDef } from '../resources/types'
 import { Button, Drawer, Field, Input, Select, Textarea } from './ui'
-import { cn, money } from '../lib/utils'
+import { cn, money, today } from '../lib/utils'
+import { isIndianMobile } from '../lib/validation'
 import { RelationPicker } from './RelationPicker'
 import type { LineItem, Medication } from '../types'
 
@@ -53,10 +54,19 @@ export function ResourceFormDrawer({ def, ctx, open, onClose, initial, prefill, 
       const v = values[f.name]
       if (f.required && (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0))) errs[f.name] = `${f.label} is required`
       if ((f.type === 'number' || f.type === 'currency') && v !== '' && v != null && isNaN(Number(v))) errs[f.name] = 'Must be a number'
-      if ((f.type === 'number' || f.type === 'currency') && f.min !== undefined && v !== '' && Number(v) < f.min) errs[f.name] = `Must be ≥ ${f.min}`
+      if ((f.type === 'number' || f.type === 'currency') && f.min !== undefined && v !== '' && v != null && Number(v) < f.min) errs[f.name] = `Must be ≥ ${f.min}`
+      if ((f.type === 'number' || f.type === 'currency') && f.max !== undefined && v !== '' && v != null && Number(v) > f.max) errs[f.name] = `Must be ≤ ${f.max}`
+      if (f.type === 'number' && f.integer && v !== '' && v != null && !Number.isInteger(Number(v))) errs[f.name] = 'Must be a whole number'
+      if (f.type === 'tel' && v && (f.mobile ? !isIndianMobile(v) : !/^[+\d][\d\s\-()]{2,19}$/.test(String(v).trim())))
+        errs[f.name] = f.mobile ? 'Enter a 10-digit mobile number' : 'Enter a valid phone number'
+      if (f.type === 'date' && v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) errs[f.name] = 'Enter a valid date'
+      if (f.type === 'date' && v && f.notFuture && v > today()) errs[f.name] = `${f.label} cannot be in the future`
+      if (f.type === 'date' && v && f.notBefore && values[f.notBefore.field] && v < values[f.notBefore.field]) errs[f.name] = `Cannot be before the ${f.notBefore.label.toLowerCase()}`
       if (f.type === 'email' && v && !/^\S+@\S+\.\S+$/.test(v)) errs[f.name] = 'Enter a valid email'
       if (f.type === 'medications' && Array.isArray(v) && v.some((m: Medication) => !m.name?.trim())) errs[f.name] = 'Every medicine needs a name'
       if (f.type === 'line_items' && Array.isArray(v) && v.some((m: LineItem) => !m.description?.trim())) errs[f.name] = 'Every line needs a description'
+      else if (f.type === 'line_items' && Array.isArray(v) && v.some((m: LineItem) => !(Number(m.quantity) > 0))) errs[f.name] = 'Every line needs a quantity above 0'
+      else if (f.type === 'line_items' && Array.isArray(v) && v.some((m: LineItem) => !(Number(m.unit_price) >= 0))) errs[f.name] = 'Prices cannot be negative'
     }
     if (!Object.keys(errs).length && def.validate) {
       // some checks ask the database (e.g. is this doctor already booked at that time?)

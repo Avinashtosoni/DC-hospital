@@ -4180,7 +4180,11 @@ revoke all on function public.billing_summary(), public.my_billing_quote(text, i
   public.provider_billing(text, jsonb), public.change_trial_plan(text), public.billing_usage_history(int) from public, anon;
 grant execute on function public.billing_summary(), public.my_billing_quote(text, int, numeric, text), public.set_billing_details(text, text, text),
   public.provider_billing(text, jsonb), public.change_trial_plan(text), public.billing_usage_history(int) to authenticated;
-grant execute on function public.tenant_license(uuid), public.tenant_license_dates(uuid) to anon, authenticated, service_role;
+-- tenant_license (status word only) is needed by license_guard(), which runs as the caller. The dates (trial / paid until /
+-- purge) are only handed out through my_context() / billing_summary() / the control panel — never for any hospital id.
+grant execute on function public.tenant_license(uuid) to anon, authenticated, service_role;
+revoke all on function public.tenant_license_dates(uuid) from public, anon, authenticated;
+grant execute on function public.tenant_license_dates(uuid) to service_role;
 -- <<< billing
 
 -- >>> control-panel (generated from scripts/sql/control_panel.sql — do not edit here)
@@ -5754,5 +5758,398 @@ drop trigger if exists trg_lab_tests_stamp on public.lab_tests;
 create trigger trg_lab_tests_stamp before insert or update of status, completed_on on public.lab_tests
   for each row execute function public.lab_tests_stamp();
 -- <<< integrity
+
+-- >>> rbac (generated from permissions.ts → policies — do not edit here)
+-- role policies from src/auth/permissions.ts
+-- profiles
+alter table public.profiles enable row level security;
+
+-- departments
+alter table public.departments enable row level security;
+drop policy if exists departments_select on public.departments;
+drop policy if exists departments_insert on public.departments;
+drop policy if exists departments_update on public.departments;
+drop policy if exists departments_delete on public.departments;
+create policy departments_select on public.departments for select to authenticated
+  using (public.has_role('owner', 'doctor', 'receptionist', 'accountant', 'staff')
+      or (public.has_role('patient') and true));
+create policy departments_insert on public.departments for insert to authenticated
+  with check (public.has_role('owner'));
+create policy departments_update on public.departments for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy departments_delete on public.departments for delete to authenticated
+  using (public.has_role('owner'));
+
+-- doctors
+alter table public.doctors enable row level security;
+drop policy if exists doctors_select on public.doctors;
+drop policy if exists doctors_insert on public.doctors;
+drop policy if exists doctors_update on public.doctors;
+drop policy if exists doctors_delete on public.doctors;
+create policy doctors_select on public.doctors for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'accountant', 'staff')
+      or (public.has_role('patient') and status = 'active'));
+create policy doctors_insert on public.doctors for insert to authenticated
+  with check (public.has_role('owner'));
+create policy doctors_update on public.doctors for update to authenticated
+  using (public.has_role('owner', 'receptionist'))
+  with check (public.has_role('owner', 'receptionist'));
+create policy doctors_delete on public.doctors for delete to authenticated
+  using (public.has_role('owner'));
+
+-- staff
+alter table public.staff enable row level security;
+drop policy if exists staff_select on public.staff;
+drop policy if exists staff_insert on public.staff;
+drop policy if exists staff_update on public.staff;
+drop policy if exists staff_delete on public.staff;
+create policy staff_select on public.staff for select to authenticated
+  using (public.has_role('owner', 'accountant'));
+create policy staff_insert on public.staff for insert to authenticated
+  with check (public.has_role('owner'));
+create policy staff_update on public.staff for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy staff_delete on public.staff for delete to authenticated
+  using (public.has_role('owner'));
+
+-- patients
+alter table public.patients enable row level security;
+drop policy if exists patients_select on public.patients;
+drop policy if exists patients_insert on public.patients;
+drop policy if exists patients_update on public.patients;
+drop policy if exists patients_delete on public.patients;
+create policy patients_select on public.patients for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff', 'accountant')
+      or (public.has_role('patient') and profile_id = auth.uid()));
+create policy patients_insert on public.patients for insert to authenticated
+  with check (public.has_role('owner', 'receptionist'));
+create policy patients_update on public.patients for update to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff')
+      or (public.has_role('patient') and profile_id = auth.uid()))
+  with check (public.has_role('owner', 'receptionist', 'doctor', 'staff')
+      or (public.has_role('patient') and profile_id = auth.uid()));
+create policy patients_delete on public.patients for delete to authenticated
+  using (public.has_role('owner'));
+
+-- appointments
+alter table public.appointments enable row level security;
+drop policy if exists appointments_select on public.appointments;
+drop policy if exists appointments_insert on public.appointments;
+drop policy if exists appointments_update on public.appointments;
+drop policy if exists appointments_delete on public.appointments;
+create policy appointments_select on public.appointments for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy appointments_insert on public.appointments for insert to authenticated
+  with check (public.has_role('owner', 'receptionist', 'doctor')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy appointments_update on public.appointments for update to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()))
+  with check (public.has_role('owner', 'receptionist', 'doctor')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy appointments_delete on public.appointments for delete to authenticated
+  using (public.has_role('owner', 'receptionist'));
+
+-- prescriptions
+alter table public.prescriptions enable row level security;
+drop policy if exists prescriptions_select on public.prescriptions;
+drop policy if exists prescriptions_insert on public.prescriptions;
+drop policy if exists prescriptions_update on public.prescriptions;
+drop policy if exists prescriptions_delete on public.prescriptions;
+create policy prescriptions_select on public.prescriptions for select to authenticated
+  using (public.has_role('owner', 'doctor', 'staff')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy prescriptions_insert on public.prescriptions for insert to authenticated
+  with check (public.has_role('owner', 'doctor'));
+create policy prescriptions_update on public.prescriptions for update to authenticated
+  using (public.has_role('owner', 'doctor'))
+  with check (public.has_role('owner', 'doctor'));
+create policy prescriptions_delete on public.prescriptions for delete to authenticated
+  using (public.has_role('owner', 'doctor'));
+
+-- lab_tests
+alter table public.lab_tests enable row level security;
+drop policy if exists lab_tests_select on public.lab_tests;
+drop policy if exists lab_tests_insert on public.lab_tests;
+drop policy if exists lab_tests_update on public.lab_tests;
+drop policy if exists lab_tests_delete on public.lab_tests;
+create policy lab_tests_select on public.lab_tests for select to authenticated
+  using (public.has_role('owner', 'doctor', 'staff', 'receptionist', 'accountant')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy lab_tests_insert on public.lab_tests for insert to authenticated
+  with check (public.has_role('owner', 'doctor', 'staff', 'receptionist'));
+create policy lab_tests_update on public.lab_tests for update to authenticated
+  using (public.has_role('owner', 'doctor', 'staff'))
+  with check (public.has_role('owner', 'doctor', 'staff'));
+create policy lab_tests_delete on public.lab_tests for delete to authenticated
+  using (public.has_role('owner'));
+
+-- wards
+alter table public.wards enable row level security;
+drop policy if exists wards_select on public.wards;
+drop policy if exists wards_insert on public.wards;
+drop policy if exists wards_update on public.wards;
+drop policy if exists wards_delete on public.wards;
+create policy wards_select on public.wards for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+create policy wards_insert on public.wards for insert to authenticated
+  with check (public.has_role('owner'));
+create policy wards_update on public.wards for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy wards_delete on public.wards for delete to authenticated
+  using (public.has_role('owner'));
+
+-- beds
+alter table public.beds enable row level security;
+drop policy if exists beds_select on public.beds;
+drop policy if exists beds_insert on public.beds;
+drop policy if exists beds_update on public.beds;
+drop policy if exists beds_delete on public.beds;
+create policy beds_select on public.beds for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+create policy beds_insert on public.beds for insert to authenticated
+  with check (public.has_role('owner'));
+create policy beds_update on public.beds for update to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'))
+  with check (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+create policy beds_delete on public.beds for delete to authenticated
+  using (public.has_role('owner'));
+
+-- admissions
+alter table public.admissions enable row level security;
+drop policy if exists admissions_select on public.admissions;
+drop policy if exists admissions_insert on public.admissions;
+drop policy if exists admissions_update on public.admissions;
+drop policy if exists admissions_delete on public.admissions;
+create policy admissions_select on public.admissions for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff', 'accountant'));
+create policy admissions_insert on public.admissions for insert to authenticated
+  with check (public.has_role('owner', 'receptionist', 'doctor'));
+create policy admissions_update on public.admissions for update to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'))
+  with check (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+create policy admissions_delete on public.admissions for delete to authenticated
+  using (public.has_role('owner'));
+
+-- invoices
+alter table public.invoices enable row level security;
+drop policy if exists invoices_select on public.invoices;
+drop policy if exists invoices_insert on public.invoices;
+drop policy if exists invoices_update on public.invoices;
+drop policy if exists invoices_delete on public.invoices;
+create policy invoices_select on public.invoices for select to authenticated
+  using (public.has_role('owner', 'accountant', 'receptionist')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy invoices_insert on public.invoices for insert to authenticated
+  with check (public.has_role('owner', 'accountant', 'receptionist'));
+create policy invoices_update on public.invoices for update to authenticated
+  using (public.has_role('owner', 'accountant', 'receptionist'))
+  with check (public.has_role('owner', 'accountant', 'receptionist'));
+create policy invoices_delete on public.invoices for delete to authenticated
+  using (public.has_role('owner', 'accountant'));
+
+-- payments
+alter table public.payments enable row level security;
+drop policy if exists payments_select on public.payments;
+drop policy if exists payments_insert on public.payments;
+drop policy if exists payments_update on public.payments;
+drop policy if exists payments_delete on public.payments;
+create policy payments_select on public.payments for select to authenticated
+  using (public.has_role('owner', 'accountant', 'receptionist')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy payments_insert on public.payments for insert to authenticated
+  with check (public.has_role('owner', 'accountant', 'receptionist'));
+create policy payments_update on public.payments for update to authenticated
+  using (public.has_role('owner', 'accountant'))
+  with check (public.has_role('owner', 'accountant'));
+create policy payments_delete on public.payments for delete to authenticated
+  using (public.has_role('owner', 'accountant'));
+
+-- expenses
+alter table public.expenses enable row level security;
+drop policy if exists expenses_select on public.expenses;
+drop policy if exists expenses_insert on public.expenses;
+drop policy if exists expenses_update on public.expenses;
+drop policy if exists expenses_delete on public.expenses;
+create policy expenses_select on public.expenses for select to authenticated
+  using (public.has_role('owner', 'accountant'));
+create policy expenses_insert on public.expenses for insert to authenticated
+  with check (public.has_role('owner', 'accountant'));
+create policy expenses_update on public.expenses for update to authenticated
+  using (public.has_role('owner', 'accountant'))
+  with check (public.has_role('owner', 'accountant'));
+create policy expenses_delete on public.expenses for delete to authenticated
+  using (public.has_role('owner', 'accountant'));
+
+-- inventory
+alter table public.inventory enable row level security;
+drop policy if exists inventory_select on public.inventory;
+drop policy if exists inventory_insert on public.inventory;
+drop policy if exists inventory_update on public.inventory;
+drop policy if exists inventory_delete on public.inventory;
+create policy inventory_select on public.inventory for select to authenticated
+  using (public.has_role('owner', 'staff', 'doctor', 'accountant'));
+create policy inventory_insert on public.inventory for insert to authenticated
+  with check (public.has_role('owner', 'staff'));
+create policy inventory_update on public.inventory for update to authenticated
+  using (public.has_role('owner', 'staff'))
+  with check (public.has_role('owner', 'staff'));
+create policy inventory_delete on public.inventory for delete to authenticated
+  using (public.has_role('owner'));
+
+-- notices
+alter table public.notices enable row level security;
+drop policy if exists notices_select on public.notices;
+drop policy if exists notices_insert on public.notices;
+drop policy if exists notices_update on public.notices;
+drop policy if exists notices_delete on public.notices;
+create policy notices_select on public.notices for select to authenticated
+  using ((public.has_role('owner') or (public.has_role('doctor', 'receptionist', 'accountant', 'staff') and (audience in ('all', 'staff') or (audience = 'doctors' and public.has_role('doctor')))))
+      or (public.has_role('patient') and audience in ('all', 'patients')));
+create policy notices_insert on public.notices for insert to authenticated
+  with check (public.has_role('owner'));
+create policy notices_update on public.notices for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy notices_delete on public.notices for delete to authenticated
+  using (public.has_role('owner'));
+
+-- site_enquiries
+alter table public.site_enquiries enable row level security;
+drop policy if exists site_enquiries_select on public.site_enquiries;
+drop policy if exists site_enquiries_insert on public.site_enquiries;
+drop policy if exists site_enquiries_update on public.site_enquiries;
+drop policy if exists site_enquiries_delete on public.site_enquiries;
+create policy site_enquiries_select on public.site_enquiries for select to authenticated
+  using (public.has_role('owner', 'receptionist'));
+create policy site_enquiries_insert on public.site_enquiries for insert to authenticated
+  with check (public.has_role('owner'));
+create policy site_enquiries_update on public.site_enquiries for update to authenticated
+  using (public.has_role('owner', 'receptionist'))
+  with check (public.has_role('owner', 'receptionist'));
+create policy site_enquiries_delete on public.site_enquiries for delete to authenticated
+  using (public.has_role('owner'));
+
+-- site_forms
+alter table public.site_forms enable row level security;
+drop policy if exists site_forms_select on public.site_forms;
+drop policy if exists site_forms_insert on public.site_forms;
+drop policy if exists site_forms_update on public.site_forms;
+drop policy if exists site_forms_delete on public.site_forms;
+create policy site_forms_select on public.site_forms for select to authenticated
+  using (public.has_role('owner', 'receptionist'));
+create policy site_forms_insert on public.site_forms for insert to authenticated
+  with check (public.has_role('owner'));
+create policy site_forms_update on public.site_forms for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy site_forms_delete on public.site_forms for delete to authenticated
+  using (public.has_role('owner'));
+
+-- doctor_leaves
+alter table public.doctor_leaves enable row level security;
+drop policy if exists doctor_leaves_select on public.doctor_leaves;
+drop policy if exists doctor_leaves_insert on public.doctor_leaves;
+drop policy if exists doctor_leaves_update on public.doctor_leaves;
+drop policy if exists doctor_leaves_delete on public.doctor_leaves;
+create policy doctor_leaves_select on public.doctor_leaves for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff'));
+create policy doctor_leaves_insert on public.doctor_leaves for insert to authenticated
+  with check (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'));
+create policy doctor_leaves_update on public.doctor_leaves for update to authenticated
+  using (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'))
+  with check (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'));
+create policy doctor_leaves_delete on public.doctor_leaves for delete to authenticated
+  using (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id() and status = 'pending'));
+
+-- holidays
+alter table public.holidays enable row level security;
+drop policy if exists holidays_select on public.holidays;
+drop policy if exists holidays_insert on public.holidays;
+drop policy if exists holidays_update on public.holidays;
+drop policy if exists holidays_delete on public.holidays;
+create policy holidays_select on public.holidays for select to authenticated
+  using (public.has_role('owner', 'receptionist', 'doctor', 'staff', 'accountant')
+      or (public.has_role('patient') and true));
+create policy holidays_insert on public.holidays for insert to authenticated
+  with check (public.has_role('owner', 'receptionist'));
+create policy holidays_update on public.holidays for update to authenticated
+  using (public.has_role('owner', 'receptionist'))
+  with check (public.has_role('owner', 'receptionist'));
+create policy holidays_delete on public.holidays for delete to authenticated
+  using (public.has_role('owner', 'receptionist'));
+
+-- audit_log
+alter table public.audit_log enable row level security;
+drop policy if exists audit_log_select on public.audit_log;
+drop policy if exists audit_log_insert on public.audit_log;
+drop policy if exists audit_log_update on public.audit_log;
+drop policy if exists audit_log_delete on public.audit_log;
+create policy audit_log_select on public.audit_log for select to authenticated
+  using (public.has_role('owner')
+      or (public.has_role('doctor') and actor_id = auth.uid())
+      or (public.has_role('receptionist') and actor_id = auth.uid())
+      or (public.has_role('accountant') and actor_id = auth.uid())
+      or (public.has_role('staff') and actor_id = auth.uid()));
+
+-- visit_feedback
+alter table public.visit_feedback enable row level security;
+drop policy if exists visit_feedback_select on public.visit_feedback;
+drop policy if exists visit_feedback_insert on public.visit_feedback;
+drop policy if exists visit_feedback_update on public.visit_feedback;
+drop policy if exists visit_feedback_delete on public.visit_feedback;
+create policy visit_feedback_select on public.visit_feedback for select to authenticated
+  using (public.has_role('owner', 'receptionist')
+      or (public.has_role('doctor') and doctor_id = public.my_doctor_id())
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy visit_feedback_insert on public.visit_feedback for insert to authenticated
+  with check (public.has_role('owner')
+      or (public.has_role('patient') and patient_id = public.my_patient_id()));
+create policy visit_feedback_update on public.visit_feedback for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy visit_feedback_delete on public.visit_feedback for delete to authenticated
+  using (public.has_role('owner'));
+
+-- staff_invites
+alter table public.staff_invites enable row level security;
+drop policy if exists staff_invites_select on public.staff_invites;
+drop policy if exists staff_invites_insert on public.staff_invites;
+drop policy if exists staff_invites_update on public.staff_invites;
+drop policy if exists staff_invites_delete on public.staff_invites;
+create policy staff_invites_select on public.staff_invites for select to authenticated
+  using (public.has_role('owner'));
+create policy staff_invites_insert on public.staff_invites for insert to authenticated
+  with check (public.has_role('owner'));
+create policy staff_invites_update on public.staff_invites for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy staff_invites_delete on public.staff_invites for delete to authenticated
+  using (public.has_role('owner'));
+
+-- notification_templates
+alter table public.notification_templates enable row level security;
+drop policy if exists notification_templates_select on public.notification_templates;
+drop policy if exists notification_templates_insert on public.notification_templates;
+drop policy if exists notification_templates_update on public.notification_templates;
+drop policy if exists notification_templates_delete on public.notification_templates;
+create policy notification_templates_select on public.notification_templates for select to authenticated
+  using (public.has_role('owner'));
+create policy notification_templates_insert on public.notification_templates for insert to authenticated
+  with check (public.has_role('owner'));
+create policy notification_templates_update on public.notification_templates for update to authenticated
+  using (public.has_role('owner'))
+  with check (public.has_role('owner'));
+create policy notification_templates_delete on public.notification_templates for delete to authenticated
+  using (public.has_role('owner'));
+-- <<< rbac
 
 commit;

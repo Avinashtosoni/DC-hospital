@@ -27,7 +27,7 @@ export const NAV: NavSection[] = [
   ] },
   { title: 'People', items: [
     { label: (r) => (r === 'patient' ? 'Find a Doctor' : 'Doctors'), path: '/doctors', icon: Stethoscope, roles: [...S, 'patient'] },
-    { label: 'Staff', path: '/staff', icon: UserCog, roles: ['owner', 'accountant', 'receptionist'] },
+    { label: 'Staff', path: '/staff', icon: UserCog, roles: ['owner', 'accountant'] },
     { label: 'Departments', path: '/departments', icon: Building2, roles: S },
   ] },
   { title: 'Finance', items: [

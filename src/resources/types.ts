@@ -48,6 +48,15 @@ export interface FieldDef {
   hidden?: (ctx: ResourceCtx, values: Record<string, any>, editing: boolean) => boolean
   readOnly?: (ctx: ResourceCtx, editing: boolean) => boolean
   min?: number
+  max?: number
+  /** number fields: whole numbers only (stock counts, years) */
+  integer?: boolean
+  /** tel fields: an Indian mobile number (10 digits, may start with +91 / 0) */
+  mobile?: boolean
+  /** date fields: not after today (date of birth, joining date…) */
+  notFuture?: boolean
+  /** date fields: not before the date in this other field (discharge ≥ admission, due ≥ issue…) */
+  notBefore?: { field: string; label: string }
 }
 
 export interface ColumnDef<R> {

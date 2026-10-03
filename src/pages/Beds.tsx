@@ -25,7 +25,9 @@ const bedsRes = defineResource({
   fields: [
     { name: 'ward_id', label: 'Ward', type: 'relation', required: true, relation: { table: 'wards', label: (w) => w.name } },
     { name: 'bed_number', label: 'Bed number', type: 'text', required: true, placeholder: 'e.g. GM-11' },
-    { name: 'status', label: 'Status', type: 'select', required: true, options: ['available', 'maintenance', 'reserved', 'occupied'].map((v) => ({ value: v, label: titleCase(v) })), default: () => 'available' },
+    { name: 'status', label: 'Status', type: 'select', required: true, options: ['available', 'maintenance', 'reserved'].map((v) => ({ value: v, label: titleCase(v) })), default: () => 'available',
+      // "occupied" is set only by admitting a patient (the database refuses it otherwise)
+      hidden: (_c, v) => v.status === 'occupied' },
   ],
 })
 

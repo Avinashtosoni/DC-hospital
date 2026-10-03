@@ -94,14 +94,14 @@ export const patientsRes = defineResource({
       default: (_c, rows: Patient[]) => `DCH-${Math.max(100000, ...rows.map((p) => Number(p.mrn?.replace(/\D/g, '')) || 0)) + 1}` },
     { name: 'full_name', label: 'Full name', type: 'text', required: true, placeholder: 'e.g. Anita Sharma' },
     { name: 'gender', label: 'Gender', type: 'select', required: true, options: opts('male', 'female', 'other') },
-    { name: 'date_of_birth', label: 'Date of birth', type: 'date' },
+    { name: 'date_of_birth', label: 'Date of birth', type: 'date', notFuture: true },
     { name: 'blood_group', label: 'Blood group', type: 'select', options: ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'].map((b) => ({ value: b, label: b })) },
-    { name: 'phone', label: 'Phone', type: 'tel', required: true, placeholder: '+91 98xxx xxxxx' },
+    { name: 'phone', label: 'Phone', type: 'tel', required: true, mobile: true, placeholder: '+91 98xxx xxxxx' },
     { name: 'email', label: 'Email', type: 'email' },
     { name: 'insurance_provider', label: 'Insurance provider', type: 'text', placeholder: 'Self pay' },
     { name: 'address', label: 'Address', type: 'text', span: 2 },
     { name: 'emergency_contact_name', label: 'Emergency contact', type: 'text' },
-    { name: 'emergency_contact_phone', label: 'Emergency phone', type: 'tel' },
+    { name: 'emergency_contact_phone', label: 'Emergency phone', type: 'tel', mobile: true },
     { name: 'allergies', label: 'Known allergies', type: 'text', span: 2, placeholder: 'e.g. Penicillin' },
     { name: 'status', label: 'Status', type: 'select', required: true, options: opts('outpatient', 'inpatient', 'discharged'), default: () => 'outpatient' },
   ],
@@ -221,7 +221,7 @@ export const prescriptionsRes = defineResource({
     patientField(),
     doctorField(),
     { name: 'prescribed_on', label: 'Date', type: 'date', required: true, default: () => today() },
-    { name: 'follow_up_date', label: 'Follow-up date', type: 'date' },
+    { name: 'follow_up_date', label: 'Follow-up date', type: 'date', notBefore: { field: 'prescribed_on', label: 'Prescription date' } },
     { name: 'diagnosis', label: 'Diagnosis', type: 'text', required: true, span: 2, placeholder: 'e.g. Viral fever' },
     { name: 'symptoms', label: 'Symptoms / complaints', type: 'text', span: 2 },
     { name: 'medications', label: 'Medicines', type: 'medications', required: true, default: () => [{ name: '', dosage: '1 tab', frequency: 'Twice daily', duration: '5 days' }] },
@@ -277,7 +277,7 @@ export const labTestsRes = defineResource({
     { name: 'status', label: 'Status', type: 'select', required: true, options: opts('requested', 'sample_collected', 'in_progress', 'completed', 'cancelled'), default: () => 'requested' },
     { name: 'price', label: 'Price (₹)', type: 'currency', required: true, min: 0, default: () => 500 },
     { name: 'requested_on', label: 'Requested on', type: 'date', required: true, default: () => today() },
-    { name: 'completed_on', label: 'Completed on', type: 'date', hidden: (_c, v) => v.status !== 'completed' },
+    { name: 'completed_on', label: 'Completed on', type: 'date', notFuture: true, notBefore: { field: 'requested_on', label: 'Request date' }, hidden: (_c, v) => v.status !== 'completed' },
     { name: 'result', label: 'Result / findings', type: 'textarea', hidden: (_c, v) => !['completed', 'in_progress'].includes(v.status) },
   ],
   beforeSave: (v) => (v.status === 'completed' && !v.completed_on ? { ...v, completed_on: today() } : v),
@@ -311,35 +311,29 @@ export const admissionsRes = defineResource({
   ],
   rowActions: (r, c) => [
     r.status === 'admitted' && c.role !== 'staff' && { label: 'Discharge patient', icon: LogOut, onClick: async () => {
+      // the database frees the bed and updates the patient in the same transaction (sync_admission)
       await c.patch('admissions', r.id, { status: 'discharged', discharge_date: today() })
-      if (r.bed_id) await c.patch('beds', r.bed_id, { status: 'available' })
-      await c.patch('patients', r.patient_id, { status: 'discharged' })
+      c.refresh('beds'); c.refresh('patients')
     } },
     { label: 'Patient profile', icon: Eye, onClick: () => c.navigate(`/patients/${r.patient_id}`) },
   ],
   fields: [
-    { ...patientField(), relation: { table: 'patients', label: (p: Patient) => `${p.full_name} · ${p.mrn}`, filter: (p: Patient) => p.status !== 'inpatient',
+    { ...patientField(), relation: { table: 'patients', label: (p: Patient) => `${p.full_name} · ${p.mrn}`, filter: (p: Patient, _c, v) => p.status !== 'inpatient' || p.id === v.patient_id,
       search: { ...PATIENT_SEARCH, where: (): Filter[] => [['status', 'neq', 'inpatient']] } } },
     doctorField(),
     { name: 'bed_id', label: 'Bed', type: 'relation', required: true,
-      relation: { table: 'beds', label: (b, c) => `${b.bed_number} · ${c.lk.wards.get(b.ward_id)?.name ?? ''}`, filter: (b) => b.status === 'available' },
+      relation: { table: 'beds', label: (b, c) => `${b.bed_number} · ${c.lk.wards.get(b.ward_id)?.name ?? ''}`, filter: (b, _c, v) => b.status === 'available' || b.id === v.bed_id },
       hint: 'Only available beds are listed' },
     { name: 'admission_date', label: 'Admission date', type: 'date', required: true, default: () => today() },
     { name: 'status', label: 'Status', type: 'select', required: true, options: opts('admitted', 'discharged'), default: () => 'admitted', hidden: (_c, _v, editing) => !editing },
-    { name: 'discharge_date', label: 'Discharge date', type: 'date', hidden: (_c, v) => v.status !== 'discharged' },
+    { name: 'discharge_date', label: 'Discharge date', type: 'date', notBefore: { field: 'admission_date', label: 'Admission date' }, hidden: (_c, v) => v.status !== 'discharged' },
     { name: 'reason', label: 'Reason for admission', type: 'text', required: true, span: 2 },
     { name: 'notes', label: 'Clinical notes', type: 'textarea' },
   ],
   beforeSave: (v) => (v.status === 'discharged' && !v.discharge_date ? { ...v, discharge_date: today() } : v.status === 'admitted' ? { ...v, discharge_date: null } : v),
-  afterSave: async (s: Admission, c, prev?: Admission) => {
-    if (prev?.bed_id && prev.bed_id !== s.bed_id) await c.patch('beds', prev.bed_id, { status: 'available' })
-    if (s.bed_id) await c.patch('beds', s.bed_id, { status: s.status === 'admitted' ? 'occupied' : 'available' })
-    await c.patch('patients', s.patient_id, { status: s.status === 'admitted' ? 'inpatient' : 'discharged' })
-  },
-  afterDelete: async (r: Admission, c) => {
-    if (r.status === 'admitted' && r.bed_id) await c.patch('beds', r.bed_id, { status: 'available' })
-    if (r.status === 'admitted') await c.patch('patients', r.patient_id, { status: 'outpatient' })
-  },
+  // bed + patient status are kept by the database (sync_admission / admissions_guard in scripts/sql) — just refetch
+  afterSave: (_s: Admission, c) => { c.refresh('beds'); c.refresh('patients') },
+  afterDelete: (_r: Admission, c) => { c.refresh('beds'); c.refresh('patients') },
 })
 
 // ================================================================== DOCTORS
@@ -377,7 +371,7 @@ export const doctorsRes = defineResource({
     { name: 'qualification', label: 'Qualification', type: 'text', placeholder: 'MBBS, MD' },
     { name: 'email', label: 'Email', type: 'email' },
     { name: 'phone', label: 'Phone', type: 'tel' },
-    { name: 'experience_years', label: 'Experience (years)', type: 'number', min: 0 },
+    { name: 'experience_years', label: 'Experience (years)', type: 'number', min: 0, max: 70, integer: true },
     { name: 'consultation_fee', label: 'Consultation fee (₹)', type: 'currency', required: true, min: 0, default: () => 700 },
     { name: 'shift', label: 'OPD timings', type: 'text', placeholder: '10:00 – 17:00' },
     { name: 'status', label: 'Status', type: 'select', required: true, options: opts('active', 'on_leave', 'inactive'), default: () => 'active' },
@@ -478,13 +472,23 @@ export const invoicesRes = defineResource({
       default: (_c, rows: Invoice[]) => `INV-${String(Math.max(10000, ...rows.map((i) => Number(i.invoice_number?.replace(/\D/g, '')) || 0)) + 1).padStart(5, '0')}` },
     { ...patientField(), hidden: () => false },
     { name: 'issue_date', label: 'Issue date', type: 'date', required: true, default: () => today() },
-    { name: 'due_date', label: 'Due date', type: 'date', default: () => format(addDays(new Date(), 15), 'yyyy-MM-dd') },
+    { name: 'due_date', label: 'Due date', type: 'date', notBefore: { field: 'issue_date', label: 'Issue date' }, default: () => format(addDays(new Date(), 15), 'yyyy-MM-dd') },
     { name: 'items', label: 'Line items', type: 'line_items', required: true, default: () => [{ description: 'Consultation fee', quantity: 1, unit_price: 700 }] },
     { name: 'discount', label: 'Discount (₹)', type: 'currency', min: 0, default: () => 0 },
     { name: 'tax', label: 'Tax / GST (₹)', type: 'currency', min: 0, default: () => 0 },
     { name: 'status', label: 'Status', type: 'select', required: true, options: opts('draft', 'unpaid', 'cancelled'), default: () => 'unpaid', hint: 'Paid / partial / overdue are set automatically from payments' },
     { name: 'notes', label: 'Notes', type: 'textarea' },
   ],
+  // the database recomputes and enforces the same (scripts/sql/integrity.sql) — these give the message before saving
+  validate: (v, _c, _rows, existing?: Invoice): Record<string, string> => {
+    const subtotal = (v.items ?? []).reduce((s: number, it: { quantity: number; unit_price: number }) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
+    const total = subtotal - (Number(v.discount) || 0) + (Number(v.tax) || 0)
+    const paid = existing?.amount_paid ?? 0
+    if (total < 0) return { discount: 'The discount is larger than the bill' }
+    if (paid > 0 && total < paid) return { items: `The total (${money(total)}) cannot be less than what has already been paid (${money(paid)})` }
+    if (paid > 0 && ['draft', 'cancelled'].includes(v.status)) return { status: `This bill already has payments of ${money(paid)} — it cannot be ${v.status === 'draft' ? 'a draft' : 'cancelled'}` }
+    return {}
+  },
   beforeSave: (v, _c, existing?: Invoice) => {
     const subtotal = (v.items ?? []).reduce((s: number, it: { quantity: number; unit_price: number }) => s + it.quantity * it.unit_price, 0)
     const discount = Number(v.discount) || 0
@@ -529,9 +533,19 @@ export const paymentsRes = defineResource({
         search: { columns: ['invoice_number'], order: 'invoice_number', where: (): Filter[] => [['status', 'in', ['unpaid', 'partial', 'overdue']]] } } },
     { name: 'amount', label: 'Amount (₹)', type: 'currency', required: true, min: 1 },
     { name: 'method', label: 'Method', type: 'select', required: true, options: [...opts('cash', 'card', 'insurance', 'bank_transfer'), { value: 'upi', label: 'UPI' }], default: () => 'upi' },
-    { name: 'paid_on', label: 'Payment date', type: 'date', required: true, default: () => today() },
+    { name: 'paid_on', label: 'Payment date', type: 'date', required: true, notFuture: true, default: () => today() },
     { name: 'reference', label: 'Reference / Txn ID', type: 'text' },
   ],
+  validate: async (v, c, _rows, existing): Promise<Record<string, string>> => {
+    const amount = Number(v.amount)
+    if (Math.round(amount * 100) !== amount * 100) return { amount: 'Use at most 2 decimals (paise)' }
+    // the database checks the balance under a lock too; this just says it before saving
+    const inv = c.lk.invoices.get(v.invoice_id) ?? (v.invoice_id ? (await db.query('invoices', { where: [['id', 'eq', v.invoice_id]] }).catch(() => null))?.rows[0] : undefined)
+    if (!inv) return {}
+    if (['draft', 'cancelled'].includes(inv.status)) return { invoice_id: `Invoice ${inv.invoice_number} is ${inv.status} — it cannot take payments` }
+    const due = invoiceBalance(inv) + (existing?.invoice_id === inv.id ? Number(existing.amount) : 0)
+    return amount > due + 0.001 ? { amount: `More than the balance due (${money(due)})` } : {}
+  },
   afterSave: (_s, c) => refreshInvoices(c),
   afterDelete: (_r, c) => refreshInvoices(c),
 })
@@ -600,9 +614,9 @@ export const inventoryRes = defineResource({
     { name: 'name', label: 'Item name', type: 'text', required: true, span: 2 },
     { name: 'sku', label: 'SKU', type: 'text', required: true },
     { name: 'category', label: 'Category', type: 'select', required: true, options: opts('medicine', 'consumable', 'surgical', 'equipment'), default: () => 'medicine' },
-    { name: 'quantity', label: 'Quantity in stock', type: 'number', required: true, min: 0, default: () => 0 },
+    { name: 'quantity', label: 'Quantity in stock', type: 'number', required: true, min: 0, integer: true, default: () => 0 },
     { name: 'unit', label: 'Unit', type: 'text', required: true, default: () => 'tablets' },
-    { name: 'reorder_level', label: 'Reorder level', type: 'number', required: true, min: 0, default: () => 50 },
+    { name: 'reorder_level', label: 'Reorder level', type: 'number', required: true, min: 0, integer: true, default: () => 50 },
     { name: 'unit_price', label: 'Unit price (₹)', type: 'currency', required: true, min: 0 },
     { name: 'supplier', label: 'Supplier', type: 'text' },
     { name: 'expiry_date', label: 'Expiry date', type: 'date' },
@@ -735,7 +749,7 @@ export const leavesRes = defineResource({
     { name: 'kind', label: 'Type', type: 'select', required: true, options: Object.entries(LEAVE_LABEL).map(([value, label]) => ({ value, label })), default: () => 'leave' },
     { name: 'status', label: 'Status', type: 'select', required: true, options: opts('pending', 'approved', 'rejected'), default: (c) => (isDoctor(c) ? 'pending' : 'approved'), hidden: (c) => isDoctor(c), hint: 'Only approved entries close slots' },
     { name: 'start_date', label: 'From', type: 'date', required: true, default: () => today() },
-    { name: 'end_date', label: 'To', type: 'date', hint: 'Leave empty for a single day' },
+    { name: 'end_date', label: 'To', type: 'date', notBefore: { field: 'start_date', label: 'From date' }, hint: 'Leave empty for a single day' },
     { name: 'start_time', label: 'Block from', type: 'select', options: [{ value: '', label: 'Full day' }, ...TIME_OPTS], hint: 'Pick times to block part of the day (e.g. surgery 10–1)', hidden: (_c, v) => v.kind === 'leave' },
     { name: 'end_time', label: 'Block until', type: 'select', options: [{ value: '', label: '—' }, ...TIMES.slice(1).concat('19:00').map((t) => ({ value: t, label: fmtTime(t) }))], hidden: (_c, v) => v.kind === 'leave' || !v.start_time },
     { name: 'reason', label: 'Reason / note', type: 'textarea', placeholder: 'e.g. Knee replacement — OT 2 · Family function · CME at AIIMS' },

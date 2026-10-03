@@ -17,7 +17,8 @@ export const PERMISSIONS: Record<TableName, Matrix> = {
   profiles:      { owner: ALL },
   departments:   { owner: ALL, doctor: R, receptionist: R, accountant: R, staff: R, patient: R },
   doctors:       { owner: ALL, receptionist: RU, doctor: R, accountant: R, staff: R, patient: R },
-  staff:         { owner: ALL, accountant: R, receptionist: R },
+  // HR / payroll (salaries): owner + accountant only
+  staff:         { owner: ALL, accountant: R },
   // patients may edit their own contact details (a trigger keeps MRN / status / links read-only for them)
   patients:      { owner: ALL, receptionist: RCU, doctor: RU, staff: RU, accountant: R, patient: RU },
   appointments:  { owner: ALL, receptionist: ALL, doctor: RCU, staff: R, patient: RCU },

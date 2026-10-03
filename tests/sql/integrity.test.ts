@@ -134,3 +134,21 @@ describe('lab tests', () => {
     expect(await db.one(null, `select completed_on from public.lab_tests where id = $1`, [t.id])).toMatchObject({ completed_on: null })
   })
 })
+
+describe('salaries are private', () => {
+  test('only the owner and the accountant can read the staff (payroll) table', async () => {
+    expect((await db.as(USER.owner, `select salary from public.staff`)).length).toBeGreaterThan(0)
+    expect((await db.as(USER.accountant, `select salary from public.staff`)).length).toBeGreaterThan(0)
+    for (const u of [USER.receptionist, USER.doctor, USER.staff, USER.patient]) expect(await db.as(u, `select salary from public.staff`)).toEqual([])
+  })
+})
+
+describe('licence dates are not public', () => {
+  test('anyone may ask whether a hospital is open, but not its trial / paid / purge dates', async () => {
+    const t = await db.one<{ id: string }>(null, `select id from public.tenants where id <> $1 limit 1`, [B])
+    expect(await db.one(USER.patient, `select public.tenant_license($1) s`, [t.id])).toHaveProperty('s')
+    await expect(db.as(USER.patient, `select public.tenant_license_dates($1)`, [B])).rejects.toThrow(/permission denied/)
+    // the owner still gets them for the banner, through my_context()
+    expect(await db.one<{ c: Record<string, unknown> }>(USER.owner, `select public.my_context() c`)).toMatchObject({ c: { license: expect.objectContaining({ status: expect.any(String) }) } })
+  })
+})
