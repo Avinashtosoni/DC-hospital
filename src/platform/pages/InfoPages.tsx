@@ -3,7 +3,7 @@ import { safeUrl } from '../../lib/safeUrl'
 import { cn } from '../../lib/utils'
 import { iconFor } from '../../site/cms/icons'
 import { PLANS } from '../plans'
-import { A, CtaBand, FaqList, IconCard, PageHero, Section, SectionHead, useSeo } from '../site/ui'
+import { A, CtaBand, FaqList, IconCard, PageHero, Section, SectionHead, StepsTimeline, useSeo } from '../site/ui'
 import type { PlatformSite } from '../site/types'
 import { ContactForm, PlanCards } from './shared'
 
@@ -43,8 +43,30 @@ export function FeaturesPage({ site }: P) {
           )
         })}
       </div>
-      {c.extras.items.length > 0 && (
+      {c.journey.items.length > 0 && (
         <Section>
+          <SectionHead h={c.journey} />
+          <div className="mt-12"><StepsTimeline items={c.journey.items} /></div>
+        </Section>
+      )}
+      {c.byRole.items.length > 0 && (
+        <Section className="!pt-0">
+          <SectionHead h={c.byRole} />
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {c.byRole.items.map((r) => {
+              const Icon = iconFor(r.icon)
+              return (
+                <div key={r.name} className="rounded-3xl border border-peri-200/80 bg-white p-6 shadow-soft">
+                  <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#CCCCFF] text-peri-900"><Icon className="h-5 w-5" /></span><h3 className="font-display text-lg font-bold text-peri-900">{r.name}</h3></div>
+                  <ul className="mt-4 space-y-2">{r.points.map((p) => <li key={p} className="flex gap-2.5 text-sm text-slate-700"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-peri-600" />{p}</li>)}</ul>
+                </div>
+              )
+            })}
+          </div>
+        </Section>
+      )}
+      {c.extras.items.length > 0 && (
+        <Section className="!pt-0">
           <SectionHead h={c.extras} />
           <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{c.extras.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
         </Section>
@@ -63,6 +85,20 @@ export function PricingPage({ site }: P) {
       <PageHero h={c.heading} />
       <div className="l-container pb-6"><PlanCards /></div>
       {c.note && <p className="l-container mx-auto max-w-3xl pb-6 text-center text-sm text-slate-500">{c.note}</p>}
+      {c.included.items.length > 0 && (
+        <Section className="!pb-0">
+          <div className="rounded-[2rem] bg-[#292966] p-6 text-white sm:p-10">
+            <div className="grid gap-8 lg:grid-cols-[1fr_2fr] lg:items-center">
+              <div>
+                {c.included.eyebrow && <p className="text-xs font-bold uppercase tracking-[.18em] text-[#CCCCFF]">{c.included.eyebrow}</p>}
+                <h2 className="mt-2 font-display text-3xl font-extrabold">{c.included.title}</h2>
+                {c.included.lead && <p className="mt-3 text-[#CCCCFF]">{c.included.lead}</p>}
+              </div>
+              <ul className="grid gap-3 sm:grid-cols-2">{c.included.items.map((t) => <li key={t} className="flex gap-2.5 text-sm"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />{t}</li>)}</ul>
+            </div>
+          </div>
+        </Section>
+      )}
       {c.compare.rows.length > 0 && (
         <Section>
           <h2 className="text-center font-display text-3xl font-extrabold text-peri-900">{c.compare.title}</h2>
@@ -149,6 +185,18 @@ export function SolutionsPage({ site }: P) {
           )
         })}
       </div>
+      {c.specialities.items.length > 0 && (
+        <Section>
+          <SectionHead h={c.specialities} />
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{c.specialities.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
+        </Section>
+      )}
+      {c.switching.items.length > 0 && (
+        <Section className="!pt-0">
+          <SectionHead h={c.switching} />
+          <div className="mt-12"><StepsTimeline items={c.switching.items} /></div>
+        </Section>
+      )}
       <CtaBand cta={c.cta} />
     </>
   )
@@ -172,6 +220,31 @@ export function SecurityPage({ site }: P) {
           <p className="mt-6 text-center text-sm text-slate-500">
             Read our <A to="/legal/privacy" className="font-medium text-peri-700 underline underline-offset-2">Privacy Policy</A>, <A to="/legal/dpa" className="font-medium text-peri-700 underline underline-offset-2">Data Processing Agreement</A> and <A to="/legal/sla" className="font-medium text-peri-700 underline underline-offset-2">Service Levels</A>.
           </p>
+        </Section>
+      )}
+      {c.access.rows.length > 0 && (
+        <Section className="!pt-0">
+          <SectionHead h={c.access} />
+          <div className="mt-10 overflow-x-auto rounded-[1.5rem] border border-peri-200/80 bg-white shadow-soft">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead><tr className="border-b border-peri-100 bg-peri-50/60 text-left"><th scope="col" className="px-5 py-4 font-semibold text-peri-900">Role</th><th scope="col" className="px-5 py-4 font-semibold text-peri-900">Can see & do</th><th scope="col" className="px-5 py-4 font-semibold text-peri-900">Can’t</th></tr></thead>
+              <tbody>
+                {c.access.rows.map((r) => (
+                  <tr key={r.role} className="border-b border-peri-100 align-top last:border-0">
+                    <th scope="row" className="whitespace-nowrap px-5 py-3.5 text-left font-semibold text-peri-900">{r.role}</th>
+                    <td className="px-5 py-3.5 text-slate-700">{r.can}</td>
+                    <td className="px-5 py-3.5 text-slate-500">{r.cannot}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+      {c.faqs.length > 0 && (
+        <Section className="!pt-0">
+          <h2 className="text-center font-display text-3xl font-extrabold text-peri-900">Security questions</h2>
+          <div className="mx-auto mt-10 max-w-3xl"><FaqList items={c.faqs} /></div>
         </Section>
       )}
       {c.note && <p className="l-container mx-auto max-w-2xl pb-4 text-center text-sm text-slate-600">{c.note}</p>}
@@ -205,6 +278,19 @@ export function AboutPage({ site }: P) {
         <Section className="!pt-0">
           <SectionHead h={c.values} />
           <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{c.values.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
+        </Section>
+      )}
+      {c.approach.items.length > 0 && (
+        <Section className="!pt-0">
+          <SectionHead h={c.approach} />
+          <div className="mt-12 grid gap-4 sm:grid-cols-2">
+            {c.approach.items.map((a, i) => (
+              <div key={a.title} className="flex gap-4 rounded-3xl border border-peri-200/80 bg-white p-6 shadow-soft">
+                <span className="font-display text-3xl font-extrabold text-peri-300">{String(i + 1).padStart(2, '0')}</span>
+                <div><h3 className="font-display text-lg font-bold text-peri-900">{a.title}</h3><p className="mt-1.5 text-sm leading-relaxed text-slate-600">{a.text}</p></div>
+              </div>
+            ))}
+          </div>
         </Section>
       )}
       {c.team.items.length > 0 && (
@@ -260,6 +346,17 @@ export function ContactPage({ site, plan }: P & { plan: string | null }) {
         </aside>
         <ContactForm plan={plan} title={c.formTitle} thanks={c.thanks} />
       </div>
+      {c.next.items.length > 0 && (
+        <Section className="!pt-0">
+          <SectionHead h={c.next} />
+          <div className="mt-10"><StepsTimeline items={c.next.items} /></div>
+        </Section>
+      )}
+      {c.faqs.length > 0 && (
+        <Section className="!pt-0">
+          <div className="mx-auto max-w-3xl"><FaqList items={c.faqs} /></div>
+        </Section>
+      )}
       {map && (
         <div className="l-container pb-16">
           <iframe src={map} title="Office location" loading="lazy" referrerPolicy="no-referrer-when-downgrade" className="h-80 w-full rounded-[2rem] border border-peri-200/80" />

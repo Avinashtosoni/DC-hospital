@@ -8,6 +8,7 @@ export interface Seo { title: string; description: string; image?: string }
 export interface Heading { eyebrow: string; title: string; lead: string }
 export interface IconItem { icon: string; title: string; text: string }
 export interface QA { q: string; a: string }
+export interface Step { title: string; text: string }
 export interface Cta { title: string; lead: string; button: string; link: string }
 
 export interface BrandContent {
@@ -28,8 +29,11 @@ export interface HomeContent {
   hero: { badge: string; title: string; lead: string; primary: string; secondary: string; note: string; image: string }
   stats: { value: string; label: string }[]
   roles: { title: string; items: { name: string; text: string }[] }
+  problems: Heading & { before: string[]; after: string[] }
   highlights: Heading & { items: IconItem[] }
   steps: { items: { title: string; text: string }[] }
+  india: Heading & { items: IconItem[] }
+  integrations: { title: string; items: string[] }
   website: Heading & { points: string[]; image: string }
   pricing: Heading
   testimonials: Heading & { items: { quote: string; name: string; role: string; photo: string }[] }
@@ -41,6 +45,8 @@ export interface FeaturesContent {
   seo: Seo
   heading: Heading
   modules: { icon: string; title: string; summary: string; points: string[]; image: string }[]
+  journey: Heading & { items: Step[] }
+  byRole: Heading & { items: { name: string; icon: string; points: string[] }[] }
   extras: Heading & { items: IconItem[] }
   cta: Cta
 }
@@ -49,6 +55,7 @@ export interface PricingContent {
   seo: Seo
   heading: Heading
   note: string
+  included: Heading & { items: string[] }
   compare: { title: string; rows: { feature: string; clinic: string; hospital: string; enterprise: string }[] }
   addons: Heading & { items: { title: string; price: string; text: string }[] }
   faqs: QA[]
@@ -59,6 +66,8 @@ export interface SolutionsContent {
   seo: Seo
   heading: Heading
   items: { icon: string; title: string; lead: string; points: string[]; plan: string; image: string }[]
+  specialities: Heading & { items: IconItem[] }
+  switching: Heading & { items: Step[] }
   cta: Cta
 }
 
@@ -67,6 +76,8 @@ export interface SecurityContent {
   heading: Heading
   items: IconItem[]
   compliance: Heading & { points: string[] }
+  access: Heading & { rows: { role: string; can: string; cannot: string }[] }
+  faqs: QA[]
   note: string
   cta: Cta
 }
@@ -79,6 +90,7 @@ export interface AboutContent {
   mission: { title: string; text: string }
   vision: { title: string; text: string }
   values: Heading & { items: IconItem[] }
+  approach: Heading & { items: Step[] }
   team: Heading & { items: { name: string; role: string; photo: string; bio: string }[] }
   cta: Cta
 }
@@ -89,6 +101,8 @@ export interface ContactContent {
   formTitle: string
   thanks: string
   mapUrl: string
+  next: Heading & { items: Step[] }
+  faqs: QA[]
 }
 
 export interface FaqContent { seo: Seo; heading: Heading; groups: { title: string; items: QA[] }[]; cta: Cta }

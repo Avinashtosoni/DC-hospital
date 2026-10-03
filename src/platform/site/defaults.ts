@@ -53,6 +53,26 @@ export function defaultSite(): PlatformSite {
           { name: 'Patient', text: 'Booking, reports, bills' },
         ],
       },
+      problems: {
+        eyebrow: 'Why switch', title: 'From registers and rush to *calm, connected care*',
+        lead: 'Most hospitals juggle paper registers, a separate billing program, WhatsApp groups and a website nobody updates. {platform} replaces all of it.',
+        before: [
+          'Patients queue at the desk because nobody knows which slots are free',
+          'Doctors flip through old files to find last visit’s prescription',
+          'Bills are typed twice and dues are tracked in a notebook',
+          'Reminders depend on someone remembering to call',
+          'The owner sees the day’s collection only at closing time',
+          'The website still shows doctors who left two years ago',
+        ],
+        after: [
+          'Live doctor calendars — patients book online or at the desk in seconds',
+          'Every visit, vital and prescription on one patient record',
+          'Bills generated from the visit, with UPI / card / cash and automatic receipts',
+          'WhatsApp and SMS confirmations and reminders go out on their own',
+          'Revenue, footfall and dues on the owner’s phone, in real time',
+          'Website updated from the dashboard — doctors and slots always current',
+        ],
+      },
       highlights: {
         eyebrow: 'Features', title: 'Everything a hospital runs on',
         lead: 'No more registers, spreadsheets and five different apps. Every department works on the same live data.',
@@ -73,6 +93,21 @@ export function defaultSite(): PlatformSite {
           { title: 'We set you up', text: 'Your hospital, staff logins and website, on your own domain with SSL.' },
           { title: 'Go live', text: 'Import your patients, invite your team and start booking.' },
         ],
+      },
+      india: {
+        eyebrow: 'Made for India', title: 'Built around how *Indian hospitals* actually work', lead: 'Not a foreign product with a rupee sign added — designed for Indian patients, staff, payments and rules from day one.',
+        items: [
+          { icon: 'Wallet', title: 'UPI, cards & cash', text: 'Take payments the way patients pay — UPI, card, cash or part-payment — with instant receipts.' },
+          { icon: 'FileCheck2', title: 'GST-ready billing', text: 'Bills with your hospital’s GSTIN and tax details — and a proper GST tax invoice for every subscription payment you make.' },
+          { icon: 'Phone', title: 'WhatsApp first', text: 'Patients in India live on WhatsApp — confirmations, reminders and reports go there, with SMS as backup.' },
+          { icon: 'ShieldCheck', title: 'DPDP Act ready', text: 'Consent records, patient data requests and a Grievance Officer flow for the Digital Personal Data Protection Act, 2023.' },
+          { icon: 'Users', title: 'Hindi & English support', text: 'Talk to people who understand hospitals in Bihar, UP, Delhi or Kerala — in the language you prefer.' },
+          { icon: 'MonitorDot', title: 'Works on low bandwidth', text: 'A light app that runs on an ordinary laptop or phone, even on a slow connection.' },
+        ],
+      },
+      integrations: {
+        title: 'Works with the services you already use',
+        items: ['WhatsApp', 'SMS (DLT)', 'E-mail', 'Razorpay', 'UPI', 'Google Maps', 'Cloudflare SSL', 'Excel / CSV import'],
       },
       website: {
         eyebrow: 'Hospital website included', title: 'A website patients *actually book from*',
@@ -95,6 +130,8 @@ export function defaultSite(): PlatformSite {
           { q: 'Can I use my own domain?', a: 'Yes. Your website and dashboard run on your own domain (for example www.yourhospital.in). We give you one DNS record to add and handle the SSL certificate for you.' },
           { q: 'Is my hospital’s data separate from other hospitals?', a: 'Yes. Every hospital’s data is isolated in the database itself, each staff member only sees what their role allows, and sensitive actions are logged.' },
           { q: 'Can you move my data from my old software?', a: 'Yes — patients, doctors and other masters can be imported. Enterprise plans include assisted migration.' },
+          { q: 'What if my internet goes down?', a: 'The app is light and recovers the moment you are back online. Many hospitals keep a mobile hotspot as backup — the app works the same on a phone connection.' },
+          { q: 'How long is the free trial?', a: 'Long enough to set up your doctors and try real bookings. No card is needed, and you can ask us to extend it if you need more time.' },
         ],
       },
       cta: cta('Ready to run your hospital on one system?', 'Start a free trial today — no card needed. Or talk to us and we’ll set everything up for you.'),
@@ -128,7 +165,41 @@ export function defaultSite(): PlatformSite {
         { icon: 'Users', title: 'Staff & roles', summary: 'Everyone sees only what they need.', image: '', points: [
           'Owner, doctor, receptionist, accountant, staff and patient roles', 'Invite staff by link; remove access in one click',
           'Audit log of sensitive actions', 'Salaries visible only to owner and accounts'] },
+        { icon: 'Smile', title: 'Patient portal', summary: 'Patients help themselves.', image: '', points: [
+          'Book appointments online', 'See prescriptions, lab reports and bills', 'Works on any phone — no app to install',
+          'Fewer calls to reception for “is my report ready?”'] },
+        { icon: 'CalendarDays', title: 'Doctor schedules, leaves & holidays', summary: 'No more double bookings.', image: '', points: [
+          'Weekly timings per doctor with slot length', 'Leaves and hospital holidays block booking automatically',
+          'Walk-in queue alongside booked slots', 'Doctors see their day on the phone'] },
+        { icon: 'ClipboardCheck', title: 'Feedback, notices & enquiries', summary: 'Listen, inform, follow up.', image: '', points: [
+          'Feedback request after the visit, with ratings for the owner', 'Notices for staff',
+          'Website enquiries and custom forms in one inbox', 'Star, note and close each enquiry'] },
+        { icon: 'FileText', title: 'Data export & backups', summary: 'Your data is always yours.', image: '', points: [
+          'Full export of your hospital’s data as a ZIP, any time', 'Excel / CSV exports from every list',
+          'Automatic daily backups', 'Import patients and doctors from your old software'] },
       ],
+      journey: {
+        eyebrow: 'A patient’s day', title: 'One record follows the patient *from booking to follow-up*', lead: 'Every step updates the same record, so nobody re-types anything and nothing gets lost between desks.',
+        items: [
+          { title: 'Books', text: 'Online with OTP, on WhatsApp, or at the reception desk — the slot is held instantly.' },
+          { title: 'Gets reminded', text: 'Confirmation and a reminder before the visit, on WhatsApp or SMS.' },
+          { title: 'Checks in', text: 'Reception marks arrival; the doctor sees who is waiting.' },
+          { title: 'Consults', text: 'Vitals, notes, prescription and lab orders on one screen; prescription printed or shared.' },
+          { title: 'Pays', text: 'The bill is built from the visit; UPI, card or cash; receipt on WhatsApp.' },
+          { title: 'Comes back', text: 'Reports in the portal, a feedback request, and easy re-booking for the follow-up.' },
+        ],
+      },
+      byRole: {
+        eyebrow: 'For every role', title: 'Each person sees *exactly what they need*', lead: 'Simple screens for each job — and nothing they shouldn’t see.',
+        items: [
+          { name: 'Owner', icon: 'Award', points: ['Live revenue, collections and dues', 'Doctor and department performance', 'Staff, roles and settings', 'Website and messaging control'] },
+          { name: 'Doctor', icon: 'Stethoscope', points: ['Today’s queue and schedule', 'Patient history at a glance', 'Prescriptions in under a minute', 'Lab orders and results'] },
+          { name: 'Reception', icon: 'CalendarCheck', points: ['Book, check in and reschedule fast', 'Register new patients in seconds', 'Bed availability', 'Website enquiries'] },
+          { name: 'Accounts', icon: 'Wallet', points: ['Bills, payments and receipts', 'Dues follow-up', 'Expenses and daily collection', 'Exports for your CA'] },
+          { name: 'Staff', icon: 'FlaskConical', points: ['Lab results entry', 'Inventory and stock alerts', 'Tasks and notices', 'Only the screens they need'] },
+          { name: 'Patient', icon: 'Smile', points: ['Online booking', 'Prescriptions and reports', 'Bills and payments', 'Reminders on WhatsApp'] },
+        ],
+      },
       extras: {
         eyebrow: 'Also included', title: 'The small things that save hours', lead: '',
         items: [
@@ -136,6 +207,10 @@ export function defaultSite(): PlatformSite {
           { icon: 'ShieldCheck', title: 'Secure by design', text: 'Data isolated per hospital, role-based access and encrypted connections.' },
           { icon: 'Clock', title: 'Daily backups', text: 'Automatic backups and a full export whenever you want it.' },
           { icon: 'HeartHandshake', title: 'Indian support team', text: 'Help in English and Hindi on working days.' },
+          { icon: 'Lightbulb', title: 'Regular updates', text: 'New features arrive automatically — no reinstalling, no upgrade fees.' },
+          { icon: 'Globe2', title: 'Your own domain', text: 'Website and dashboard on your hospital’s address, with free SSL.' },
+          { icon: 'Timer', title: 'Fast everywhere', text: 'Pages load quickly even on mobile data — patients don’t wait.' },
+          { icon: 'Accessibility', title: 'Accessible', text: 'Readable fonts, keyboard navigation and screen-reader labels.' },
         ],
       },
       cta: cta('See it with your own hospital’s data', 'Start a free trial and set up your doctors in minutes.'),
@@ -145,6 +220,14 @@ export function defaultSite(): PlatformSite {
       seo: { title: 'Pricing', description: '{platform} plans: Clinic ₹999, Hospital ₹2,999 and Enterprise from ₹7,999 per month. Free trial, no card. Your website, SSL, backups and updates included.' },
       heading: { eyebrow: 'Pricing', title: 'Simple, *honest* pricing', lead: 'Per hospital, per month. Prices exclude GST. Every plan includes your website, SSL certificate, backups and updates.' },
       note: 'Yearly billing available. Need a different mix of modules? Choose Custom and we’ll quote for exactly what you use.',
+      included: {
+        eyebrow: 'In every plan', title: 'No hidden extras', lead: 'These come with every plan, from Clinic to Enterprise.',
+        items: [
+          'Hospital website on your own domain', 'Free SSL certificate', 'Daily automatic backups', 'Full data export any time',
+          'All updates and new features', 'Patient portal', 'Role-based staff logins', 'GST tax invoice for every payment',
+          'Data Processing Agreement (DPDP)', 'Support by e-mail',
+        ],
+      },
       compare: {
         title: 'Compare plans',
         rows: [
@@ -176,6 +259,10 @@ export function defaultSite(): PlatformSite {
         { q: 'What happens when the trial ends?', a: 'Choose a plan to continue. If you don’t, the account becomes read-only after a short grace period — you can still sign in and export everything.' },
         { q: 'Do prices include GST?', a: 'No, prices are before GST. You get a GST tax invoice for every payment.' },
         { q: 'Can I change plans later?', a: 'Yes, upgrade or downgrade any time from Billing & plan.' },
+        { q: 'Is there a setup fee?', a: 'No. Self-service setup is free. Enterprise onboarding, on-site training and assisted data migration can be quoted separately if you want them.' },
+        { q: 'Do you charge per doctor or per user?', a: 'No — plans are per hospital. Add the staff you need; Enterprise raises the limits for very large teams.' },
+        { q: 'How do messages work?', a: 'Each plan includes a monthly number of WhatsApp, SMS and e-mail messages on our shared accounts. Beyond that, messages are charged from a prepaid wallet — or connect your own provider.' },
+        { q: 'Do you offer a yearly discount?', a: 'Yes. A yearly plan costs fewer months than paying monthly — see Billing & plan inside the app for the current offer.' },
       ],
       cta: cta('Start free — upgrade when you’re ready', 'No card, no setup fee. Your website and dashboard in a day.'),
     },
@@ -192,7 +279,33 @@ export function defaultSite(): PlatformSite {
           'Admissions with bed and ward tracking', 'Itemised IPD bills with part-payments', 'Health packages on your website', 'Feedback forms after discharge'] },
         { icon: 'Award', title: 'Hospital groups & chains', lead: 'Scale with confidence.', plan: 'enterprise', image: '', points: [
           'Higher limits for doctors, staff and data', 'Assisted migration from your old software', 'WhatsApp booking bot', 'Priority support and onboarding'] },
+        { icon: 'Microscope', title: 'Diagnostic centres & labs', lead: 'Orders in, reports out — on time.', plan: 'hospital', image: '', points: [
+          'Test orders linked to the patient record', 'Results entered once and shared in the portal', 'Health packages with online booking', 'Bills and dues for every test'] },
+        { icon: 'Video', title: 'Day-care & speciality centres', lead: 'Planned procedures, smooth paperwork.', plan: 'hospital', image: '', points: [
+          'Pre-booked procedures with reminders', 'Short-stay admissions and discharge', 'Itemised procedure billing', 'Feedback after every visit'] },
       ],
+      specialities: {
+        eyebrow: 'Specialities', title: 'Ready for *every speciality*', lead: 'Departments, doctors and services are yours to define — the same system adapts to how each speciality works.',
+        items: [
+          { icon: 'HeartPulse', title: 'Cardiology', text: 'Follow-up schedules and long-term patient history.' },
+          { icon: 'Baby', title: 'Paediatrics & maternity', text: 'Family records, appointment reminders and IPD stays.' },
+          { icon: 'Bone', title: 'Orthopaedics', text: 'Procedures, admissions and physiotherapy follow-ups.' },
+          { icon: 'Eye', title: 'Eye care', text: 'Quick OPD flow, prescriptions and repeat visits.' },
+          { icon: 'Smile', title: 'Dental', text: 'Multi-sitting treatments with part-payments.' },
+          { icon: 'Brain', title: 'Neurology & psychiatry', text: 'Private notes and careful, role-based access.' },
+          { icon: 'Microscope', title: 'Pathology & radiology', text: 'Test orders, results and report sharing.' },
+          { icon: 'Stethoscope', title: 'General medicine', text: 'High-volume OPD with walk-ins and booked slots.' },
+        ],
+      },
+      switching: {
+        eyebrow: 'Switching is easy', title: 'Live in days, *not months*', lead: 'No servers to buy, no long implementation project.',
+        items: [
+          { title: 'Day 1 — Set up', text: 'Create your hospital, add departments, doctors and timings. Your website goes live on a temporary address.' },
+          { title: 'Day 2 — Bring your data', text: 'Import patients and doctors from Excel or your old software. Invite your staff with their own logins.' },
+          { title: 'Day 3 — Train & test', text: 'Reception and doctors try real bookings and bills. We answer questions as they come.' },
+          { title: 'Go live', text: 'Point your domain, switch on WhatsApp reminders and start booking patients online.' },
+        ],
+      },
       cta: cta('Not sure which plan fits?', 'Tell us about your hospital and we’ll recommend the right setup.', 'Talk to us', '/contact'),
     },
 
@@ -217,6 +330,25 @@ export function defaultSite(): PlatformSite {
           'Support access by our team is logged and time-limited',
         ],
       },
+      access: {
+        eyebrow: 'Who sees what', title: 'Access by role, *enforced by the database*', lead: 'These rules are checked on the server for every request — hiding a button is never the only protection.',
+        rows: [
+          { role: 'Owner', can: 'Everything in the hospital: reports, settings, staff, billing, website', cannot: 'Other hospitals’ data' },
+          { role: 'Doctor', can: 'Own schedule, patient records, prescriptions, lab orders', cannot: 'Salaries, settings, other doctors’ prescriptions' },
+          { role: 'Reception', can: 'Bookings, patient registration, check-in, beds, unpaid bills', cannot: 'Salaries, staff directory, reports' },
+          { role: 'Accounts', can: 'Bills, payments, expenses, financial reports', cannot: 'Clinical notes, settings' },
+          { role: 'Staff', can: 'Lab results, inventory, assigned tasks', cannot: 'Billing, reports, settings' },
+          { role: 'Patient', can: 'Own appointments, prescriptions, reports and bills', cannot: 'Anyone else’s records' },
+          { role: '{platform} support', can: 'Help when you ask — every access logged, sign-in sessions limited to 30 minutes', cannot: 'Sell, share or use your data for anything else' },
+        ],
+      },
+      faqs: [
+        { q: 'Where is our data stored?', a: 'In a managed PostgreSQL database in India (Supabase on AWS, Mumbai region), with encrypted backups.' },
+        { q: 'Can your team see our patients’ records?', a: 'Only when you ask us for help, and every access is recorded in your hospital’s audit log. Support sessions are time-limited and need a written reason.' },
+        { q: 'What happens to our data if we leave?', a: 'You can export everything at any time. When an account is closed you get a notice period to download it; then it is permanently deleted, except invoices the law requires us to keep.' },
+        { q: 'Do you sign a data processing agreement?', a: 'Yes — our Data Processing Agreement is part of the Terms of Service for every plan, so it applies automatically.' },
+        { q: 'How do you handle a data breach?', a: 'We inform affected hospitals quickly (we aim for within 24 hours) with what we know and what we are doing, so you can meet your own reporting duties under the DPDP Act.' },
+      ],
       note: 'Found a security issue? Please tell us at {email} — we respond quickly and appreciate responsible disclosure.',
       cta: cta('Questions from your IT or compliance team?', 'We’re happy to answer security questionnaires and walk them through how it works.', 'Contact us', '/contact'),
     },
@@ -241,6 +373,15 @@ export function defaultSite(): PlatformSite {
           { icon: 'HeartHandshake', title: 'Real support', text: 'People who answer, in your language.' },
         ],
       },
+      approach: {
+        eyebrow: 'How we work', title: 'Built *with* hospitals, not just for them', lead: '',
+        items: [
+          { title: 'We sit at the front desk', text: 'Features start from watching how reception, doctors and accounts really work — not from a spec sheet.' },
+          { title: 'We ship small and often', text: 'Improvements arrive every few weeks, automatically, without disturbing your day.' },
+          { title: 'We keep it affordable', text: 'One honest price per hospital, so a small clinic can use the same software as a large hospital.' },
+          { title: 'We protect what matters', text: 'Patient privacy and data safety are designed in from the database up, and checked with every change.' },
+        ],
+      },
       team: { eyebrow: 'Team', title: 'The people behind {platform}', lead: '', items: [] },
       cta: cta('Let’s build a better hospital together', 'Start a free trial or talk to our team.'),
     },
@@ -251,6 +392,20 @@ export function defaultSite(): PlatformSite {
       formTitle: 'Request a call back',
       thanks: 'We’ve received your details and will call you soon.',
       mapUrl: '',
+      next: {
+        eyebrow: 'What happens next', title: 'From hello to live in a few days', lead: '',
+        items: [
+          { title: 'We call you', text: 'Within one working day, to understand your hospital, doctors and current software.' },
+          { title: 'A guided demo', text: 'A 30-minute screen-share using examples from your own speciality.' },
+          { title: 'Your quote & trial', text: 'A clear price for the plan that fits, and a free trial set up for you.' },
+          { title: 'Go live', text: 'We help you import data, train staff and connect your domain.' },
+        ],
+      },
+      faqs: [
+        { q: 'I’m an existing customer — how do I get support?', a: 'E-mail us with your hospital name and a screenshot if possible. Urgent problems: call or WhatsApp during office hours.' },
+        { q: 'Can you visit our hospital?', a: 'For Enterprise customers we can arrange on-site onboarding and training. Everyone else gets online setup help.' },
+        { q: 'Do you work with hospital groups or partners?', a: 'Yes — write to us about multi-hospital setups, reseller or implementation partnerships.' },
+      ],
     },
 
     faq: {
@@ -275,6 +430,21 @@ export function defaultSite(): PlatformSite {
           { q: 'Is there a free trial?', a: 'Yes, with no card needed.' },
           { q: 'How do I pay?', a: 'Online by UPI, card or net banking through Razorpay. You get a GST invoice for every payment.' },
           { q: 'Can I get a refund?', a: 'Yes — see our Refund & Cancellation Policy for details.' },
+          { q: 'Do I get a GST invoice?', a: 'Yes, a GST tax invoice for every payment, downloadable from Billing & plan.' },
+        ] },
+        { title: 'WhatsApp & SMS', items: [
+          { q: 'Do I need my own WhatsApp Business account?', a: 'No. You can start on our shared accounts with messages included in your plan, or connect your own WhatsApp / SMS provider later.' },
+          { q: 'Which messages are sent automatically?', a: 'Booking confirmations, reminders, OTPs for online booking, and other events you switch on — each with a template you can edit.' },
+          { q: 'What about DLT registration for SMS?', a: 'SMS in India needs DLT-registered templates. We help you set up the templates you need; if you use your own sender ID, your SMS provider registers them with you.' },
+        ] },
+        { title: 'Support & training', items: [
+          { q: 'How do I get help?', a: 'By e-mail on working days; Hospital and Enterprise plans also get phone support. See Service Levels & Support for response times.' },
+          { q: 'Do you train my staff?', a: 'Every account gets online setup help, and the screens are designed to be learnt in minutes. Enterprise plans include onboarding sessions.' },
+          { q: 'Is the software updated regularly?', a: 'Yes. Updates are automatic and free — you always have the latest version.' },
+        ] },
+        { title: 'Patients', items: [
+          { q: 'Do patients need to install an app?', a: 'No. They book on your website and get messages on WhatsApp or SMS. The patient portal works in any browser.' },
+          { q: 'How do patients get their reports?', a: 'In the patient portal, once the result is entered by your staff.' },
         ] },
       ],
       cta: cta('Still have questions?', 'Our team is happy to help.', 'Contact us', '/contact'),

@@ -1,4 +1,5 @@
-import { ArrowRight, CheckCircle2, Quote, Sparkles, Users } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Quote, Sparkles, Users, XCircle } from 'lucide-react'
+import { platformName as platform } from '../../lib/supabase'
 import { safeUrl } from '../../lib/safeUrl'
 import { A, CtaBand, FaqList, Hi, IconCard, Section, SectionHead, useSeo } from '../site/ui'
 import type { PlatformSite } from '../site/types'
@@ -62,6 +63,22 @@ export default function HomePage({ site }: { site: PlatformSite }) {
         </section>
       )}
 
+      {h.problems.before.length > 0 && (
+        <Section>
+          <SectionHead h={h.problems} />
+          <div className="mt-12 grid gap-5 lg:grid-cols-2">
+            <div className="rounded-[2rem] border border-rose-100 bg-white p-6 shadow-soft sm:p-8">
+              <p className="text-xs font-bold uppercase tracking-[.18em] text-rose-500">Without a system</p>
+              <ul className="mt-5 space-y-3.5">{h.problems.before.map((t) => <li key={t} className="flex gap-3 text-slate-600"><XCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-400" />{t}</li>)}</ul>
+            </div>
+            <div className="rounded-[2rem] bg-[#292966] p-6 text-white shadow-soft sm:p-8">
+              <p className="text-xs font-bold uppercase tracking-[.18em] text-[#CCCCFF]">With {platform}</p>
+              <ul className="mt-5 space-y-3.5">{h.problems.after.map((t) => <li key={t} className="flex gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />{t}</li>)}</ul>
+            </div>
+          </div>
+        </Section>
+      )}
+
       <Section id="features">
         <SectionHead h={h.highlights} />
         <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{h.highlights.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
@@ -79,6 +96,24 @@ export default function HomePage({ site }: { site: PlatformSite }) {
                 </li>
               ))}
             </ol>
+          </div>
+        </section>
+      )}
+
+      {h.india.items.length > 0 && (
+        <Section>
+          <SectionHead h={h.india} />
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{h.india.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
+        </Section>
+      )}
+
+      {h.integrations.items.length > 0 && (
+        <section aria-label={h.integrations.title} className="pb-8">
+          <div className="l-container text-center">
+            <p className="text-xs font-semibold uppercase tracking-[.2em] text-peri-500">{h.integrations.title}</p>
+            <ul className="mt-5 flex flex-wrap justify-center gap-2.5">
+              {h.integrations.items.map((t) => <li key={t} className="rounded-full border border-peri-200 bg-white px-4 py-2 text-sm font-semibold text-peri-800 shadow-soft">{t}</li>)}
+            </ul>
           </div>
         </section>
       )}

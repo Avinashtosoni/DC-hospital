@@ -41,6 +41,10 @@ const qaList = (k: string, label: string): FieldDef => ({
   newItem: () => ({ q: 'New question?', a: '' }),
   item: [{ k: 'q', t: 'text', label: 'Question', full: true }, { k: 'a', t: 'textarea', label: 'Answer', rows: 3, full: true }],
 })
+const steps = (k: string, label: string): FieldDef => ({
+  k, t: 'list', label, title: (v, i) => `${i + 1}. ${v.title || 'Step'}`, subtitle: (v) => v.text, addLabel: 'Add step',
+  newItem: () => ({ title: 'New step', text: '' }), item: [{ k: 'title', t: 'text', label: 'Title' }, { k: 'text', t: 'textarea', label: 'Text', rows: 2, full: true }],
+})
 const PLAN_OPTS = ['clinic', 'hospital', 'enterprise', 'custom']
 
 export interface PageMeta { key: PageKey; label: string; path: string; icon: LucideIcon; help: string; fields: FieldDef[] }
@@ -98,12 +102,18 @@ export const PAGES: PageMeta[] = [
           { k: 'items', t: 'list', label: 'Roles', title: (v) => v.name, subtitle: (v) => v.text, addLabel: 'Add role', newItem: () => ({ name: 'Role', text: '' }), item: [{ k: 'name', t: 'text', label: 'Name' }, { k: 'text', t: 'text', label: 'Text' }] },
         ],
       },
+      heading('problems', 'Before / after (why switch)', [
+        { k: 'before', t: 'strings', label: 'Without a system (problems)', addLabel: 'Add problem' },
+        { k: 'after', t: 'strings', label: 'With the platform (answers)', addLabel: 'Add answer' },
+      ], true),
       heading('highlights', 'Feature highlights', [iconItems('items', 'Highlights', 'feature')]),
       {
         k: 'steps', t: 'group', label: 'How it works', collapsed: true, fields: [
           { k: 'items', t: 'list', label: 'Steps', title: (v, i) => `${i + 1}. ${v.title}`, addLabel: 'Add step', newItem: () => ({ title: 'Step', text: '' }), item: [{ k: 'title', t: 'text', label: 'Title' }, { k: 'text', t: 'text', label: 'Text' }] },
         ],
       },
+      heading('india', 'Made for India', [iconItems('items', 'Points', 'point')], true),
+      { k: 'integrations', t: 'group', label: 'Integrations strip', collapsed: true, fields: [{ k: 'title', t: 'text', label: 'Title', full: true }, { k: 'items', t: 'tags', label: 'Names', placeholder: 'Type and press Enter' }] },
       heading('website', 'Website section', [{ k: 'points', t: 'strings', label: 'Points', addLabel: 'Add point' }, { k: 'image', t: 'image', label: 'Picture (optional)', hint: 'Empty = illustrated website.' }], true),
       heading('pricing', 'Pricing section (plans come from billing)', [], true),
       heading('testimonials', 'Testimonials (hidden while empty)', [{
@@ -127,6 +137,11 @@ export const PAGES: PageMeta[] = [
           { k: 'points', t: 'strings', label: 'Points', addLabel: 'Add point' }, { k: 'image', t: 'image', label: 'Screenshot (optional)' },
         ],
       },
+      heading('journey', 'Patient journey', [steps('items', 'Steps')], true),
+      heading('byRole', 'For every role', [{
+        k: 'items', t: 'list', label: 'Roles', title: (v) => v.name, subtitle: (v) => (v.points ?? []).join(' · '), addLabel: 'Add role',
+        newItem: () => ({ name: 'Role', icon: 'Users', points: [] }), item: [{ k: 'icon', t: 'icon', label: 'Icon' }, { k: 'name', t: 'text', label: 'Role' }, { k: 'points', t: 'strings', label: 'Points', addLabel: 'Add point' }],
+      }], true),
       heading('extras', '“Also included”', [iconItems('items', 'Items', 'item')], true),
       cta(),
     ],
@@ -143,6 +158,8 @@ export const PAGES: PageMeta[] = [
           { k: 'points', t: 'strings', label: 'Points', addLabel: 'Add point' }, { k: 'plan', t: 'select', label: 'Recommended plan', options: PLAN_OPTS }, { k: 'image', t: 'image', label: 'Picture (optional)' },
         ],
       },
+      heading('specialities', 'Specialities', [iconItems('items', 'Specialities', 'speciality')], true),
+      heading('switching', 'Switching / go-live plan', [steps('items', 'Steps')], true),
       cta(),
     ],
   },
@@ -151,6 +168,7 @@ export const PAGES: PageMeta[] = [
     fields: [
       seo(), heading('heading', 'Page heading'),
       { k: 'note', t: 'textarea', label: 'Note under the plans', rows: 2, full: true },
+      heading('included', 'Included in every plan', [{ k: 'items', t: 'strings', label: 'Items', addLabel: 'Add item' }], true),
       {
         k: 'compare', t: 'group', label: 'Comparison table', fields: [
           { k: 'title', t: 'text', label: 'Title', full: true },
@@ -174,6 +192,11 @@ export const PAGES: PageMeta[] = [
     fields: [
       seo(), heading('heading', 'Page heading'), iconItems('items', 'Security points', 'point'),
       heading('compliance', 'Compliance box', [{ k: 'points', t: 'strings', label: 'Points', addLabel: 'Add point' }], true),
+      heading('access', 'Who sees what (table)', [{
+        k: 'rows', t: 'list', label: 'Rows', title: (v) => v.role, subtitle: (v) => v.can, addLabel: 'Add row', newItem: () => ({ role: '', can: '', cannot: '' }),
+        item: [{ k: 'role', t: 'text', label: 'Role', full: true }, { k: 'can', t: 'textarea', label: 'Can see & do', rows: 2 }, { k: 'cannot', t: 'textarea', label: 'Can’t', rows: 2 }],
+      }], true),
+      qaList('faqs', 'Security questions'),
       { k: 'note', t: 'textarea', label: 'Note (responsible disclosure)', rows: 2, full: true },
       cta(),
     ],
@@ -187,6 +210,7 @@ export const PAGES: PageMeta[] = [
       { k: 'mission', t: 'group', label: 'Mission', collapsed: true, fields: [{ k: 'title', t: 'text', label: 'Title' }, { k: 'text', t: 'textarea', label: 'Text', rows: 3, full: true }] },
       { k: 'vision', t: 'group', label: 'Vision', collapsed: true, fields: [{ k: 'title', t: 'text', label: 'Title' }, { k: 'text', t: 'textarea', label: 'Text', rows: 3, full: true }] },
       heading('values', 'Values', [iconItems('items', 'Values', 'value')], true),
+      heading('approach', 'How we work', [steps('items', 'Points')], true),
       heading('team', 'Team (hidden while empty)', [{
         k: 'items', t: 'list', label: 'People', title: (v) => v.name || 'New person', subtitle: (v) => v.role, thumb: (v) => v.photo, addLabel: 'Add person',
         newItem: () => ({ name: '', role: '', photo: '', bio: '' }),
@@ -202,6 +226,8 @@ export const PAGES: PageMeta[] = [
       { k: 'formTitle', t: 'text', label: 'Form title' },
       { k: 'thanks', t: 'text', label: 'Thank-you message' },
       { k: 'mapUrl', t: 'url', label: 'Map embed link (optional)', hint: 'Google Maps → Share → Embed a map → copy only the https://… address inside src="…".', full: true },
+      heading('next', 'What happens next', [steps('items', 'Steps')], true),
+      qaList('faqs', 'Questions under the form'),
     ],
   },
   {

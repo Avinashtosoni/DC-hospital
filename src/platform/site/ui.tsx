@@ -307,3 +307,19 @@ export function Layout({ site, path, children }: { site: PlatformSite; path: str
     </div>
   )
 }
+
+/** numbered steps — a row of cards on wide screens, a vertical line on phones */
+export function StepsTimeline({ items }: { items: { title: string; text: string }[] }) {
+  const cols = items.length >= 6 ? 'lg:grid-cols-6 sm:grid-cols-3' : items.length === 5 ? 'lg:grid-cols-5 sm:grid-cols-3' : items.length === 4 ? 'lg:grid-cols-4 sm:grid-cols-2' : 'sm:grid-cols-3'
+  return (
+    <ol className={cn('relative grid gap-4', cols)}>
+      {items.map((s, i) => (
+        <li key={s.title + i} className="relative rounded-3xl border border-peri-200/80 bg-white p-5 shadow-soft">
+          <span className="grid h-9 w-9 place-items-center rounded-full bg-peri-800 font-display text-sm font-extrabold text-white">{i + 1}</span>
+          <p className="mt-3 font-display font-bold text-peri-900">{s.title}</p>
+          <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{s.text}</p>
+        </li>
+      ))}
+    </ol>
+  )
+}
