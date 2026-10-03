@@ -140,7 +140,7 @@ the hospital sample data but **keeps your website content, history and images**.
 > **Hospital Comrade (many hospitals, paid plans):** follow [docs/GO_LIVE.md](docs/GO_LIVE.md) — Mumbai Supabase project,
 > Coolify variables, payments, backups, then `npm run preflight -- https://<domain>` and the control panel's launch
 > checklist. First time? The step-by-step version with a credentials sheet and a staging test checklist:
-> [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md). What changed: [CHANGELOG.md](CHANGELOG.md).
+> [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md). Audit result + checklist: [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md). What changed: [CHANGELOG.md](CHANGELOG.md).
 
 Demo logins use a public password (`Demo@123`), so **never run a real hospital on `master.sql`'s demo accounts**.
 

@@ -151,14 +151,16 @@ sign-up, messages) and every manual step ticked.
 - Incidents (data leak, wrong person saw data): Control panel → Incidents — the 72-hour clock starts there; see
   [OPERATIONS.md](OPERATIONS.md#74-incidents--breaches).
 
-## Moving from the demo deployment
+## Moving from the old demo deployment
 
-The current demo (`TENANCY` unset, no Supabase) can stay as a sales demo on its own subdomain (e.g.
-`demo.<your-domain>`), with `PLATFORM_DOMAIN` set to the real domain so its links point there. The new production app is
-a separate Coolify application with the variables from step 3. Nothing has to be migrated: the demo keeps its data in
-visitors' browsers only.
+The in-browser demo mode no longer exists: the app now needs `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` and shows
+*Database not connected* without them. Nothing has to be migrated — the old demo kept its data in visitors' browsers
+only. For a sales demo, create a hospital on the database (or a separate staging project with `master.sql`) and map
+`demo.<your-domain>` to it in Settings → Domain.
 
 ## Rollback
 
 Coolify → the application → Deployments → redeploy the previous one. Database changes are additive and
-`upgrade-2026-10.sql` is safe to run again; restore from a backup (step 8) only for data loss.
+`upgrade-2026-10.sql` is safe to run again (an older app build keeps working against the newer schema); restore from a
+backup (step 8) only for data loss. Always take a manual backup (Actions → Database backup → Run workflow, or Supabase →
+Database → Backups) right before running an upgrade script.
