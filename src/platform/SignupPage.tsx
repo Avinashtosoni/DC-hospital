@@ -4,7 +4,7 @@ import { platformName } from '../lib/supabase'
 import { cn } from '../lib/utils'
 import { signupInfo, signupProblem, trialSignup, type SignupForm, type SignupInfo, type SignupResult } from './api'
 import { LEGAL_VERSION } from './legal'
-import { platformHref } from './LegalPage'
+import { siteHref as platformHref } from './site/ui'
 import { PLANS } from './plans'
 
 const EMPTY: SignupForm = { organisation: '', name: '', email: '', phone: '', city: '', plan: '', website: '' }
@@ -68,7 +68,7 @@ export default function SignupPage() {
               <div className="py-8 text-center">
                 <p className="font-display text-xl font-bold text-peri-900">Online sign-up is paused</p>
                 <p className="mt-2 text-sm text-slate-600">Leave your details and we will set up your hospital for you — usually within one working day.</p>
-                <a href={platformHref('/#contact')} className="btn-peri mt-6">Talk to us<ArrowRight className="h-4 w-4" /></a>
+                <a href={platformHref('/contact')} className="btn-peri mt-6">Talk to us<ArrowRight className="h-4 w-4" /></a>
               </div>
             ) : (
               <form onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2">

@@ -1,5 +1,7 @@
 /**
- * Phase 8.1 — the platform's own legal pages (Terms, Privacy, Refunds & cancellation, Delivery, DPA, Contact).
+ * Phase 8.1 — the platform's own legal pages (Terms, Privacy, Refunds & cancellation, Delivery, DPA, Cookies,
+ * Acceptable use, Grievance redressal, Disclaimer, Service levels, Contact). The control panel's Website CMS can
+ * override any of them (src/platform/site — this file is the default text).
  * Razorpay's website review asks for these before payments go live. Company details come from runtime env
  * (PLATFORM_LEGAL_NAME, PLATFORM_ADDRESS, PLATFORM_EMAIL, PLATFORM_PHONE, PLATFORM_GRIEVANCE_OFFICER,
  * PLATFORM_JURISDICTION); prices and periods from the billing defaults.
@@ -10,9 +12,9 @@ import { BILLING_DEFAULTS } from './billing'
 import { platformCompany, platformDomain, platformName } from '../lib/supabase'
 
 /** bump when the text changes materially — stored with each acceptance (signup, checkout) */
-export const LEGAL_VERSION = '2026-10-02'
+export const LEGAL_VERSION = '2026-10-03'
 
-export type LegalSlug = 'terms' | 'privacy' | 'refunds' | 'delivery' | 'dpa' | 'contact'
+export type LegalSlug = 'terms' | 'privacy' | 'refunds' | 'delivery' | 'dpa' | 'cookies' | 'acceptable-use' | 'grievance' | 'disclaimer' | 'sla' | 'contact'
 export interface LegalDoc { slug: LegalSlug; title: string; short: string; intro: string; sections: { h: string; p: string[] }[] }
 
 export function legalDocs(): LegalDoc[] {
@@ -168,6 +170,121 @@ export function legalDocs(): LegalDoc[] {
         ] },
         { h: '9. Location and audits', p: [
           'Data is stored in India. On reasonable written notice (once a year, or after a breach), the Processor answers the Hospital\u2019s security questionnaire and provides evidence of the measures above.',
+        ] },
+      ],
+    },
+    {
+      slug: 'cookies', title: 'Cookie Policy', short: 'Cookies',
+      intro: `What ${P} stores in your browser, and why. In short: only what is needed to sign you in and remember your choices \u2014 no advertising or tracking cookies.`,
+      sections: [
+        { h: '1. What we store', p: [
+          'Sign-in session: a secure token kept in your browser\u2019s local storage so you stay signed in. It is removed when you sign out. (A temporary support session opened by our team is kept only in that browser tab.)',
+          'Preferences: things like the hospital you picked, a dismissed notice or the sidebar layout, so the app looks the same next time.',
+          'Offline app files: when you install the app or use it on a slow connection, the browser keeps a copy of the app\u2019s files (not patient records) so it starts faster.',
+        ] },
+        { h: '2. What we do not use', p: [
+          'No advertising cookies, no cross-site tracking, no selling or sharing of browsing data. We do not use third-party analytics that profile you.',
+        ] },
+        { h: '3. Third parties', p: [
+          'Payment pages are run by Razorpay and may set their own cookies needed for fraud checks and the payment itself. If error reporting is switched on, technical details of an error (not form contents) are sent to our error-monitoring provider so we can fix it.',
+        ] },
+        { h: '4. Your choices', p: [
+          'Because we only store what the service needs to work, there is nothing to opt out of without breaking sign-in. You can clear the stored data at any time in your browser settings \u2014 you will simply be signed out.',
+          `Questions: ${c.email || 'see the Contact page'}.`,
+        ] },
+      ],
+    },
+    {
+      slug: 'acceptable-use', title: 'Acceptable Use Policy', short: 'Acceptable use',
+      intro: `These rules keep ${P} safe and reliable for every hospital and patient. They form part of the Terms of Service and apply to everyone who uses an account.`,
+      sections: [
+        { h: '1. Lawful, clinical use', p: [
+          'Use the service only to run a genuine hospital, clinic or healthcare practice, in line with Indian law \u2014 including the Clinical Establishments rules that apply to you, the Digital Personal Data Protection Act, 2023 and the Information Technology Act, 2000.',
+          'Record only information you have a lawful reason to keep, and keep it accurate.',
+        ] },
+        { h: '2. Messages', p: [
+          'Send SMS, WhatsApp and e-mail only to people who gave you their number or address for that purpose (appointments, reports, bills, reminders). Promotional messages need the person\u2019s consent and must follow TRAI\u2019s DLT rules and WhatsApp\u2019s policies.',
+          'Do not send spam, misleading health claims, or messages that impersonate someone else.',
+        ] },
+        { h: '3. Security', p: [
+          'Do not share logins between people; give each staff member their own account and the lowest role that lets them work. Remove access as soon as someone leaves.',
+          'Do not try to reach another hospital\u2019s data, bypass limits or access controls, scan or load-test the service, or upload malware. If you find a security issue, tell us at ' + (c.email || 'our support address') + ' and give us reasonable time to fix it before telling anyone else.',
+        ] },
+        { h: '4. Content on your website', p: [
+          'Your hospital website must not carry unlawful, defamatory or infringing content, or advertising that breaks the rules for medical practitioners and hospitals (for example, guaranteed cures or misleading claims). Use only images and text you have the right to use.',
+        ] },
+        { h: '5. Fair use', p: [
+          'Plans include generous limits. Automated bulk exports, scraping or traffic far beyond normal hospital use may be slowed or paused so other customers are not affected; we will contact you first where we can.',
+        ] },
+        { h: '6. If the rules are broken', p: [
+          'We may remove content, pause messaging, or suspend an account that puts patients, other customers or the service at risk. We tell you why as soon as it is safe to do so, and restore access once the problem is fixed. Your data stays exportable.',
+        ] },
+      ],
+    },
+    {
+      slug: 'grievance', title: 'Grievance Redressal', short: 'Grievances',
+      intro: `How to raise a complaint about ${P} \u2014 about the service, billing, content or personal data \u2014 and how quickly we respond. Published under the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021 and the Digital Personal Data Protection Act, 2023.`,
+      sections: [
+        { h: 'Grievance Officer', p: [
+          `${c.grievanceOfficer || 'Grievance Officer'}, ${c.legalName}`,
+          c.address,
+          [c.email && `E-mail: ${c.email}`, c.phone && `Phone: ${c.phone}`].filter(Boolean).join(' \u00b7 ') || 'Contact details: see the Contact page.',
+        ] },
+        { h: 'How to complain', p: [
+          'Write to the Grievance Officer with: your name and contact details, the hospital account (if any), what happened and when, and what you would like us to do. Add screenshots or invoice numbers if they help.',
+          'Patients: your medical records belong to your hospital. For a copy, correction or deletion of your records, contact the hospital first \u2014 its website lists its own grievance officer. Write to us if the hospital does not respond, or if your complaint is about the software itself.',
+        ] },
+        { h: 'Timelines', p: [
+          'We acknowledge every complaint within 24 hours (48 hours on holidays) and resolve it within 15 days. Complaints about personal data are resolved within 30 days at most.',
+          'Requests to remove content that is unlawful or that exposes someone\u2019s private or intimate information are acted on within 24 hours of a valid complaint.',
+        ] },
+        { h: 'If you are not satisfied', p: [
+          'You can ask for the decision to be reviewed by a senior member of our team by replying to our answer. For personal-data complaints you may also approach the Data Protection Board of India once our process is complete.',
+        ] },
+      ],
+    },
+    {
+      slug: 'disclaimer', title: 'Disclaimer', short: 'Disclaimer',
+      intro: `Please read this before relying on ${P} or on the content of this website.`,
+      sections: [
+        { h: 'Not medical advice', p: [
+          `${P} is practice-management software. It does not diagnose, treat or give medical advice. Clinical decisions, prescriptions and the medical content recorded in the software are the responsibility of the hospital and its doctors.`,
+          'Hospital websites built with the software are run by those hospitals. We do not check or endorse what they publish about doctors, treatments or prices.',
+        ] },
+        { h: 'Emergencies', p: [
+          'Do not use online booking or WhatsApp for medical emergencies. Call 108 / 112 or go to the nearest emergency department.',
+        ] },
+        { h: 'Website content', p: [
+          'Articles, guides and examples on this site (including GST, legal or compliance notes) are general information, written carefully but not a substitute for professional advice for your situation. Rules change; check the current law or ask an adviser before acting.',
+          'Screens and examples are illustrative; features depend on your plan and may change as the product improves.',
+        ] },
+        { h: 'Third-party services', p: [
+          'Payments, messaging, domains and hosting rely on third-party providers. Their availability and terms are outside our control, though we choose them carefully and tell you which ones we use.',
+        ] },
+      ],
+    },
+    {
+      slug: 'sla', title: 'Service Levels & Support', short: 'Service levels',
+      intro: `What you can expect from ${P}: availability, backups, support hours and response times. These are targets we work to; Enterprise customers can agree stronger, contractual commitments.`,
+      sections: [
+        { h: '1. Availability', p: [
+          'Target: 99.5% monthly availability of the hospital app and websites, excluding planned maintenance and problems caused by things outside our control (your internet connection, DNS changes at your domain provider, or outages at major cloud providers).',
+          'Planned maintenance is done outside clinic hours where possible (usually after 11 pm IST) and announced in the app at least 48 hours ahead if downtime is expected.',
+        ] },
+        { h: '2. Backups and recovery', p: [
+          'Your data is backed up automatically every day and kept for at least 7 days; backups are encrypted. Recovery targets after a major incident: data loss of at most 24 hours and service restored within 8 hours.',
+          'You can also download a full export of your hospital\u2019s data at any time from Settings \u2192 Data & backup.',
+        ] },
+        { h: '3. Support', p: [
+          `Support hours: Monday to Saturday, 10:00\u201318:00 IST, by ${[c.email && 'e-mail', c.phone && 'phone / WhatsApp'].filter(Boolean).join(' and ') || 'e-mail'}.`,
+          'First response targets: service down for everyone \u2014 within 1 hour, any time; a key feature not working (billing, booking, sign-in) \u2014 within 4 working hours; other questions \u2014 within 1 working day.',
+          'Enterprise plans include priority support and a named contact for onboarding.',
+        ] },
+        { h: '4. Incidents', p: [
+          'If an incident affects your hospital we post a notice in the app, keep you updated until it is resolved, and share a short summary of what happened afterwards. Personal-data breaches are reported as set out in the Data Processing Agreement.',
+        ] },
+        { h: '5. If we miss a target', p: [
+          'If monthly availability falls below 99.5% because of us, the owner can ask for a credit of 5% of that month\u2019s plan fee for each full 0.5% below target, up to 25%, as wallet balance or off the next renewal. Ask within 30 days of the month ending.',
         ] },
       ],
     },
