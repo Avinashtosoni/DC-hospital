@@ -142,7 +142,7 @@ export const appointmentsRes = defineResource({
     { key: 'status', header: 'Status', render: (r) => <StatusBadge value={r.status} /> },
   ],
   // patients move / cancel through the Reschedule dialog (the database only lets them change date, time and reason)
-  canEdit: (_r, c) => !isPatient(c),
+  canEdit: (r, c) => !isPatient(c) && (!isDoctor(c) || r.doctor_id === c.me.doctor?.id),
   rowActions: (r, c) => {
     const upcoming = r.appointment_date >= today()
     const open = !['completed', 'cancelled', 'no_show'].includes(r.status)
@@ -216,10 +216,13 @@ export const prescriptionsRes = defineResource({
   ],
   rowLink: (r) => `/prescriptions/${r.id}`,
   rowActions: (r, c) => [{ label: 'View & print', icon: Printer, onClick: () => c.navigate(`/prescriptions/${r.id}`) }],
+  // a doctor signs only their own prescriptions (RLS: ROW_RULES.prescriptions)
+  canEdit: (r, c) => !isDoctor(c) || r.doctor_id === c.me.doctor?.id,
+  canDelete: (r, c) => !isDoctor(c) || r.doctor_id === c.me.doctor?.id,
   drawerWidth: 'max-w-3xl',
   fields: [
     patientField(),
-    doctorField(),
+    { ...doctorField(), readOnly: (c: ResourceCtx) => isDoctor(c) },
     { name: 'prescribed_on', label: 'Date', type: 'date', required: true, default: () => today() },
     { name: 'follow_up_date', label: 'Follow-up date', type: 'date', notBefore: { field: 'prescribed_on', label: 'Prescription date' } },
     { name: 'diagnosis', label: 'Diagnosis', type: 'text', required: true, span: 2, placeholder: 'e.g. Viral fever' },

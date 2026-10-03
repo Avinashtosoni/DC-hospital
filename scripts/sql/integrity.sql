@@ -252,3 +252,24 @@ revoke execute on function public.lab_tests_stamp() from public, anon, authentic
 drop trigger if exists trg_lab_tests_stamp on public.lab_tests;
 create trigger trg_lab_tests_stamp before insert or update of status, completed_on on public.lab_tests
   for each row execute function public.lab_tests_stamp();
+
+-- ------------------------------------------------------------------ 7. a hospital always keeps an owner
+-- admin_update_user() / admin_delete_user() already say no; this also covers a direct API call (PATCH / DELETE
+-- on profiles). The platform team (closing / purging a hospital) and the SQL editor are not limited.
+create or replace function public.profiles_keep_owner()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or public.provider_role() is not null then return coalesce(new, old); end if;
+  if old.role <> 'owner' or (tg_op = 'UPDATE' and new.role = 'owner') then return coalesce(new, old); end if;
+  if tg_op = 'UPDATE' and old.id = auth.uid() then
+    raise exception 'You can''t remove your own owner access. Ask another owner to do it.' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.role = 'owner' and p.id <> old.id and p.tenant_id is not distinct from old.tenant_id) then
+    raise exception 'This is the last owner of the hospital. Make someone else an owner first.' using errcode = '42501';
+  end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists trg_profiles_keep_owner on public.profiles;
+create trigger trg_profiles_keep_owner before update of role or delete on public.profiles
+  for each row execute function public.profiles_keep_owner();
+revoke all on function public.profiles_keep_owner() from public, anon, authenticated;

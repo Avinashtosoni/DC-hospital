@@ -152,3 +152,40 @@ describe('licence dates are not public', () => {
     expect(await db.one<{ c: Record<string, unknown> }>(USER.owner, `select public.my_context() c`)).toMatchObject({ c: { license: expect.objectContaining({ status: expect.any(String) }) } })
   })
 })
+
+describe('a hospital always keeps an owner', () => {
+  test('the owner cannot demote themselves or delete the last owner through the API', async () => {
+    await expect(db.as(USER.owner, `update public.profiles set role = 'doctor' where id = $1`, [USER.owner])).rejects.toThrow(/your own owner access/)
+    await expect(db.as(B_OWNER, `delete from public.profiles where id = $1`, [B_OWNER])).rejects.toThrow(/last owner/)
+    expect(await db.one(null, `select role from public.profiles where id = $1`, [USER.owner])).toMatchObject({ role: 'owner' })
+    // other role changes still work
+    const doc = await db.one<{ id: string; role: string }>(null, `select id, role from public.profiles where role = 'staff' and tenant_id = (select tenant_id from public.profiles where id = $1) limit 1`, [USER.owner])
+    await db.as(USER.owner, `update public.profiles set role = 'receptionist' where id = $1`, [doc.id])
+    await db.as(USER.owner, `update public.profiles set role = 'staff' where id = $1`, [doc.id])
+  })
+})
+
+describe('row rules: doctors and the front desk', () => {
+  test("a doctor cannot sign, edit or delete another doctor's prescription, nor run their appointments", async () => {
+    const me = await db.one<{ id: string }>(USER.doctor, `select public.my_doctor_id() id`)
+    const other = await db.one<{ id: string }>(null, `select id from public.doctors where id <> $1 and tenant_id = (select tenant_id from public.doctors where id = $1) limit 1`, [me.id])
+    const rx = await db.one<{ id: string }>(null, `insert into public.prescriptions (tenant_id, patient_id, doctor_id, diagnosis, medications)
+      select tenant_id, $1, $2, 'Flu', '[]' from public.doctors where id = $2 returning id`, [patientId, other.id])
+    expect(await db.as(USER.doctor, `update public.prescriptions set diagnosis = 'changed' where id = $1 returning id`, [rx.id])).toEqual([])
+    expect(await db.as(USER.doctor, `delete from public.prescriptions where id = $1 returning id`, [rx.id])).toEqual([])
+    await expect(db.as(USER.doctor, `insert into public.prescriptions (patient_id, doctor_id, diagnosis, medications) values ($1, $2, 'x', '[]')`, [patientId, other.id])).rejects.toThrow(/row-level security/)
+    // their own prescription is fine
+    await db.as(USER.doctor, `insert into public.prescriptions (patient_id, doctor_id, diagnosis, medications) values ($1, $2, 'Cold', '[]')`, [patientId, me.id])
+
+    const appt = await db.one<{ id: string }>(USER.receptionist, `insert into public.appointments (patient_id, doctor_id, appointment_date, appointment_time) values ($1, $2, current_date + 20, '16:40') returning id`, [patientId, other.id])
+    expect(await db.as(USER.doctor, `update public.appointments set status = 'completed' where id = $1 returning id`, [appt.id])).toEqual([])
+  })
+
+  test('reception may fix a bill only until money is taken against it', async () => {
+    const inv = await db.one<{ id: string }>(USER.receptionist, `insert into public.invoices (invoice_number, patient_id, items) values ('', $1, $2) returning id`, [patientId, ITEMS([1, 800])])
+    expect(await db.as(USER.receptionist, `update public.invoices set notes = 'ok' where id = $1 returning id`, [inv.id])).toHaveLength(1)
+    await db.as(USER.receptionist, `insert into public.payments (invoice_id, amount) values ($1, 100)`, [inv.id])
+    expect(await db.as(USER.receptionist, `update public.invoices set notes = 'later' where id = $1 returning id`, [inv.id])).toEqual([])
+    expect(await db.as(USER.accountant, `update public.invoices set notes = 'acct' where id = $1 returning id`, [inv.id])).toHaveLength(1)
+  })
+})

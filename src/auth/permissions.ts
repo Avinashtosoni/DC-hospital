@@ -60,6 +60,11 @@ export const ROW_RULES: Partial<Record<TableName, Partial<Record<Role, Partial<R
     },
   },
   visit_feedback: { doctor: { read: 'doctor_id = public.my_doctor_id()' } },
+  // a doctor signs only their own prescriptions and runs only their own appointments (they may book for a colleague)
+  prescriptions: { doctor: Object.fromEntries((['create', 'update', 'delete'] as Action[]).map((a) => [a, 'doctor_id = public.my_doctor_id()'])) },
+  appointments: { doctor: { update: 'doctor_id = public.my_doctor_id()' } },
+  // the front desk may correct a bill only until money has been taken against it
+  invoices: { receptionist: { update: 'amount_paid = 0' } },
   audit_log: Object.fromEntries((['doctor', 'receptionist', 'accountant', 'staff'] as Role[]).map((r) => [r, { read: 'actor_id = auth.uid()' }])),
 }
 
