@@ -33,7 +33,16 @@ export function mergeLegal(defaults: LegalDocContent[], saved?: LegalDocContent[
   return out
 }
 
-/** published rows over the defaults (top-level fields; missing fields keep the default) */
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+/** saved values over defaults: objects field by field (so fields added in later versions appear), lists replaced whole */
+export function deepMerge<T>(base: T, saved: unknown): T {
+  if (!isObj(base) || !isObj(saved)) return (saved === undefined || saved === null || (Array.isArray(base) && !Array.isArray(saved)) ? base : saved) as T
+  const out: Record<string, unknown> = { ...base }
+  for (const [k, v] of Object.entries(saved)) out[k] = k in base ? deepMerge((base as Record<string, unknown>)[k], v) : v
+  return out as T
+}
+
+/** published rows over the defaults (missing fields keep the default) */
 export function mergeSite(rows: Partial<Record<PageKey, unknown>>, fillTokens = true): PlatformSite {
   const base = defaultSite()
   const out = { ...base } as Record<PageKey, unknown>
@@ -42,7 +51,7 @@ export function mergeSite(rows: Partial<Record<PageKey, unknown>>, fillTokens = 
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) continue
     out[k] = k === 'legal'
       ? { docs: mergeLegal(base.legal.docs, (saved as { docs?: LegalDocContent[] }).docs) }
-      : { ...(base[k] as object), ...(saved as object) }
+      : deepMerge(base[k], saved)
   }
   return fillTokens ? fillDeep(out as unknown as PlatformSite, TOKENS()) : (out as unknown as PlatformSite)
 }

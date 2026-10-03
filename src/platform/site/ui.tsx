@@ -103,7 +103,7 @@ export function Section({ id, children, className }: { id?: string; children: Re
 /** page title band at the top of inner pages */
 export function PageHero({ h }: { h: Heading }) {
   return (
-    <section className="relative overflow-hidden pb-10 pt-14 sm:pb-14 sm:pt-20">
+    <section className="relative pb-10 pt-14 sm:pb-14 sm:pt-20">
       <div aria-hidden="true" className="absolute -right-32 -top-40 h-[420px] w-[420px] rounded-full bg-[#CCCCFF] opacity-60 blur-3xl" />
       <div aria-hidden="true" className="absolute -left-40 top-20 h-[320px] w-[320px] rounded-full bg-[#A3A3CC] opacity-25 blur-3xl" />
       <div className="l-container relative"><SectionHead h={h} as="h1" /></div>
@@ -297,7 +297,7 @@ function AnnouncementBar({ site }: { site: PlatformSite }) {
 
 export function Layout({ site, path, children }: { site: PlatformSite; path: string; children: ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col bg-[#f7f7ff] text-slate-700">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-[#f7f7ff] text-slate-700">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2">Skip to content</a>
       {isPreview() && <div className="flex items-center justify-center gap-2 bg-amber-400 px-4 py-1.5 text-xs font-semibold text-amber-950 print:hidden"><Eye className="h-3.5 w-3.5" />Preview — showing unpublished drafts (only the platform team sees these)</div>}
       <AnnouncementBar site={site} />

@@ -88,3 +88,29 @@ const supabaseStore: CmsStore = {
 }
 
 export const cms: CmsStore = supabaseStore
+
+/** list / upload / delete images in any public bucket (the control panel uses "platform-media") */
+export function bucketMedia(bucket: string) {
+  const pub = (name: string) => sb().storage.from(bucket).getPublicUrl(name).data.publicUrl
+  return {
+    async list(): Promise<MediaItem[]> {
+      const { data, error } = await sb().storage.from(bucket).list('', { limit: 300, sortBy: { column: 'created_at', order: 'desc' } })
+      if (error) throw new Error(error.message)
+      return (data ?? []).filter((f) => f.id && !f.name.startsWith('.')).map((f) => ({ name: f.name, size: (f.metadata as { size?: number } | null)?.size, created_at: f.created_at ?? undefined, url: pub(f.name) }))
+    },
+    async upload(file: File): Promise<MediaItem> {
+      if (file.size > 15 * 1024 * 1024) throw new Error(`${file.name} is larger than 15 MB`)
+      const blob = await compressImage(file)
+      if (blob.size > 5 * 1024 * 1024) throw new Error(`${file.name} is still larger than 5 MB after optimising`)
+      const ext = blob.type === 'image/webp' ? 'webp' : (file.name.split('.').pop() || 'bin').toLowerCase()
+      const path = `${Date.now().toString(36)}-${safeName(file.name)}.${ext}`
+      const { error } = await sb().storage.from(bucket).upload(path, blob, { contentType: blob.type || file.type, cacheControl: '31536000', upsert: false })
+      if (error) throw new Error(error.message.includes('Bucket not found') ? `Storage bucket "${bucket}" is missing — run supabase/upgrade-2026-10.sql.` : error.message)
+      return { name: path, size: blob.size, created_at: new Date().toISOString(), url: pub(path) }
+    },
+    async remove(item: MediaItem): Promise<void> {
+      const { error } = await sb().storage.from(bucket).remove([item.name])
+      if (error) throw new Error(error.message)
+    },
+  }
+}

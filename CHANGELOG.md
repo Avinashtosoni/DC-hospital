@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — product website & its CMS
+
+- **Separate pages** on the platform domain: Home, Features, Solutions, Pricing (plan comparison, add-ons, pricing
+  questions), Security & privacy, About, Contact, FAQ and a **Blog** (topics, scheduled posts). Header navigation,
+  a full footer, an optional announcement bar and per-page SEO tags. Old `/#pricing`-style links still work.
+- **Legal pages:** five new ones: Cookie Policy, Acceptable Use, Grievance Redressal (IT Rules 2021 / DPDP),
+  Disclaimer and Service Levels & Support. There are 11 in all, every one editable. ⚠ Starting text: have a lawyer review it.
+- **Control panel → Website:** edit every page, the legal pages and the brand / contact details with forms, save
+  drafts, preview them on the live site (`?preview`, platform team only), publish, see the earlier versions and restore
+  them, or reset a page to the built-in text. Blog editor with Markdown, cover image, topics, SEO and scheduling. An
+  image library (`platform-media` storage bucket). Admins edit; support can look. Every publish is in the audit log.
+- A page that was never published shows the built-in text, so the site is never empty. Plan prices still come from
+  `src/platform/plans.ts`, because they must match billing.
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run). The product site only shows when
+`TENANCY=multi`.
+
 ## Unreleased — control panel: manage every hospital
 
 The Hospital Comrade control panel can now run a hospital's account without opening it (admin = everything,

@@ -266,3 +266,13 @@ export interface ImpersonationRow {
   id: string; admin_name: string | null; target_email: string; target_role: string; reason: string; created_at: string; expires_at: string
   bound_at: string | null; ended_at: string | null; end_reason: string | null; hospital: string; hospital_id: string; active: boolean
 }
+
+// ------------------------------------------------------------------ platform website CMS (platform_cms.sql)
+export interface SitePageRow { key: string; data: unknown; draft: unknown; published_at: string | null; published_by: string | null; updated_at: string; updated_by: string | null }
+export interface SiteState { canEdit: boolean; pages: SitePageRow[] }
+export interface SiteRevision { id: string; key: string; data: unknown; created_at: string; created_by: string | null }
+export interface CpPost {
+  id: string; slug: string; title: string; excerpt: string; cover: string | null; body: string; tags: string[]; author: string | null
+  status: 'draft' | 'published'; published_at: string | null; seo: { title?: string; description?: string }; created_at: string; updated_at: string; updated_by: string | null
+}
+export type PostSave = Omit<CpPost, 'id' | 'created_at' | 'updated_at' | 'updated_by'> & { id?: string }

@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from 'react'
+import { createContext, useContext, useRef, useState, type DragEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, CloudUpload, Copy, ImageIcon, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -14,6 +14,11 @@ const BUILT_IN: MediaItem[] = [
 const kb = (n?: number) => (n == null ? '' : n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`)
 export const MEDIA_QK = ['cms-media'] as const
 
+/** where the library reads / uploads images — the hospital's site-media by default; the control panel swaps in its own */
+export interface MediaSource { key: readonly unknown[]; builtIn: MediaItem[]; list(): Promise<MediaItem[]>; upload(f: File): Promise<MediaItem>; remove(m: MediaItem): Promise<void> }
+const HOSPITAL_MEDIA: MediaSource = { key: MEDIA_QK, builtIn: BUILT_IN, list: () => cms.listMedia(), upload: (f) => cms.upload(f), remove: (m) => cms.removeMedia(m) }
+export const MediaSourceContext = createContext<MediaSource>(HOSPITAL_MEDIA)
+
 /** Browse, upload and delete website images. With `onPick` it works as a picker. */
 export function MediaLibrary({ onPick, selected }: { onPick?: (url: string) => void; selected?: string }) {
   const qc = useQueryClient()
@@ -21,7 +26,10 @@ export function MediaLibrary({ onPick, selected }: { onPick?: (url: string) => v
   const [drag, setDrag] = useState(false)
   const [confirm, setConfirm] = useState<MediaItem | null>(null)
   const input = useRef<HTMLInputElement>(null)
-  const media = useQuery({ queryKey: MEDIA_QK, queryFn: () => cms.listMedia() })
+  const src = useContext(MediaSourceContext)
+  const QK = src.key
+  const BUILT = src.builtIn
+  const media = useQuery({ queryKey: QK, queryFn: () => src.list() })
 
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
@@ -29,12 +37,12 @@ export function MediaLibrary({ onPick, selected }: { onPick?: (url: string) => v
       for (const f of files) {
         if (!f.type.startsWith('image/')) throw new Error(`${f.name} is not an image`)
         if (f.size > 15 * 1024 * 1024) throw new Error(`${f.name} is larger than 15 MB`)
-        out.push(await cms.upload(f))
+        out.push(await src.upload(f))
       }
       return out
     },
     onSuccess: (items) => {
-      qc.setQueryData<MediaItem[]>(MEDIA_QK, (old) => [...items, ...(old ?? [])])
+      qc.setQueryData<MediaItem[]>(QK, (old) => [...items, ...(old ?? [])])
       toast.success(items.length > 1 ? `${items.length} images uploaded` : 'Image uploaded', { description: 'Optimised to WebP for fast loading.' })
       setTab('library')
       if (onPick && items.length === 1) onPick(items[0].url)
@@ -42,14 +50,14 @@ export function MediaLibrary({ onPick, selected }: { onPick?: (url: string) => v
     onError: (e) => toast.error('Upload failed', { description: (e as Error).message }),
   })
   const remove = useMutation({
-    mutationFn: (m: MediaItem) => cms.removeMedia(m),
-    onMutate: (m) => { const prev = qc.getQueryData<MediaItem[]>(MEDIA_QK); qc.setQueryData<MediaItem[]>(MEDIA_QK, (o) => (o ?? []).filter((x) => x.name !== m.name)); return { prev } },
-    onError: (e, _m, c) => { qc.setQueryData(MEDIA_QK, c?.prev); toast.error((e as Error).message) },
+    mutationFn: (m: MediaItem) => src.remove(m),
+    onMutate: (m) => { const prev = qc.getQueryData<MediaItem[]>(QK); qc.setQueryData<MediaItem[]>(QK, (o) => (o ?? []).filter((x) => x.name !== m.name)); return { prev } },
+    onError: (e, _m, c) => { qc.setQueryData(QK, c?.prev); toast.error((e as Error).message) },
     onSuccess: () => toast.success('Image deleted'),
   })
 
   const onDrop = (e: DragEvent) => { e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) upload.mutate(files) }
-  const items = tab === 'library' ? media.data ?? [] : BUILT_IN
+  const items = tab === 'library' ? media.data ?? [] : BUILT
   const copy = async (url: string) => { try { await navigator.clipboard.writeText(url.startsWith('/') ? location.origin + url : url); toast.success('Image URL copied') } catch { toast.error('Could not copy') } }
 
   return (
@@ -63,14 +71,14 @@ export function MediaLibrary({ onPick, selected }: { onPick?: (url: string) => v
         <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => { const f = Array.from(e.target.files ?? []); if (f.length) upload.mutate(f); e.target.value = '' }} />
       </div>
 
-      <div className="mt-4"><Tabs value={tab} onChange={setTab} tabs={[{ value: 'library', label: 'Uploaded', count: media.data?.length }, { value: 'built-in', label: 'Built-in', count: BUILT_IN.length }]} /></div>
+      {BUILT.length > 0 && <div className="mt-4"><Tabs value={tab} onChange={setTab} tabs={[{ value: 'library', label: 'Uploaded', count: media.data?.length }, { value: 'built-in', label: 'Built-in', count: BUILT.length }]} /></div>}
 
       {tab === 'library' && media.isPending ? (
         <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-lg" />)}</div>
       ) : tab === 'library' && media.isError ? (
         <p className="mt-6 rounded-lg bg-rose-50 p-4 text-sm text-rose-700">Could not load the media library: {(media.error as Error).message}</p>
       ) : items.length === 0 ? (
-        <div className="mt-6 flex flex-col items-center gap-2 py-8 text-center text-sm text-slate-400"><ImageIcon className="h-8 w-8" />No uploads yet — drop an image above, or use a built-in one.</div>
+        <div className="mt-6 flex flex-col items-center gap-2 py-8 text-center text-sm text-slate-400"><ImageIcon className="h-8 w-8" />No uploads yet — drop an image above{BUILT.length ? ', or use a built-in one' : ''}.</div>
       ) : (
         <ul className="mt-4 grid max-h-[50vh] grid-cols-2 gap-3 overflow-y-auto p-0.5 sm:grid-cols-4 lg:grid-cols-5">
           {items.map((m) => {

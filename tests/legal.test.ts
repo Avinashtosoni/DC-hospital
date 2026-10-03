@@ -4,7 +4,7 @@ import { platformCompany, platformDomain, platformName } from '../src/lib/supaba
 
 describe('platform legal pages', () => {
   it('has every page Razorpay / DPDP needs', () => {
-    expect(legalDocs().map((d) => d.slug)).toEqual(['terms', 'privacy', 'refunds', 'delivery', 'dpa', 'contact'])
+    expect(legalDocs().map((d) => d.slug)).toEqual(['terms', 'privacy', 'refunds', 'delivery', 'dpa', 'cookies', 'acceptable-use', 'grievance', 'disclaimer', 'sla', 'contact'])
     for (const d of legalDocs()) {
       expect(d.title).toBeTruthy()
       expect(d.sections.length).toBeGreaterThan(0)

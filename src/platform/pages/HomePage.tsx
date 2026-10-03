@@ -87,7 +87,7 @@ export default function HomePage({ site }: { site: PlatformSite }) {
         <Section>
           <div className="grid items-center gap-12 lg:grid-cols-2">
             <div>
-              <SectionHead h={h.website} className="!mx-0 text-left" />
+              <SectionHead h={h.website} className="!mx-0 !text-left" />
               <ul className="mt-8 space-y-3">
                 {h.website.points.map((p) => <li key={p} className="flex gap-3 text-slate-700"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-peri-600" />{p}</li>)}
               </ul>

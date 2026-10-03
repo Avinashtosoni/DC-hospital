@@ -7,6 +7,7 @@ import type {
   HospitalEdit, LeadStatus, MemberSave, NewHospital, CpHealth, CpIncident, IncidentSave, IncidentNotice, RetentionConfig,
   CpSignup, SignupSettings, LaunchReport, HospitalProfile, HospitalUsers, UserAction, HospitalData, BrowseKind, BrowsePage,
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
+  SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
 
@@ -65,6 +66,16 @@ export interface CpApi {
   walletLedger(id: string): Promise<WalletRow[]>
   creditNotes(tenantId?: string): Promise<CreditNote[]>
   creditNote(paymentId: string, args: { amount?: number | null; reason: string; mode: 'wallet' | 'refund' }): Promise<CreditNote>
+  // platform website CMS
+  site(): Promise<SiteState>
+  siteSave(key: string, data: unknown, publish: boolean): Promise<SitePageRow>
+  siteDiscard(key: string): Promise<void>
+  siteReset(key: string): Promise<void>
+  siteHistory(key: string): Promise<SiteRevision[]>
+  siteRestore(revId: string): Promise<SitePageRow>
+  posts(): Promise<CpPost[]>
+  savePost(p: PostSave): Promise<CpPost>
+  deletePost(id: string): Promise<void>
   announcements(): Promise<Announcement[]>
   saveAnnouncement(a: AnnouncementSave): Promise<Announcement>
   deleteAnnouncement(id: string): Promise<void>
@@ -187,6 +198,15 @@ const db: CpApi = {
   walletLedger: (id) => rpc('cp_wallet_ledger', { p_id: id, p_limit: 300 }),
   creditNotes: (tenantId) => rpc('cp_credit_notes', { p_tenant: tenantId ?? null }),
   creditNote: (paymentId, args) => rpc('cp_credit_note', { p_payment: paymentId, p: args }),
+  site: () => rpc('cp_site'),
+  siteSave: (key, data, publish) => rpc('cp_site_save', { p_key: key, p_data: data, p_publish: publish }),
+  async siteDiscard(key) { await rpc('cp_site_discard', { p_key: key }) },
+  async siteReset(key) { await rpc('cp_site_reset', { p_key: key }) },
+  siteHistory: (key) => rpc('cp_site_history', { p_key: key }),
+  siteRestore: (revId) => rpc('cp_site_restore', { p_rev: revId }),
+  posts: () => rpc('cp_posts'),
+  savePost: (p) => rpc('cp_save_post', { p }),
+  async deletePost(id) { await rpc('cp_delete_post', { p_id: id }) },
   announcements: () => rpc('cp_announcements'),
   saveAnnouncement: (a) => rpc('cp_save_announcement', { p: a }),
   async deleteAnnouncement(id) { await rpc('cp_delete_announcement', { p_id: id }) },

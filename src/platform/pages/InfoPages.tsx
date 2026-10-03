@@ -164,7 +164,7 @@ export function SecurityPage({ site }: P) {
       {c.compliance.points.length > 0 && (
         <Section>
           <div className="grid items-center gap-10 rounded-[2rem] border border-peri-200/80 bg-white p-6 shadow-soft sm:p-10 lg:grid-cols-2">
-            <SectionHead h={c.compliance} className="!mx-0 text-left" />
+            <SectionHead h={c.compliance} className="!mx-0 !text-left" />
             <ul className="space-y-3">
               {c.compliance.points.map((p) => <li key={p} className="flex gap-3 text-slate-700"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-peri-600" />{p}</li>)}
             </ul>

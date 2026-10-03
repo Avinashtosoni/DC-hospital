@@ -121,7 +121,7 @@ export function ContactForm({ plan, title, thanks }: { plan?: string | null; tit
           {error && <p role="alert" className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 sm:col-span-2">{error}</p>}
           <div className="flex flex-col items-center gap-3 sm:col-span-2 sm:flex-row sm:justify-between">
             <p className="text-xs text-slate-500">We only use these details to contact you about {platformName} — see our <A to="/legal/privacy" className="underline underline-offset-2 hover:text-peri-700">Privacy Policy</A>.</p>
-            <button type="submit" className="btn-peri w-full sm:w-auto" disabled={state === 'sending'}>
+            <button type="submit" className="btn-peri w-full shrink-0 whitespace-nowrap sm:w-auto" disabled={state === 'sending'}>
               {state === 'sending' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Request a call back
             </button>
           </div>

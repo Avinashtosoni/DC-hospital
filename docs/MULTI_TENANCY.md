@@ -250,8 +250,16 @@ from `PLATFORM_*` env), self-service free trial on `/signup` (open / closed, rev
 (`SENTRY_DSN`), an encrypted nightly backup Action, `npm run preflight` and the owner's setup checklist.
 Runbook: [GO_LIVE.md](GO_LIVE.md).
 
+### Product website & CMS ✅
+Separate pages on the platform domain (`/features`, `/solutions`, `/pricing`, `/security`, `/about`, `/contact`, `/faq`,
+`/blog`, 11 `/legal/*` pages) edited in **control panel → Website**. Content is stored in `platform_content` (published
+`data` + `draft`, history in `platform_content_revisions`), the blog in `platform_posts` and images in the `platform-media`
+bucket (`scripts/sql/platform_cms.sql`). The public reads published content only, through `platform_site()` /
+`platform_blog()`. `?preview` shows drafts to the platform team. Built-in text lives in `src/platform/site/defaults.ts`;
+text may use `{platform}`, `{company}`, `{email}`, `{phone}`, `{address}`, `{domain}` and `{grievance}`.
+
 ### Later
-Help centre, support inbox, landing SEO / marketing pages, public status page.
+Help centre, support inbox, public status page, sitemap.xml for the product site.
 
 ## Going multi-hospital (runbook)
 
