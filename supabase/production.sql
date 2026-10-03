@@ -7659,6 +7659,118 @@ grant execute on function public.cp_site(), public.cp_site_save(text, jsonb, boo
 grant execute on function public.platform_site(boolean), public.platform_blog(text, int, int), public.platform_blog_post(text, boolean),
   public.platform_page_keys() to anon, authenticated;
 
+-- ------------------------------------------------------------------ starter articles (once — deleting them keeps them deleted)
+do $seed$
+begin
+  if exists (select 1 from public.platform_settings where key = 'blog_seeded') then return; end if;
+  insert into public.platform_posts (slug, title, excerpt, body, tags, author, status, published_at) values
+  ('reduce-opd-no-shows', '7 ways to reduce OPD no-shows at your clinic',
+   'Empty slots cost money and lengthen waiting lists. These simple habits help more booked patients actually turn up.',
+$md$Every missed appointment is a slot another patient could have used. In many Indian clinics, a noticeable share of booked patients simply do not arrive — and the doctor's day becomes unpredictable. The good news: most no-shows are forgotten appointments, not lost patients. Here is what works.
+
+## 1. Confirm the booking straight away
+
+A confirmation message with the doctor's name, date, time and address — sent the moment the slot is booked — turns a vague plan into a commitment. WhatsApp works best in India because people actually read it.
+
+## 2. Send a reminder the day before
+
+A short reminder the evening before (or a few hours before a morning slot) is the single most effective step. Keep it simple: who, when, where, and how to reschedule.
+
+## 3. Make rescheduling easy
+
+Patients who cannot come often do not cancel because calling feels like a hassle. A simple "reply or call to change your time" line frees the slot for someone else.
+
+## 4. Verify mobile numbers at booking
+
+An OTP check on online bookings means reminders reach the right person — and filters out fake or mistyped bookings.
+
+## 5. Keep walk-ins and bookings in one queue
+
+When reception can see free slots in real time, a walk-in can fill a gap left by a no-show instead of waiting until the end.
+
+## 6. Watch the numbers
+
+Track no-shows by doctor, day of week and time of day. Monday mornings and late evenings often behave differently — adjust slot lengths and reminders accordingly.
+
+## 7. Follow up kindly
+
+A polite message after a missed visit ("We missed you today — would you like a new time?") brings many patients back and shows you care.
+
+---
+
+**In short:** confirm, remind, make changes easy, and measure. With a system that sends these messages automatically, your staff do not have to remember to call anyone.$md$,
+   array['opd', 'patients'], 'Editorial team', 'published', now()),
+
+  ('choosing-hospital-software-checklist', 'Choosing hospital management software: a 12-point checklist',
+   'Before you sign up for any HMS, ask these twelve questions — about data, cost, support and how your staff will actually use it.',
+$md$Hospital software is a long-term decision: your patient records, bills and daily routine will live inside it. Demos all look good, so use this checklist to compare options fairly.
+
+## Data and safety
+
+1. **Who owns the data?** It should be clearly yours, with a full export available at any time — not only when you leave.
+2. **Where is it stored?** Ask which country and which provider, and whether backups are automatic and encrypted.
+3. **Is each hospital's data isolated?** In cloud software, your records must be separated from other customers' at the database level.
+4. **Is there a Data Processing Agreement?** Under India's DPDP Act, 2023, your hospital is responsible for patient data — your software provider should sign up to protect it.
+
+## Daily use
+
+5. **Can reception learn it in an hour?** Ask for a trial and let your actual front-desk staff try booking and billing.
+6. **Does each role see only what it needs?** Doctors, reception and accounts should have separate access; salaries and settings should not be visible to everyone.
+7. **Does it work on the devices you have?** Browser-based software that runs on ordinary laptops and phones saves you buying new hardware.
+8. **Does it talk to patients?** Booking confirmations and reminders on WhatsApp or SMS save hours of phone calls.
+
+## Cost and support
+
+9. **What is the full price?** Check setup fees, per-user charges, message costs and annual increases — not just the headline monthly price.
+10. **What does support look like?** Hours, language, response times — and whether they are written down.
+11. **How often is it updated?** Cloud software should improve regularly without paid upgrades.
+12. **Can you leave easily?** Make sure you can take all your data with you in a usable format.
+
+---
+
+Print this list, take it into every demo, and score each option. The right choice is usually the one your staff are happiest using after a week of trial.$md$,
+   array['software', 'guides'], 'Editorial team', 'published', now() - interval '1 day'),
+
+  ('dpdp-act-for-clinics', 'DPDP Act, 2023: what clinics and hospitals should know',
+   'India''s data protection law applies to every hospital that keeps patient records digitally. A plain-language overview of what it asks of you.',
+$md$The **Digital Personal Data Protection Act, 2023** (DPDP Act) is India's law on how organisations collect and use personal data. The **DPDP Rules** were notified in November 2025, with most obligations applying after a transition period. Hospitals and clinics hold some of the most sensitive data there is, so it is worth preparing now.
+
+> This article is general information, not legal advice. Please consult a lawyer for your hospital's specific situation.
+
+## Your hospital is the "Data Fiduciary"
+
+Under the Act, the organisation that decides why and how personal data is used is the **Data Fiduciary**. For patient records, that is your hospital. Your software provider is a **Data Processor** that handles the data on your behalf — under a written agreement.
+
+## What the law expects
+
+- **A clear notice and consent** — tell people what data you collect and why, in simple language, and get consent where it is needed (for example, for marketing messages).
+- **Use data only for its purpose** — data collected for treatment and billing should not be reused for unrelated things.
+- **Keep it accurate and secure** — reasonable security safeguards are mandatory, and access should be limited to people who need it.
+- **Respect people's rights** — patients can ask to access, correct or erase their data (subject to records you must keep by law) and to nominate someone to act for them.
+- **Have a grievance process** — publish how people can complain, and answer within the set time.
+- **Report breaches** — if personal data is breached, you must inform the Data Protection Board of India and the affected people. The Rules set short deadlines, so have a plan ready.
+- **Delete data you no longer need** — keep records for as long as medical and tax laws require, and not indefinitely beyond that.
+
+Penalties for serious failures — such as not taking reasonable security safeguards — can be very large, up to ₹250 crore.
+
+## A practical checklist for clinics
+
+1. Give each staff member their own login with the right role — no shared passwords.
+2. Make sure your software keeps an audit log of who changed what.
+3. Sign a Data Processing Agreement with your software provider.
+4. Put a short privacy notice on your website and booking forms.
+5. Record consent for promotional messages separately from appointment messages.
+6. Name a person responsible for privacy requests and complaints.
+7. Write down what you will do if a laptop is lost or data leaks.
+
+---
+
+Good software makes most of this routine: role-based access, audit logs, consent records and data export are built in, so your team can focus on patients.$md$,
+   array['compliance', 'privacy'], 'Editorial team', 'published', now() - interval '2 days')
+  on conflict (slug) do nothing;
+  insert into public.platform_settings (key, data) values ('blog_seeded', jsonb_build_object('at', now())) on conflict (key) do nothing;
+end $seed$;
+
 
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS

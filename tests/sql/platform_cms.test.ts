@@ -23,6 +23,9 @@ const fails = (p: Promise<unknown>, re: RegExp) => expect(p).rejects.toThrow(re)
 beforeAll(async () => {
   db = await freshDb('master')
   await db.as(null, `insert into public.tenants (id, slug, name, code, plan, status) values ($1, 'city', 'City Hospital', 'CTY', 'clinic', 'active')`, [B])
+  // starter articles are seeded once; start these tests from an empty blog
+  expect((await db.one<any>(null, `select count(*)::int n from public.platform_posts where status = 'published'`)).n).toBe(3)
+  await db.as(null, `delete from public.platform_posts`)
   await signUp(B_OWNER, 'owner@cityhospital.in', { full_name: 'City Owner', tenant_id: B })
   await db.as(null, `update public.profiles set role = 'owner' where id = $1`, [B_OWNER])
   for (const [id, email, role] of [[P_ADMIN, 'admin@hc.in', 'admin'], [P_SUPPORT, 'support@hc.in', 'support']]) {

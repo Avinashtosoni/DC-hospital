@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — richer product website
+
+- New CMS-editable sections, each with built-in default content: before/after problems, "made for India", integrations strip (Home); patient journey timeline and per-role views (Features); "included in every plan" (Pricing); specialities and a go-live plan (Solutions); role access table and FAQs (Security); how we work (About); what happens next and FAQs (Contact).
+- More modules, solutions (diagnostic labs, day-care) and FAQ topics (WhatsApp & SMS, support & training, patients, GST invoices).
+- Softened claims that the product cannot yet back up.
+- Three starter blog articles (OPD no-shows, HMS checklist, DPDP overview), seeded only once — deleting them keeps them deleted.
+- Saved CMS pages pick up the new sections automatically (deep-merge over defaults).
+
 ## Unreleased — product website & its CMS
 
 - **Separate pages** on the platform domain: Home, Features, Solutions, Pricing (plan comparison, add-ons, pricing
