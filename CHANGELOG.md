@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — control panel: manage every hospital
+
+The Hospital Comrade control panel can now run a hospital's account without opening it (admin = everything,
+support = their assigned hospitals without money or deleting, finance = billing). Every action is in the audit log.
+
+- **Details:** website contact (name, address, phones, e-mail, logo link) and legal / GST details (legal name, GSTIN,
+  PAN, billing address); hand the hospital to another owner; resend / copy the owner's sign-up link.
+- **Users:** every account with search and role filter — change role, block / unblock, e-mail a password reset,
+  invite staff (link copied), cancel invitations, remove (admins). A hospital always keeps an owner.
+- **Data:** record counts and 30-day figures, read-only look-up of patients / doctors / appointments / bills (each look
+  is logged), *Open as admin* (the hospital app with owner access) and *Export ZIP*, CSV import of patients and doctors
+  (checked first, duplicates skipped, a bad row never stops the rest).
+- **Messaging:** WhatsApp / SMS / e-mail on or off, own or shared account, and a monthly cap on the shared accounts.
+- **Domains:** add, check, make primary and remove website addresses from the panel.
+- **Billing:** download any tax invoice as PDF, full wallet history, and GST credit notes against paid invoices
+  (credit to the wallet or refund; full credit marks the invoice refunded).
+- **Announcements:** banners inside the hospital app for chosen hospitals and roles (critical ones can't be dismissed).
+- **Hospitals list:** plan filter and CSV export.
+- **Sign in as user (admins):** written reason + password, a new tab only (the admin's own sign-in is untouched), amber
+  banner with a 30-minute countdown and *End session*; sign-out, password change and "sign out everywhere" are blocked in
+  that tab; the session is deleted when it ends or expires; all sessions are listed in the Audit log (and can be ended).
+  Patients can't be impersonated. Note: an already-issued access token can live until its expiry (Supabase default 1 h —
+  set *JWT expiry* to 1800 s in Supabase → Auth to match the 30 minutes).
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run), then deploy the new Edge Function:
+`supabase functions deploy impersonate`.
+
 ## Unreleased — production-readiness audit
 
 - **Security (important):** when no SMS / WhatsApp gateway was connected, the booking OTP was returned to the browser

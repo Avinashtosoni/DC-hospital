@@ -58,7 +58,7 @@ Going live with paying hospitals: follow [GO_LIVE.md](GO_LIVE.md) and run `npm r
 - Control panel (platform team): `https://<your app>/control-panel/` — served by the same container (nginx `location /control-panel/`).
 - After database changes, redeploy the functions: `supabase functions deploy notify`,
   `supabase functions deploy whatsapp-bot --no-verify-jwt`, `supabase functions deploy domains` and
-  `supabase functions deploy billing --no-verify-jwt` (Razorpay secrets: see MULTI_TENANCY.md → Billing).
+  `supabase functions deploy billing --no-verify-jwt`, `supabase functions deploy impersonate` (Razorpay secrets: see MULTI_TENANCY.md → Billing).
 - Hospitals' own domains (Settings → Domain) use Cloudflare for SaaS when the `domains` function has the secrets
   `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_CNAME_TARGET`, `PLATFORM_DOMAIN` — setup in
   [MULTI_TENANCY.md](MULTI_TENANCY.md#cloudflare-for-saas-once-for-automatic-ssl-on-hospitals-domains).

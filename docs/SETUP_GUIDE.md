@@ -90,6 +90,7 @@ npx supabase functions deploy notify
 npx supabase functions deploy whatsapp-bot --no-verify-jwt
 npx supabase functions deploy domains
 npx supabase functions deploy billing --no-verify-jwt
+npx supabase functions deploy impersonate
 ```
 
 > Docker install nahi hai aur deploy fail ho raha hai, to har command ke aakhir mein `--use-api` jod kar dobara chalaiye.

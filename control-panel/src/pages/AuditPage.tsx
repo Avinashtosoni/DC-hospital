@@ -1,17 +1,49 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { ClipboardList, Search } from 'lucide-react'
-import { Badge, Card, EmptyState, Input, PageHeader, Skeleton } from '../../../src/components/ui'
-import { cp } from '../api'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ClipboardList, LogIn, Search, Square } from 'lucide-react'
+import { toast } from 'sonner'
+import { Badge, Button, Card, EmptyState, Input, PageHeader, Skeleton } from '../../../src/components/ui'
+import { supabase } from '../../../src/lib/supabase'
+import { cp, friendly } from '../api'
 import { dateTime, ErrorBox } from '../ui'
 
 export function AuditPage() {
   return (
     <>
       <PageHeader title="Audit log" description="Everything your team does — in this panel and inside hospitals (opening, switching mode, billing, settings)." />
+      <Impersonations />
       <AuditList />
     </>
+  )
+}
+
+/** "sign in as user" sessions — who, as whom, why, how long; a running one can be ended from here */
+function Impersonations() {
+  const qc = useQueryClient()
+  const q = useQuery({ queryKey: ['cp-impersonations'], queryFn: () => cp.impersonations() })
+  const end = useMutation({
+    mutationFn: async (id: string) => { const { error } = await supabase!.rpc('impersonation_end', { p_id: id, p_reason: 'ended_by_admin' }); if (error) throw new Error(error.message) },
+    onSuccess: () => { toast.success('Session ended'); qc.invalidateQueries({ queryKey: ['cp-impersonations'] }); qc.invalidateQueries({ queryKey: ['cp-audit'] }) },
+    onError: (e) => toast.error(friendly(e)),
+  })
+  if (!q.data?.length) return null
+  return (
+    <Card className="mb-6 overflow-hidden">
+      <p className="flex items-center gap-2 border-b border-slate-100 px-4 py-3 text-sm font-semibold text-brand-950"><LogIn className="h-4 w-4 text-amber-600" />Sign-in-as sessions</p>
+      <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+        {q.data.map((i) => (
+          <li key={i.id} className="flex flex-col gap-1 px-4 py-2.5 text-sm sm:flex-row sm:items-center sm:gap-4">
+            <span className="w-36 shrink-0 text-xs text-slate-500">{dateTime(i.created_at)}</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-slate-800"><span className="font-medium">{i.admin_name ?? 'Admin'}</span> as <span className="font-medium">{i.target_email}</span> <span className="text-xs text-slate-500">({i.target_role}) · <Link to={`/hospitals/${i.hospital_id}`} className="text-brand-700 hover:underline">{i.hospital}</Link></span></p>
+              <p className="truncate text-xs text-slate-500">“{i.reason}”{i.ended_at ? ` · ended ${dateTime(i.ended_at)} (${i.end_reason})` : ''}{!i.bound_at && !i.active ? ' · never opened' : ''}</p>
+            </div>
+            {i.active ? <Button size="sm" variant="outline" icon={<Square className="h-3.5 w-3.5" />} loading={end.isPending && end.variables === i.id} onClick={() => end.mutate(i.id)}>End now</Button> : <Badge>{i.end_reason ?? 'ended'}</Badge>}
+          </li>
+        ))}
+      </ul>
+    </Card>
   )
 }
 

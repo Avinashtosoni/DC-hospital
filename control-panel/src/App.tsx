@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Inbox, LogOut, Menu, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
+import { Activity, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Inbox, LogOut, Megaphone, Menu, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
 import { Avatar, Badge, Spinner } from '../../src/components/ui'
 import { cn } from '../../src/lib/utils'
 import { ErrorBoundary } from '../../src/components/ErrorBoundary'
@@ -21,6 +21,7 @@ import { AuditPage } from './pages/AuditPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { HealthPage } from './pages/HealthPage'
 import { IncidentsPage } from './pages/IncidentsPage'
+import { AnnouncementsPage } from './pages/AnnouncementsPage'
 
 const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }[] = [
   { to: '/', label: 'Overview', icon: <Gauge className="h-4 w-4" />, roles: ['admin', 'support', 'finance'] },
@@ -29,6 +30,7 @@ const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }
   { to: '/signups', label: 'Sign-ups', icon: <UserPlus className="h-4 w-4" />, roles: ['admin'] },
   { to: '/leads', label: 'Leads', icon: <Inbox className="h-4 w-4" />, roles: ['admin'] },
   { to: '/health', label: 'System health', icon: <Activity className="h-4 w-4" />, roles: ['admin', 'support'] },
+  { to: '/announcements', label: 'Announcements', icon: <Megaphone className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/incidents', label: 'Incidents', icon: <ShieldAlert className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/team', label: 'Team', icon: <Users className="h-4 w-4" />, roles: ['admin'] },
   { to: '/audit', label: 'Audit log', icon: <ClipboardList className="h-4 w-4" />, roles: ['admin'] },
@@ -56,6 +58,7 @@ export function App() {
           <Route path="/signups" element={<Only roles={['admin']}><SignupsPage /></Only>} />
           <Route path="/leads" element={<Only roles={['admin']}><LeadsPage /></Only>} />
           <Route path="/health" element={<Only roles={['admin', 'support']}><HealthPage /></Only>} />
+          <Route path="/announcements" element={<Only roles={['admin', 'support']}><AnnouncementsPage /></Only>} />
           <Route path="/incidents" element={<Only roles={['admin', 'support']}><IncidentsPage /></Only>} />
           <Route path="/team" element={<Only roles={['admin']}><TeamPage /></Only>} />
           <Route path="/audit" element={<Only roles={['admin']}><AuditPage /></Only>} />

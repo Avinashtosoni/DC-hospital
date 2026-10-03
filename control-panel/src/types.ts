@@ -217,3 +217,52 @@ export const SIGNUP_DEFAULTS: SignupSettings = { enabled: true, mode: 'approve',
 // ------------------------------------------------------------------ phase 8.3 — launch checklist
 export interface LaunchCheck { id: string; title: string; status: 'ok' | 'warn' | 'fail'; detail: string }
 export interface LaunchReport { at: string; checks: LaunchCheck[] }
+
+// ------------------------------------------------------------------ hospital operations (control_panel_ops.sql)
+export interface HospitalProfile {
+  name: string; tagline: string; address: string; phone: string; appointmentsPhone: string; whatsapp: string; email: string
+  logoUrl: string; legalName: string; gstin: string; pan: string; billingAddress: string
+}
+export type HospitalUserRole = 'owner' | 'doctor' | 'receptionist' | 'accountant' | 'staff' | 'patient'
+export interface HospitalUser {
+  id: string; full_name: string; email: string | null; phone: string | null; role: HospitalUserRole
+  created_at: string; blocked: boolean; last_sign_in_at: string | null
+}
+export interface HospitalInvite { id: string; full_name: string; email: string; phone: string | null; role: HospitalUserRole; token: string; expires_at: string; created_at: string }
+export interface HospitalUsers { total: number; rows: HospitalUser[]; invites: HospitalInvite[] }
+export type UserAction = 'create' | 'update' | 'disable' | 'enable' | 'delete' | 'invite' | 'revoke_invite' | 'password_reset'
+export interface HospitalData {
+  counts: Record<string, number>; users: number; appointments_30d: number; admitted_now: number
+  billed_30d: number; outstanding: number; last_activity: string | null
+}
+export type BrowseKind = 'patients' | 'doctors' | 'appointments' | 'invoices'
+export interface BrowsePage { total: number; rows: Record<string, unknown>[] }
+export interface ImportResult { dry_run: boolean; imported: number; duplicates: number; failed: number; errors: { row: number; error: string }[] }
+export type Channel = 'sms' | 'whatsapp' | 'email'
+export interface HospitalMessaging {
+  channels: Record<Channel, { enabled: boolean; source: 'own' | 'platform' }>
+  monthlyLimit: Partial<Record<Channel, number>>
+  included: Partial<Record<Channel, number>>
+  usage: Record<string, { sent: number; failed: number }>
+  pending: Partial<Record<Channel, number>>
+  wallet_paise: number
+  is_primary: boolean
+}
+export interface WalletRow { id: string; created_at: string; day: string; kind: 'topup' | 'usage' | 'refund' | 'adjustment'; channel: string | null; units: number; amount_paise: number; balance_paise: number; note: string | null; invoice_no: string | null }
+export interface CreditNote {
+  id: string; tenant_id: string; payment_id: string; credit_no: string; created_at: string
+  base_paise: number; gst_paise: number; total_paise: number; mode: 'wallet' | 'refund'; reason: string
+  seller: Record<string, string> | null; buyer: Record<string, string> | null; created_by_name: string | null
+  invoice_no: string; invoice_date: string | null; kind: 'plan' | 'wallet'; plan: string | null; months: number | null; hospital?: string
+}
+export type AnnouncementLevel = 'info' | 'warning' | 'critical'
+export interface Announcement {
+  id: string; title: string; body: string; level: AnnouncementLevel; hospital_ids: string[] | null; roles: string[]
+  starts_at: string; ends_at: string | null; active: boolean; created_by_name: string | null; created_at: string
+  hospitals: { id: string; name: string }[]; live: boolean
+}
+export interface AnnouncementSave { id?: string; title: string; body: string; level: AnnouncementLevel; hospital_ids: string[] | null; roles: string[]; starts_at?: string | null; ends_at?: string | null; active: boolean }
+export interface ImpersonationRow {
+  id: string; admin_name: string | null; target_email: string; target_role: string; reason: string; created_at: string; expires_at: string
+  bound_at: string | null; ended_at: string | null; end_reason: string | null; hospital: string; hospital_id: string; active: boolean
+}

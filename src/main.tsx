@@ -12,6 +12,7 @@ import { ErrorBoundary, RouteError, reloadForChunkError } from './components/Err
 import { appEnv, backendMissing } from './lib/supabase'
 import { initMonitoring } from './lib/monitoring'
 import { bootTenancy } from './tenancy/boot'
+import { startImpersonationFromUrl } from './auth/impersonation'
 import { TenantScreen } from './tenancy/TenantScreens'
 import './index.css'
 
@@ -61,13 +62,27 @@ function SetupError() {
   )
 }
 
+function ImpersonationError({ message }: { message: string }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-slate-50 p-6">
+      <div className="max-w-lg rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
+        <h1 className="text-lg font-semibold text-slate-900">Could not sign in as this user</h1>
+        <p className="mt-2 text-sm text-slate-600">{message}</p>
+      </div>
+    </div>
+  )
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root')!)
-// multi-hospital mode: find this domain's hospital first (a no-op for single-hospital installs)
-;(backendMissing ? Promise.resolve(null) : bootTenancy()).then((boot) => {
+// "sign in as user" hand-off from the control panel (#imp=…) first, then (multi-hospital mode) find this domain's
+// hospital — both no-ops normally
+;(backendMissing ? Promise.resolve([null, null] as const)
+  : startImpersonationFromUrl().then(async (impError) => [impError, impError ? null : await bootTenancy()] as const)).then(([impError, boot]) => {
   root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         {backendMissing ? <SetupError />
+          : impError ? <ImpersonationError message={impError} />
           : boot && !boot.ok ? <TenantScreen result={boot} />
           : boot?.platform ? <Suspense fallback={null}><PlatformLanding /></Suspense>
           : <RouterProvider router={router} />}

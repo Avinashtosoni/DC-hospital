@@ -20,6 +20,8 @@ import { isFresh, noticeState, sortNotices, useNoticeReads, visibleTo } from '..
 import { PushForeground, PushToggle } from '../PushToggle'
 import { setMonitoringContext } from '../../lib/monitoring'
 import { siteTenant } from '../../tenancy/state'
+import { ImpersonationBanner } from '../../auth/ImpersonationBanner'
+import { PlatformAnnouncements } from './PlatformAnnouncements'
 
 /** Patients get the portal in their language; staff screens stay English. */
 function usePortalT() {
@@ -276,10 +278,12 @@ export function AppLayout() {
         </div>
       )}
       <div className="lg:pl-64">
+        <ImpersonationBanner />
         <ProviderBanner />
         <Topbar onMenu={() => setMobileOpen(true)} />
         <main className="w-full min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <LicenseBanner />
+          <PlatformAnnouncements />
           <Announcement />
           {off ? <ModuleOff /> : <ErrorBoundary resetKey={loc.pathname}><Outlet /></ErrorBoundary>}
         </main>

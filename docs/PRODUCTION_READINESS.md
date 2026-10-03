@@ -49,6 +49,7 @@ Never paste these in chat or commit them. They go only into Supabase / Coolify /
    supabase functions deploy whatsapp-bot --no-verify-jwt
    supabase functions deploy domains
    supabase functions deploy billing --no-verify-jwt
+   supabase functions deploy impersonate          # control panel → "Sign in as user"
    ```
    Then set the secrets from §2 row 4.
 4. **Coolify:** set the variables from §2 row 5, then **Restart** (no rebuild needed). A push to the branch redeploys automatically.

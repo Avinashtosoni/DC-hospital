@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Ban, CalendarPlus, DoorClosed, ExternalLink, Globe, IndianRupee, Play, Receipt, RotateCcw, Save, Trash2, Wallet } from 'lucide-react'
+import { ArrowLeft, Ban, CalendarPlus, DoorClosed, ExternalLink, Globe, IndianRupee, LogIn, Play, Receipt, RotateCcw, Save, Trash2, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Modal, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
 import { PLANS } from '../../../src/platform/plans'
@@ -10,8 +10,14 @@ import type { BillingAction, CpHospitalDetail, ModuleMap } from '../types'
 import { appUrl, canBill, date, dateTime, ErrorBox, inr, isAdmin, LicenseBadge, licenseLine, paise, planLabel, ROLE_LABEL, ROLE_TONE, Section, useMe } from '../ui'
 import { ModuleGrid } from './HospitalsPage'
 import { AuditList } from './AuditPage'
+import { DetailsTab } from './hospital/DetailsTab'
+import { UsersTab } from './hospital/UsersTab'
+import { DataTab, openAsAdmin } from './hospital/DataTab'
+import { MessagingTab } from './hospital/MessagingTab'
+import { DomainsTab } from './hospital/DomainsTab'
+import { CreditNoteModal, CreditNotesSection, InvoiceActions, WalletLedgerSection } from './hospital/BillingExtras'
 
-type Tab = 'overview' | 'billing' | 'settings' | 'activity'
+type Tab = 'overview' | 'details' | 'users' | 'data' | 'messaging' | 'domains' | 'billing' | 'settings' | 'activity'
 
 export function HospitalPage() {
   const { id = '' } = useParams()
@@ -20,7 +26,10 @@ export function HospitalPage() {
   const q = useQuery({ queryKey: ['cp-hospital', id], queryFn: () => cp.hospital(id) })
   const h = q.data
 
-  const tabs: { value: Tab; label: string }[] = [{ value: 'overview', label: 'Overview' }]
+  const tabs: { value: Tab; label: string }[] = [{ value: 'overview', label: 'Overview' }, { value: 'details', label: 'Details' }]
+  if (me.role !== 'finance') tabs.push({ value: 'users', label: 'Users' })
+  tabs.push({ value: 'data', label: 'Data' }, { value: 'messaging', label: 'Messaging' })
+  if (isAdmin(me.role)) tabs.push({ value: 'domains', label: 'Domains' })
   if (canBill(me.role) || me.role === 'support') tabs.push({ value: 'billing', label: canBill(me.role) ? 'Plan & billing' : 'Plan' })
   if (isAdmin(me.role)) tabs.push({ value: 'settings', label: 'Settings' }, { value: 'activity', label: 'Activity' })
 
@@ -39,11 +48,20 @@ export function HospitalPage() {
               </div>
               <p className="mt-1 text-sm text-slate-500">{planLabel(h.plan)} · {licenseLine(h.license)} · prefix {h.code} · short name {h.slug}</p>
             </div>
-            <a href={appUrl(h)} target="_blank" rel="noreferrer"><Button variant="outline" icon={<ExternalLink className="h-4 w-4" />}>Open hospital app</Button></a>
+            <div className="flex flex-wrap gap-2">
+              {h.domain && <a href={appUrl(h)} target="_blank" rel="noreferrer"><Button variant="ghost" icon={<ExternalLink className="h-4 w-4" />}>Website</Button></a>}
+              {me.role !== 'finance' && <a href={openAsAdmin(h)} target="_blank" rel="noopener" title="The hospital app with owner access, as you (logged)">
+                <Button variant="outline" icon={<LogIn className="h-4 w-4" />}>Open as admin</Button></a>}
+            </div>
           </div>
           <Tabs tabs={tabs} value={tab} onChange={setTab} />
           <div className="mt-5">
             {tab === 'overview' && <OverviewTab h={h} />}
+            {tab === 'details' && <DetailsTab h={h} />}
+            {tab === 'users' && <UsersTab h={h} />}
+            {tab === 'data' && <DataTab h={h} />}
+            {tab === 'messaging' && <MessagingTab h={h} />}
+            {tab === 'domains' && <DomainsTab h={h} />}
             {tab === 'billing' && <BillingTab h={h} />}
             {tab === 'settings' && <SettingsTab h={h} />}
             {tab === 'activity' && <AuditList tenantId={h.id} />}
@@ -196,9 +214,13 @@ function BillingTab({ h }: { h: CpHospitalDetail }) {
         </div>
       )}
 
-      <Section title="Payments" subtitle="Latest 20">
+      <Section title="Payments" subtitle="Latest 20 · download the tax invoice or issue a credit note from the row">
         {!h.payments.length ? <p className="text-sm text-slate-500">No payments yet.</p> : <PaymentsTable rows={h.payments} />}
       </Section>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <WalletLedgerSection tenantId={h.id} />
+        <CreditNotesSection tenantId={h.id} />
+      </div>
 
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} loading={bill.isPending}
         title={confirm === 'suspend' ? `Suspend ${h.name}?` : `Resume ${h.name}?`}
@@ -209,12 +231,17 @@ function BillingTab({ h }: { h: CpHospitalDetail }) {
   )
 }
 
-export function PaymentsTable({ rows, showHospital }: { rows: (CpHospitalDetail['payments'][number] & { hospital?: string; tenant_id?: string })[]; showHospital?: boolean }) {
+type PaymentLine = CpHospitalDetail['payments'][number] & { hospital?: string; tenant_id?: string }
+export function PaymentsTable({ rows, showHospital }: { rows: PaymentLine[]; showHospital?: boolean }) {
+  const { me } = useMe()
+  const [credit, setCredit] = useState<PaymentLine | null>(null)
+  const actions = canBill(me.role)
   return (
     <div className="-mx-5 overflow-x-auto">
+      <CreditNoteModal p={credit} onClose={() => setCredit(null)} />
       <table className="w-full text-sm">
         <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
-          <tr><th className="px-5 py-2">Date</th>{showHospital && <th className="px-5 py-2">Hospital</th>}<th className="px-5 py-2">For</th><th className="px-5 py-2">Invoice</th><th className="px-5 py-2">Via</th><th className="px-5 py-2 text-right">Amount</th><th className="px-5 py-2">Status</th></tr>
+          <tr><th className="px-5 py-2">Date</th>{showHospital && <th className="px-5 py-2">Hospital</th>}<th className="px-5 py-2">For</th><th className="px-5 py-2">Invoice</th><th className="px-5 py-2">Via</th><th className="px-5 py-2 text-right">Amount</th><th className="px-5 py-2">Status</th>{actions && <th className="px-5 py-2" />}</tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {rows.map((p) => (
@@ -226,6 +253,7 @@ export function PaymentsTable({ rows, showHospital }: { rows: (CpHospitalDetail[
               <td className="px-5 py-2.5 text-slate-600">{p.provider === 'manual' ? `Manual · ${p.method ?? ''}` : `Razorpay${p.method ? ` · ${p.method}` : ''}`}</td>
               <td className="whitespace-nowrap px-5 py-2.5 text-right tabular-nums font-medium text-slate-800">{paise(p.total_paise)}<p className="text-[11px] font-normal text-slate-400">incl. GST {paise(p.gst_paise)}</p></td>
               <td className="px-5 py-2.5"><Badge tone={p.status === 'paid' ? 'green' : p.status === 'failed' ? 'red' : 'slate'}>{p.status}</Badge></td>
+              {actions && <td className="px-5 py-2.5"><InvoiceActions p={p} onCredit={setCredit} /></td>}
             </tr>
           ))}
         </tbody>

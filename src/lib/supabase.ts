@@ -40,8 +40,25 @@ export const sentryDsn = envOr('SENTRY_DSN', '')
 /** Project URL (for showing Edge Function webhook addresses in Settings). */
 export const supabaseUrl = isSupabaseConfigured ? url! : ''
 
+/**
+ * "Sign in as user" tab (opened by the control panel with #imp=…): its session lives in this tab's sessionStorage under
+ * its own key, so it never touches the admin's own sign-in in other tabs (src/auth/impersonation.ts).
+ */
+export const IMPERSONATION_KEY = 'dch:imp'
+export const impersonationTab = typeof window !== 'undefined' && (() => {
+  try {
+    return /^#imp=/.test(window.location.hash) || !!window.sessionStorage.getItem(IMPERSONATION_KEY)
+      || !!window.sessionStorage.getItem(`${IMPERSONATION_KEY}:ended`)   // stays apart after it ended, even on reload
+  } catch { return false }
+})()
+
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(url!, key!, { auth: { persistSession: true, autoRefreshToken: true }, global: { fetch: tenantFetch } })
+  ? createClient(url!, key!, {
+    auth: impersonationTab
+      ? { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storage: window.sessionStorage, storageKey: 'dch-impersonation-auth' }
+      : { persistSession: true, autoRefreshToken: true },
+    global: { fetch: tenantFetch },
+  })
   : null
 
 /** every request (REST, RPC, storage, Edge Functions) says which hospital it is for — multi mode only */

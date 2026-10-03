@@ -1,32 +1,49 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Building2, Plus, Search } from 'lucide-react'
+import { Building2, Download, Plus, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Skeleton, Textarea } from '../../../src/components/ui'
 import { cn } from '../../../src/lib/utils'
 import { PLANS } from '../../../src/platform/plans'
 import { LOCKABLE_MODULES, MODULE_LABEL } from '../../../src/tenancy/moduleList'
 import { cp, friendly } from '../api'
-import type { ModuleMap, NewHospital } from '../types'
+import type { CpHospital, ModuleMap, NewHospital } from '../types'
 import { ErrorBox, isAdmin, LicenseBadge, licenseLine, paise, planLabel, STATUS, useMe } from '../ui'
+
+/** the filtered list as a spreadsheet (opens in Excel; ₹ amounts as plain numbers) */
+function downloadCsv(rows: CpHospital[]) {
+  const head = ['Name', 'Short name', 'Domain', 'Plan', 'Price per month', 'Status', 'Trial ends', 'Paid until', 'Wallet', 'Staff', 'Patients', 'Owner e-mail', 'Owner signed up', 'Added']
+  const cell = (v: unknown) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+  const lines = rows.map((h) => [h.name, h.slug, h.domain, planLabel(h.plan), h.price, STATUS[h.license.status]?.label ?? h.license.status,
+    h.license.trial_ends_at?.slice(0, 10), h.license.paid_until?.slice(0, 10), (h.wallet_paise / 100).toFixed(2), h.staff, h.patients,
+    h.owner_email, h.owner_joined ? 'yes' : 'no', h.created_at.slice(0, 10)].map(cell).join(','))
+  const blob = new Blob(['\ufeff' + [head.join(','), ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob); a.download = `hospitals-${new Date().toISOString().slice(0, 10)}.csv`; a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
 
 export function HospitalsPage() {
   const { me } = useMe()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
+  const [plan, setPlan] = useState('')
   const [adding, setAdding] = useState(false)
   const q = useQuery({ queryKey: ['cp-hospitals'], queryFn: () => cp.hospitals() })
   const rows = useMemo(() => {
     const s = search.trim().toLowerCase()
-    return (q.data ?? []).filter((h) => (!status || h.license.status === status)
+    return (q.data ?? []).filter((h) => (!status || h.license.status === status) && (!plan || h.plan === plan)
       && (!s || [h.name, h.slug, h.domain, h.owner_email].some((v) => v?.toLowerCase().includes(s))))
-  }, [q.data, search, status])
+  }, [q.data, search, status, plan])
 
   return (
     <>
       <PageHeader title="Hospitals" description={isAdmin(me.role) ? 'Every hospital on the platform.' : 'Hospitals assigned to you.'}
-        actions={isAdmin(me.role) && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(true)}>Add hospital</Button>} />
+        actions={<div className="flex gap-2">
+          <Button variant="outline" icon={<Download className="h-4 w-4" />} disabled={!rows.length} onClick={() => downloadCsv(rows)}>CSV</Button>
+          {isAdmin(me.role) && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(true)}>Add hospital</Button>}
+        </div>} />
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -35,6 +52,10 @@ export function HospitalsPage() {
         <Select value={status} onChange={(e) => setStatus(e.target.value)} className="sm:w-48" aria-label="Filter by status">
           <option value="">All statuses</option>
           {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </Select>
+        <Select value={plan} onChange={(e) => setPlan(e.target.value)} className="sm:w-44" aria-label="Filter by plan">
+          <option value="">All plans</option>
+          {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>
       </div>
       {q.error && <ErrorBox error={q.error} onRetry={() => q.refetch()} />}

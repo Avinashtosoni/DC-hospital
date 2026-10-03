@@ -6,6 +6,7 @@ import { downloadCsv } from '../../../src/lib/utils'
 import { cp } from '../api'
 import { ErrorBox, paise, planLabel } from '../ui'
 import { PaymentsTable } from './HospitalPage'
+import { CreditNotesSection } from './hospital/BillingExtras'
 
 export function PaymentsPage() {
   const [hospital, setHospital] = useState('')
@@ -40,6 +41,7 @@ export function PaymentsPage() {
           : !rows.length ? <EmptyState icon={<Receipt className="h-6 w-6" />} title="No payments yet" description="Online payments (Razorpay) and payments you record show up here." />
           : <PaymentsTable rows={rows} showHospital />}
       </Card>
+      <div className="mt-6"><CreditNotesSection tenantId={hospital || undefined} showHospital={!hospital} /></div>
     </>
   )
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-vi.mock('../src/lib/supabase', () => ({ supabase: null, isSupabaseConfigured: false, tenancyEnabled: () => false, siteTenant: () => null }))
+vi.mock('../src/lib/supabase', () => ({ supabase: null, isSupabaseConfigured: false, impersonationTab: false, IMPERSONATION_KEY: 'dch:imp', tenancyEnabled: () => false, siteTenant: () => null }))
 const { friendlyDbError } = await import('../src/data/supabaseAdapter')
 
 describe('friendlyDbError', () => {

@@ -1,6 +1,7 @@
 import { siteTenant, tenancyEnabled } from '../tenancy/state'
 import type { Profile, TableName } from '../types'
-import { supabase } from '../lib/supabase'
+import { impersonationTab, supabase } from '../lib/supabase'
+import { endImpersonation, IMPERSONATION_BLOCKED } from '../auth/impersonation'
 import { cleanTerm } from './query'
 import type { AuthAdapter, DataAdapter, NewRow, Row } from './adapter'
 import { isLicenseError, licenseStaffMessage } from '../billing/license'
@@ -150,9 +151,12 @@ export const supabaseAuth: AuthAdapter = {
     return p
   },
   async signOut() {
+    // a "sign in as user" tab ends only its own session (the default sign-out would end the user's sessions everywhere)
+    if (impersonationTab) return endImpersonation('signed_out')
     await client().auth.signOut()
   },
   async changePassword(current, next) {
+    if (impersonationTab) throw new Error(IMPERSONATION_BLOCKED)
     const { data } = await client().auth.getUser()
     const email = data.user?.email
     if (!email) throw new Error('Not signed in')
@@ -177,10 +181,12 @@ export const supabaseAuth: AuthAdapter = {
     return false
   },
   async setNewPassword(next) {
+    if (impersonationTab) throw new Error(IMPERSONATION_BLOCKED)
     const { error } = await client().auth.updateUser({ password: next })
     if (error) throw new Error(/different from the old/i.test(error.message) ? 'Choose a password different from your old one.' : error.message)
   },
   async signOutEverywhere() {
+    if (impersonationTab) return endImpersonation('signed_out')
     await client().auth.signOut({ scope: 'global' })
   },
   async uploadAvatar(userId, file) {
