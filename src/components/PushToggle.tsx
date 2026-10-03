@@ -3,7 +3,6 @@ import { BellOff, BellRing, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 import { useAppSettings } from '../settings/AppSettingsProvider'
-import { isSupabaseConfigured } from '../lib/supabase'
 import { cn } from '../lib/utils'
 
 /** "Notifications on this device" switch — shown when the owner has set up Firebase push. */
@@ -15,7 +14,7 @@ export function PushToggle({ variant = 'menu', onDone }: { variant?: 'menu' | 'b
   const [ready, setReady] = useState(false)
   useEffect(() => {
     let live = true
-    import('../lib/push').then((p) => { if (!live) return; setReady(p.pushConfigured(cfg) && p.pushSupported() && isSupabaseConfigured); setOn(!!p.savedPushToken() && p.pushPermission() === 'granted') })
+    import('../lib/push').then((p) => { if (!live) return; setReady(p.pushConfigured(cfg) && p.pushSupported()); setOn(!!p.savedPushToken() && p.pushPermission() === 'granted') })
     return () => { live = false }
   }, [cfg])
   if (!ready) return null
@@ -49,7 +48,7 @@ export function PushForeground() {
   const cfg = settings.notifications.push
   const navigate = useNavigate()
   useEffect(() => {
-    if (!isSupabaseConfigured || !cfg.enabled) return
+    if (!cfg.enabled) return
     let stop: (() => void) | undefined, live = true
     import('../lib/push').then(async (p) => {
       if (!p.pushConfigured(cfg) || !p.savedPushToken() || p.pushPermission() !== 'granted') return

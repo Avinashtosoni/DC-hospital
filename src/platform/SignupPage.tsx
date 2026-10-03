@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock, Loader2, ShieldCheck, Sparkles } from 'lucide-react'
-import { isSupabaseConfigured, platformName } from '../lib/supabase'
+import { platformName } from '../lib/supabase'
 import { cn } from '../lib/utils'
 import { signupInfo, signupProblem, trialSignup, type SignupForm, type SignupInfo, type SignupResult } from './api'
 import { LEGAL_VERSION } from './legal'
@@ -44,7 +44,6 @@ export default function SignupPage() {
       <header className="border-b border-peri-200/60 bg-white/80 backdrop-blur">
         <div className="l-container flex h-16 items-center justify-between gap-4">
           <a href={platformHref('/')} className="inline-flex items-center gap-2 text-sm font-semibold text-peri-800 hover:text-peri-500"><ArrowLeft className="h-4 w-4" />{platformName}</a>
-          <a href="/?hospital=main" className="text-sm font-medium text-peri-700 hover:text-peri-500">See the live demo</a>
         </div>
       </header>
       <main className="l-container grid gap-10 py-12 lg:grid-cols-[1fr_1.1fr] lg:items-start">
@@ -96,7 +95,6 @@ export default function SignupPage() {
                 </button>
                 <p className="text-center text-xs text-slate-500 sm:col-span-2">
                   {info.mode === 'instant' ? 'Your hospital is created right away.' : 'We check every request (usually within one working day) and e-mail you the link.'}
-                  {!isSupabaseConfigured && ' Demo: nothing is created.'}
                 </p>
               </form>
             )}
@@ -112,8 +110,6 @@ function Done({ r, name }: { r: SignupResult; name: string }) {
       <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" />
       <p className="mt-4 font-display text-xl font-bold text-peri-900">Thank you{name ? `, ${name}` : ''}!</p>
       <p className="mt-2 text-sm text-slate-600">We’ve received your request. Once it’s approved — usually within one working day — we’ll e-mail <b>{r.email}</b> with the link to create your owner account.</p>
-      {!isSupabaseConfigured && <p className="mt-3 text-xs text-slate-500">Demo: no hospital was created.</p>}
-      <a href="/?hospital=main" className="btn-ghost mt-6">Explore the demo meanwhile</a>
     </div>
   )
   const register = `/register?hospital=${encodeURIComponent(r.slug)}&email=${encodeURIComponent(r.email)}`

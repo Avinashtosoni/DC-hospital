@@ -6,7 +6,7 @@ import { Avatar, Badge, Spinner } from '../../src/components/ui'
 import { cn } from '../../src/lib/utils'
 import { ErrorBoundary } from '../../src/components/ErrorBoundary'
 import { platformName } from '../../src/lib/supabase'
-import { cp, isDemo } from './api'
+import { cp } from './api'
 import { MeContext, ROLE_LABEL, ROLE_TONE, useMe } from './ui'
 import type { ProviderRole } from './types'
 import { LoginPage } from './pages/LoginPage'
@@ -123,7 +123,6 @@ function Shell({ children }: { children: ReactNode }) {
         <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="rounded-lg p-2 text-slate-600 hover:bg-brand-50 lg:hidden"><Menu className="h-5 w-5" /></button>
         <p className="font-display text-sm font-semibold text-brand-950 lg:hidden">{platformName}</p>
         <div className="ml-auto flex items-center gap-2">
-          {isDemo && <Badge tone="amber">Demo — saved in this browser</Badge>}
           <Badge tone={ROLE_TONE[me.role]}>{ROLE_LABEL[me.role]}</Badge>
         </div>
       </header>

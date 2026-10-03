@@ -4,14 +4,11 @@
  *  - this hospital's identity + monthly allowance on them (public.tenants.messaging — Hospital Comrade admins edit)
  *  - this month's platform usage (public.message_usage)
  *  - the shared template / DLT IDs for every hospital (public.platform_settings 'messaging' — admins only)
- * Demo mode keeps the same shapes in localStorage.
  */
-import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { demoKey } from '../tenancy/demo'
+import { supabase } from '../lib/supabase'
 import { activeTenantId } from '../tenancy/state'
 import type { PlatformMessaging, PlatformTemplate, TenantMessaging } from '../../supabase/functions/_shared/platform'
 import { usageMonth } from '../../supabase/functions/_shared/platform'
-import { readLocalLog } from './store'
 
 export type { PlatformMessaging, PlatformTemplate, TenantMessaging }
 export type PlatformChannel = 'sms' | 'whatsapp' | 'email'
@@ -24,7 +21,6 @@ export interface PlatformInfo {
   details: { smsSenderId: string | null; emailFrom: string | null; whatsappNumber: string | null }
   identity: TenantMessaging
   used: Record<PlatformChannel, number>
-  demo: boolean
 }
 export const PLATFORM_INFO_QK = ['platform-messaging-info'] as const
 export const PLATFORM_TEMPLATES_QK = ['platform-messaging-templates'] as const
@@ -44,7 +40,7 @@ const remote = {
     return {
       accounts: ping?.platform ?? null,
       details: ping?.platform_details ?? { smsSenderId: null, emailFrom: null, whatsappNumber: null },
-      identity: ((t as any).data?.messaging ?? {}) as TenantMessaging, used, demo: false,
+      identity: ((t as any).data?.messaging ?? {}) as TenantMessaging, used,
     }
   },
   async saveIdentity(identity: TenantMessaging) {
@@ -66,22 +62,7 @@ const remote = {
   },
 }
 
-// demo: per-hospital identity (demoKey), one shared template list for the whole "platform"
-const K = { identity: 'dch:platform-identity:v1', templates: 'hc:platform-templates:v1' }
-const readJson = <T,>(k: string, f: T): T => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : f } catch { return f } }
-const local = {
-  async info(): Promise<PlatformInfo> {
-    const month = usageMonth().slice(0, 7)
-    const used = zero()
-    for (const r of readLocalLog()) if (r.created_at.slice(0, 7) === month && r.channel in used && (r.status === 'sent' || r.status === 'simulated')) used[r.channel as PlatformChannel]++
-    return { accounts: { sms: 'msg91', whatsapp: 'aisensy', email: 'resend' }, details: { smsSenderId: 'HSPCMR', emailFrom: 'notifications@hospitalcomrade.demo', whatsappNumber: '+91 80000 11111' },
-      identity: readJson<TenantMessaging>(demoKey(K.identity), {}), used, demo: true }
-  },
-  async saveIdentity(identity: TenantMessaging) { localStorage.setItem(demoKey(K.identity), JSON.stringify(identity)) },
-  async templates(): Promise<PlatformMessaging> { return readJson<PlatformMessaging>(K.templates, { templates: {} }) },
-  async saveTemplates(value: PlatformMessaging) { localStorage.setItem(K.templates, JSON.stringify(value)) },
-}
-export const platformMessaging = isSupabaseConfigured ? remote : local
+export const platformMessaging = remote
 
 /** "1,000" style; allowance text for a channel */
 export function allowanceText(used: number, limit: number | null | undefined) {

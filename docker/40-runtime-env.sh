@@ -76,9 +76,7 @@ fi
 
 if [ -n "$URL" ] && [ -n "$KEY" ]; then
   echo "[dc-hospital] Supabase configured: ${URL}"
-elif [ -n "$REQ" ] && [ "$REQ" != "false" ] && [ "$REQ" != "0" ]; then
-  echo "[dc-hospital] ERROR: REQUIRE_BACKEND is set but VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are missing — the app will show a setup error"
 else
-  echo "[dc-hospital] No Supabase env vars set → running in DEMO mode (browser localStorage)"
+  echo "[dc-hospital] ERROR: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are missing — the app will show 'Database not connected'"
 fi
 echo "[dc-hospital] tenancy=${TEN} environment=${APPENV}"

@@ -1,10 +1,8 @@
 /**
  * A hospital's own domains (Settings → Domain). With a database this talks to the `domains` Edge Function
- * (Cloudflare for SaaS); in demo mode it simulates the same flow in the browser so it can be tried on the demo.
+ * (Cloudflare for SaaS).
  */
-import { platformDomain, supabase } from '../lib/supabase'
-import { domainProblem, isPlatformSubdomain, normaliseDomain } from '../../supabase/functions/_shared/cloudflare'
-import { activeDemoTenant, demoKey } from './demo'
+import { supabase } from '../lib/supabase'
 
 export interface DomainRow {
   domain: string
@@ -35,7 +33,6 @@ export type DomainAction =
   | { action: 'add'; domain: string; method?: 'cloudflare' | 'manual' }
 
 export const DOMAINS_QK = ['tenant-domains'] as const
-export const DEMO_TARGET = `customers.${platformDomain}`
 
 /** what the hospital's domain looks like to people: live, waiting for DNS, set up by hand, or broken */
 export function domainHealth(d: DomainRow): 'live' | 'pending' | 'manual' | 'problem' {
@@ -65,49 +62,4 @@ async function remote(body: DomainAction): Promise<DomainsState> {
   return data as DomainsState
 }
 
-// ------------------------------------------------------------------ demo mode (browser only)
-const KEY = 'dch:domains:v1'
-function readLocal(): DomainRow[] {
-  try { const v = localStorage.getItem(demoKey(KEY)); if (v) return JSON.parse(v) as DomainRow[] } catch { /* ignore */ }
-  const t = activeDemoTenant()
-  const now = new Date().toISOString()
-  return [{ domain: `www.${t.domain}`, is_primary: true, method: 'cloudflare', status: 'active', ssl_status: 'active', verified_at: now, dns_target: DEMO_TARGET, verification: null, last_error: null, checked_at: now }]
-}
-const writeLocal = (rows: DomainRow[]) => { try { localStorage.setItem(demoKey(KEY), JSON.stringify(rows)) } catch { /* ignore */ } }
-
-async function local(body: DomainAction, canManage: boolean): Promise<DomainsState> {
-  await new Promise((r) => setTimeout(r, 350))
-  let rows = readLocal()
-  const domain = 'domain' in body ? normaliseDomain(body.domain) : ''
-  const now = new Date().toISOString()
-  const find = () => rows.find((r) => r.domain === domain)
-  if (body.action !== 'list' && body.action !== 'check' && !canManage) throw new Error('Domains are managed by the platform team.')
-  if (body.action === 'add') {
-    const p = domainProblem(domain, platformDomain)
-    if (p) throw new Error(p)
-    if (find()) throw new Error('This domain is already added.')
-    const own = isPlatformSubdomain(domain, platformDomain)
-    const manual = own || body.method === 'manual'
-    rows.push({ domain, is_primary: !rows.some((r) => r.is_primary), method: manual ? 'manual' : 'cloudflare',
-      status: own ? 'active' : manual ? 'manual' : 'pending', ssl_status: own ? 'active' : manual ? null : 'pending_validation',
-      verified_at: own ? now : null, dns_target: own ? null : DEMO_TARGET,
-      verification: manual ? null : { txt: { name: `_cf-custom-hostname.${domain}`, value: crypto.randomUUID() } },
-      last_error: manual ? null : 'custom hostname does not CNAME to this zone.', checked_at: now })
-  } else if (body.action === 'check') {
-    const r = find()
-    if (!r) throw new Error('No such domain for this hospital.')
-    // demo: the first check finds the CNAME in place and the certificate issued
-    if (r.method === 'cloudflare' && !r.verified_at) Object.assign(r, { status: 'active', ssl_status: 'active', verified_at: now, last_error: null })
-    r.checked_at = now
-  } else if (body.action === 'remove') {
-    rows = rows.filter((r) => r.domain !== domain)
-    if (rows.length && !rows.some((r) => r.is_primary)) rows[0].is_primary = true
-  } else if (body.action === 'primary') {
-    if (!find()) throw new Error('No such domain for this hospital.')
-    rows = rows.map((r) => ({ ...r, is_primary: r.domain === domain }))
-  }
-  writeLocal(rows)
-  return { domains: rows, cloudflare: true, target: DEMO_TARGET, platform: platformDomain, canManage }
-}
-
-export const domainsApi = (body: DomainAction, demoCanManage: boolean) => (supabase ? remote(body) : local(body, demoCanManage))
+export const domainsApi = (body: DomainAction, _canManage?: boolean) => remote(body)

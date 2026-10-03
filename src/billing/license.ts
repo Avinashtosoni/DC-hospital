@@ -1,7 +1,7 @@
 /**
  * Hospital Comrade licence (phase 4) — the browser side of public.tenant_license() / tenant_license_dates().
- * The database decides (and enforces read-only); this only explains it: the banner, Settings → Plan & wallet,
- * and the demo, which has no database and uses computeLicense() with the same rules.
+ * The database decides (and enforces read-only); this only explains it: the banner, Settings → Plan & wallet and the
+ * client-side countdowns (computeLicense() follows the same rules).
  */
 import type { TenantStatus } from '../tenancy/state'
 

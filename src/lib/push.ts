@@ -3,7 +3,7 @@
  * The Firebase SDK is loaded only when someone turns notifications on (keeps it off the first paint).
  * Tokens are stored with register_push_token() so the notify Edge Function can reach this device.
  */
-import { isSupabaseConfigured, supabase } from './supabase'
+import { supabase } from './supabase'
 import type { AppSettings } from '../settings/types'
 
 type PushCfg = AppSettings['notifications']['push']
@@ -28,7 +28,7 @@ async function messaging(c: PushCfg) {
 export async function enablePush(c: PushCfg): Promise<string> {
   if (!pushSupported()) throw new Error('This browser does not support push notifications (on iPhone, add the app to the Home Screen first)')
   if (!pushConfigured(c)) throw new Error('Push notifications are not set up yet — ask the hospital owner (Settings → Notifications → Push)')
-  if (!isSupabaseConfigured || !supabase) throw new Error('Demo mode — push notifications need the live database')
+  if (!supabase) throw new Error('The database is not connected')
   const perm = await Notification.requestPermission()
   if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Notifications are blocked for this site — allow them in the browser’s site settings' : 'Permission was not given')
   const reg = await navigator.serviceWorker.register(`/firebase-messaging-sw.js?config=${encodeURIComponent(JSON.stringify(webConfig(c)))}`, { scope: SW_SCOPE })

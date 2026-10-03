@@ -40,11 +40,8 @@ describe('free-trial sign-up form', async () => {
     expect(signupProblem({ ...ok, email: 'x@y' }, true)).toMatch(/e-mail/)
     expect(signupProblem({ ...ok, organisation: ' ' }, true)).toMatch(/hospital/)
   })
-  it('demo mode: reviewed sign-up, kept in the browser for the panel', async () => {
-    const m = new Map<string, string>()
-    globalThis.localStorage = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), clear: () => m.clear(), key: () => null, length: 0 } as Storage
-    expect(await signupInfo()).toMatchObject({ enabled: true, mode: 'approve', trialDays: 14 })
-    expect(await trialSignup({ ...ok, email: ' Meera@Sunrise.in ' }, '2026-10-02')).toEqual({ status: 'pending', email: 'meera@sunrise.in' })
-    expect(JSON.parse(m.get('dch:platform-signups:v1')!)[0]).toMatchObject({ organisation: 'Sunrise Clinic', terms_version: '2026-10-02' })
+  it('without a database the form is closed and never pretends to succeed', async () => {
+    expect(await signupInfo()).toMatchObject({ enabled: false })
+    await expect(trialSignup(ok, '2026-10-02')).rejects.toThrow(/not available/)
   })
 })

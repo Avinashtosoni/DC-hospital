@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Bot, RotateCcw, SendHorizontal } from 'lucide-react'
 import { simulateBot, type BotState } from '../../booking/bot'
-import { isSupabaseConfigured } from '../../lib/supabase'
 import { useSiteSettings } from '../../site/cms/content'
 import { cn } from '../../lib/utils'
 
@@ -61,7 +60,7 @@ export function BotSimulator() {
         {!lines.length && (
           <div className="mx-auto max-w-xs rounded-lg bg-[#fff5c4] px-3 py-2 text-center text-xs text-slate-700 shadow-sm">
             Say <b>hi</b> to start. Try <b>1</b> to book, <b>2</b> for your appointments, or <b>hindi</b>.
-            {isSupabaseConfigured ? ' This runs the deployed bot — bookings made here are real.' : ' Demo mode: bookings go into the local demo data.'}
+            {' This runs the deployed bot — bookings made here are real.'}
           </div>
         )}
         {lines.map((l, i) => (

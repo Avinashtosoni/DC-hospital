@@ -408,7 +408,6 @@ begin
   values (p_tenant, 'settings', jsonb_build_object(
     'name', t.name, 'tagline', '', 'about', '', 'address', '', 'phone', '', 'appointmentsPhone', '', 'whatsapp', '', 'email', '',
     'seoDescription', t.name, 'brand', jsonb_build_object('shortName', left(t.name, 30)),
-    'booking', jsonb_build_object('showDemoOtp', false),
     'billing', jsonb_build_object('legalName', t.name, 'gstin', '', 'regNo', '', 'pan', '', 'upiId', '')))
   on conflict (tenant_id, key) do nothing;
   -- default settings (phase 3): without this row nothing is ever queued for the hospital. SMS, WhatsApp and e-mail

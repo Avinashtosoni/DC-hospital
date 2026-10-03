@@ -1,5 +1,4 @@
 import { supabase } from '../lib/supabase'
-import { loadLocal } from '../data/local'
 import type { Profile, Role } from '../types'
 import { activeTenantId, chooseProviderTenant, contextProblem, siteTenant, tenancyEnabled, type MyContext, type TenantInfo } from './state'
 
@@ -12,9 +11,8 @@ async function rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T> {
   return data as T
 }
 
-// demo mode answers from the browser store (src/tenancy/demo.ts)
-export const loadContext = async () => (supabase ? rpc<MyContext>('my_context') : (await loadLocal()).localMyContext())
-export const loadProviderTenants = async () => (supabase ? rpc<ProviderTenant[]>('provider_tenants') : (await loadLocal()).localProviderTenants() as ProviderTenant[])
+export const loadContext = () => rpc<MyContext>('my_context')
+export const loadProviderTenants = () => rpc<ProviderTenant[]>('provider_tenants')
 export const providerLog = async (action: string, target?: string, detail?: Record<string, unknown>) => {
   if (!supabase) return
   await rpc<void>('provider_log', { p_action: action, p_target: target ?? null, p_detail: detail ?? null }).catch(() => undefined)

@@ -55,14 +55,14 @@ function SetupError() {
       <div className="max-w-lg rounded-2xl border border-rose-200 bg-white p-6 shadow-sm">
         <h1 className="text-lg font-semibold text-slate-900">Database not connected</h1>
         <p className="mt-2 text-sm text-slate-600">This installation requires a Supabase database, but <code>VITE_SUPABASE_URL</code> / <code>VITE_SUPABASE_ANON_KEY</code> are not set.
-          The administrator should add them to the server environment and restart the app. (Demo mode is disabled because <code>REQUIRE_BACKEND</code> is on.)</p>
+          The administrator should add them to the server environment (Coolify → Environment Variables) and redeploy. See docs/SETUP_GUIDE.md.</p>
       </div>
     </div>
   )
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root')!)
-// multi-hospital mode: find this domain's hospital first (a no-op for single-hospital installs and demo mode)
+// multi-hospital mode: find this domain's hospital first (a no-op for single-hospital installs)
 ;(backendMissing ? Promise.resolve(null) : bootTenancy()).then((boot) => {
   root.render(
     <React.StrictMode>

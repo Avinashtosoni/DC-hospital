@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { freshDb, USER, type Db } from './harness'
 import { DEFAULT_APP_SETTINGS } from '../../src/settings/types'
-import { DEMO_USERS } from '../../src/data/seed'
+import { DEMO_USERS } from '../../scripts/seed/seed'
 
 let db: Db
 beforeAll(async () => { db = await freshDb('master') }, 180_000)

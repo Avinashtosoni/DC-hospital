@@ -4,7 +4,7 @@
  *   npm run sql:build && npm test
  */
 import { beforeAll, describe, expect, test } from 'vitest'
-import { freshDb, USER, type Db } from './harness'
+import { freshDb, knownOtp, USER, type Db } from './harness'
 import { DEFAULT_APP_SETTINGS } from '../../src/settings/types'
 
 let db: Db
@@ -47,10 +47,10 @@ describe('row level security', () => {
 describe('online booking API', () => {
   test('OTP → verify → book creates patient, appointment and unpaid invoice; token is single use', async () => {
     const phone = '9876501234'
-    const otp = await db.one<{ r: { ref: string; demo_code: string } }>('anon', 'select public.request_booking_otp($1) r', [phone])
+    const otp = await db.one<{ r: { ref: string; demo_code?: string } }>('anon', 'select public.request_booking_otp($1) r', [phone])
     expect(otp.r.ref).toMatch(/[0-9a-f-]{36}/)
-    expect(otp.r.demo_code).toMatch(/^\d{6}$/)
-    const v = await db.one<{ r: { ok: boolean; token: string } }>('anon', 'select public.verify_booking_otp($1, $2) r', [phone, otp.r.demo_code])
+    expect(otp.r.demo_code).toBeUndefined()   // never on screen
+    const v = await db.one<{ r: { ok: boolean; token: string } }>('anon', 'select public.verify_booking_otp($1, $2) r', [phone, await knownOtp(db, otp.r.ref)])
     expect(v.r.ok).toBe(true)
     const doc = await activeDoctor()
     const [slot] = await freeSlots(doc)
@@ -213,17 +213,17 @@ describe('booking OTP channel choice + WhatsApp confirmation', () => {
   }
   const outbox = (ref: string) => db.as<{ channel: string; body: string }>(null, 'select channel, body from public.notification_outbox where related_id = $1 order by channel', [ref])
 
-  test('no channel switched on → none offered, code only on screen (demo)', async () => {
+  test('no channel switched on → none offered, and the code is never shown on screen', async () => {
     await setNotify(() => {})
     expect((await db.one<{ c: string[] }>('anon', 'select public.booking_otp_channels() c')).c).toEqual([])
-    const r = await db.one<{ r: { queued: number; channels: string[]; demo_code: string } }>('anon', `select public.request_booking_otp('9876511111', 'whatsapp') r`)
-    expect(r.r.queued).toBe(0); expect(r.r.channels).toEqual([]); expect(r.r.demo_code).toMatch(/^\d{6}$/)
+    const r = await db.one<{ r: { sent: boolean; queued: number; channels: string[]; demo_code?: string } }>('anon', `select public.request_booking_otp('9876511111', 'whatsapp') r`)
+    expect(r.r).toMatchObject({ sent: false, queued: 0, channels: [] }); expect(r.r.demo_code).toBeUndefined()
   })
   test('WhatsApp + SMS on → both offered (WhatsApp first); the picked channel alone gets the code, with WhatsApp wording', async () => {
     await setNotify((n) => { n.whatsapp.enabled = true; n.sms.enabled = true; n.events.otp = { sms: true, whatsapp: true } })
     expect((await db.one<{ c: string[] }>('anon', 'select public.booking_otp_channels() c')).c).toEqual(['whatsapp', 'sms'])
-    const wa = await db.one<{ r: { ref: string; queued: number; channels: string[]; demo_code: string | null } }>('anon', `select public.request_booking_otp('9876522222', 'whatsapp') r`)
-    expect(wa.r).toMatchObject({ queued: 1, channels: ['whatsapp'], demo_code: null })
+    const wa = await db.one<{ r: { ref: string; queued: number; channels: string[] } }>('anon', `select public.request_booking_otp('9876522222', 'whatsapp') r`)
+    expect(wa.r).toMatchObject({ queued: 1, channels: ['whatsapp'] })
     const rows = await outbox(wa.r.ref)
     expect(rows.map((r) => r.channel)).toEqual(['whatsapp'])
     expect(rows[0].body).toMatch(/^🔐 \*\d{6}\* is your DC Hospital verification code/)
@@ -286,13 +286,10 @@ describe('go-live helpers', () => {
 })
 
 describe('production.sql', () => {
-  test('no demo data; bootstrap e-mail becomes owner once; demo helpers off', async () => {
+  test('no demo data; bootstrap e-mail becomes owner once', async () => {
     const p = await freshDb('production')
     expect((await p.one<{ n: number }>(null, 'select count(*)::int n from auth.users')).n).toBe(0)
     expect((await p.one<{ n: number }>(null, 'select count(*)::int n from public.appointments')).n).toBe(0)
-    const s = await p.one<{ d: { portal: { showDemoLogins: boolean }; booking: { showDemoOtp: boolean } } }>(null, `select data d from public.site_content where key = 'settings'`)
-    expect(s.d.portal.showDemoLogins).toBe(false)
-    expect(s.d.booking.showDemoOtp).toBe(false)
     const a = await p.one<{ id: string }>(null, `insert into auth.users (email) values ('OWNER@your-hospital.in') returning id`)
     const b = await p.one<{ id: string }>(null, `insert into auth.users (email) values ('someone@gmail.com') returning id`)
     expect((await p.one<{ role: string }>(null, 'select role from public.profiles where id = $1', [a.id])).role).toBe('owner')

@@ -21,16 +21,21 @@ A full-stack **Hospital Management System** for hospital owners, doctors, recept
 | **Patient experience** | **Hindi / English** switch, **installable app (PWA)**, **PDF downloads** of lab reports and bills, **self-reschedule**, **post-visit rating**, and a **WhatsApp booking chatbot**. See [Patient experience](#patient-experience). |
 | **UX** | Skeleton loaders, empty states, **optimistic create/update/delete with rollback**, toasts, responsive layout with a mobile drawer, search, filters, sorting and server-side pagination (no row limit), and an *unsaved changes* prompt on forms. |
 
-## Quick start (demo mode, no backend needed)
+## Quick start
+
+The app always needs a Supabase database — there is no in-browser demo mode (patient data must never live in one
+browser's storage). Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` it shows a *Database not connected* screen.
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173
+cp .env.example .env.local   # fill in VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
+npm run dev                  # http://localhost:5173
 ```
 
-Without Supabase credentials, the app runs in **demo mode**. It loads realistic seed data (80 patients, 14 doctors, 350+ appointments, 800+ invoices, 6 months of finances) and saves every change in your browser's `localStorage`. You can restore the original data from **Settings → Reset demo data**.
+For a staging / sales database with realistic sample data (80 patients, 14 doctors, 350+ appointments, 800+ invoices,
+6 months of finances) run `supabase/master.sql`; for a real hospital run `supabase/production.sql` (empty).
 
-### Demo accounts (password `Demo@123`)
+### Sample accounts in `master.sql` only (password `Demo@123`)
 
 | Role | Email |
 | --- | --- |
@@ -41,7 +46,7 @@ Without Supabase credentials, the app runs in **demo mode**. It loads realistic 
 | Staff (Head Nurse) | staff@dchospital.com |
 | Patient | patient@dchospital.com |
 
-The login screen also has one-click buttons for each account.
+Lock them from **Settings → Go-live** (or use `production.sql`) before real patients use the system.
 
 ## Using Supabase (persistent, multi-user)
 
@@ -89,7 +94,7 @@ Signed-out visitors get a multi-page, patient-facing hospital website. Signed-in
 - **Shared shell** (`SiteLayout.tsx`): a sticky glass navbar with a Services mega-menu and active-link states, the footer, and a mobile sticky Call/Book bar. Pages set their own `<title>`/meta description and scroll to the top on navigation.
 - **Accessibility:** a skip link, breadcrumbs, aria-wired tabs, radios, accordions and form errors, and keyboard-friendly menus. All motion (scroll reveals, counters, parallax) respects `prefers-reduced-motion`. Layouts are tested at 390 px and 1440 px with no horizontal overflow.
 - **Code:** in `src/site/`. Page components live in `pages/`, shared blocks in `ui.tsx`/`parts.tsx`, and copy in `content.ts`. Speciality and doctor data live in `data/services.ts` and `data/doctors.ts`, so edit those to change the content. Every page is lazy-loaded as its own small chunk. Images are in `public/landing/`.
-- **Contact enquiries** are stored in the browser (`localStorage`, key `dch:enquiries:v1`). To collect them centrally, point `submit()` in `pages/Contact.tsx` at a Supabase table or an email/webhook endpoint.
+- **Contact enquiries** are saved in the `site_enquiries` table and appear under Dashboard → Enquiries.
 
 ## Website CMS (Dashboard → Website → Website CMS)
 
@@ -118,13 +123,12 @@ The hospital **owner** can edit every public page without touching code:
 (written by a trigger that also stamps who published), images in the public `site-media` storage bucket and enquiries in
 `site_enquiries`. RLS: anyone can read content and submit an enquiry; only the owner can write content or upload media.
 Sections that were never edited fall back to the defaults in `src/site/cms/defaults.ts`. Re-running `master.sql` resets
-the hospital demo data but **keeps your website content, history and images**. In demo mode the same features use
-browser storage.
+the hospital sample data but **keeps your website content, history and images**.
 
 ## Online booking, leave calendar, invoices & audit log
 
 - **Online booking (`/book`)** — the patient picks a speciality, then a doctor, then a live free slot, verifies their phone with a one-time code and gets an instant confirmation. The confirmation includes an invoice and booking reference `DCB-XXXXXX`, a calendar (.ics) download, WhatsApp sharing and a print/PDF option. On the database side, `public_book_appointment` creates or reuses the patient record (matched by phone), the appointment and an unpaid invoice in one transaction. A unique index stops two patients booking the same slot. Doctor profile pages show real free slots too.
-  - **OTP / SMS:** the code is generated and stored hashed in `booking_otps`. Limits: one code per phone every 30 s, 5 codes per hour, 5 attempts per code, and codes expire after 10 min. Until an SMS gateway (MSG91, Twilio, etc.) is connected, turn on **CMS → Settings → Online booking → Show demo OTP** so the code appears on screen. Turn it off once real SMS is live. To connect a gateway, send the SMS from a Supabase Edge Function or database webhook on `booking_otps` inserts.
+  - **OTP / SMS:** the code is generated and stored hashed in `booking_otps`. Limits: one code per phone every 30 s, 5 codes per hour, 5 attempts per code, and codes expire after 10 min. The code is **never** returned to the browser: online booking needs SMS or WhatsApp switched on for *Booking OTP* in Settings → Notifications; until then the booking page asks visitors to call the hospital.
   - Booking rules (on/off, how many days ahead, minimum notice, pay-at-hospital note) and invoice details (legal name, GSTIN, PAN, SAC, GST rate, UPI) are set in **CMS → Settings**. When the GST rate is 0, which is standard for clinical consultations, invoices print as a *Bill of Supply*. When a rate is set, they print as a *Tax Invoice* with CGST/SGST.
 - **Leave & Holidays (`/schedule`)** — date-range leave; blocked time for surgery, meetings, conferences or training; and hospital holidays. Doctors request leave and the owner or reception approves it. Approved entries close those slots everywhere, including online booking. Patients already booked into those slots appear in the **Reschedule queue**.
 - **Invoices** — A4 letterhead layout with GSTIN, SAC, amount in words and a status stamp. **Print / PDF** prints only the invoice.
@@ -161,7 +165,6 @@ custom & scheduled messages, Supabase cron helpers, usage report and owner-only 
   belong to the same account, is never shown on screen, and is offered only once a WhatsApp or SMS gateway is switched on in
   Settings → Notifications (event *Password reset OTP*). Resetting this way signs the account out on every device.
   Existing databases get it from section 16 of `supabase/upgrade-2026-10.sql`.
-* In demo mode both options work locally: the reset link and the code are shown on screen.
 
 ### Server-side pagination (big hospitals)
 
@@ -169,13 +172,12 @@ The app never downloads a whole patient, appointment, billing or audit table. Li
 (search, filters and sorting run in Postgres via PostgREST), dashboards read **head-only counts** and short date windows,
 and reports come from one aggregate call (`financial_report()`). Names on a page are resolved only for the rows shown.
 Payments keep `invoices.amount_paid` / `status` in sync with a database trigger, so balances stay right without
-re-reading every payment. Demo mode runs the very same queries against the browser store, so both modes behave alike.
+re-reading every payment.
 
 ### Production checklist (per hospital install)
 
 1. **Database:** a Supabase project per hospital, `supabase/production.sql` run once. Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
-   **and `REQUIRE_BACKEND=true`** on the container. With `REQUIRE_BACKEND` the app refuses to start in demo mode, so it can never quietly
-   save patient data in one browser's localStorage.
+   on the container (without them the app shows *Database not connected*; it never stores data in the browser).
 2. **Supabase → Authentication → URL configuration:** set *Site URL* to the hospital domain and add `https://<domain>/reset-password`
    to *Redirect URLs* (used by **Forgot password**). Configure a custom SMTP server (Supabase's built-in mailer is heavily rate limited).
 3. **Backups:** Supabase Pro daily backups / PITR, or a nightly `pg_dump`. Test a restore once.
@@ -281,13 +283,11 @@ Other roles only see **My account** there.
 * **India (DLT):** SMS through MSG91 or Fast2SMS needs DLT-approved templates. Paste each template or flow ID into the matching message template.
 * **WhatsApp:** outside a 24-hour chat window, only approved templates can be sent.
 
-In demo mode everything can be configured, and test sends are *simulated* and logged. API keys typed in demo mode are **not stored** — only a `••••1234` hint, so the form shows what was entered.
-
 ## Deploy with Docker / Coolify
 
 The repo ships a production **multi-stage Dockerfile**. Node builds the app, and **nginx** (Alpine) serves it with SPA routing, gzip, long-lived caching for build assets, security headers and a `/healthz` endpoint.
 
-**Supabase keys are read when the container starts.** On every start, the container writes `/env.js` from its environment variables. The same image works for demo, staging and production; changing a key only needs a restart, not a rebuild.
+**Supabase keys are read when the container starts.** On every start, the container writes `/env.js` from its environment variables. The same image works for staging and production; changing a key only needs a restart, not a rebuild.
 
 ### Coolify (recommended)
 
@@ -300,7 +300,7 @@ The repo ships a production **multi-stage Dockerfile**. Node builds the app, and
    | `VITE_SUPABASE_URL` | `https://<project>.supabase.co` |
    | `VITE_SUPABASE_ANON_KEY` | your project's anon/public key |
 
-   Plain runtime variables are enough; you don't need to tick "Build Variable". Leave both empty to run in **demo mode**.
+   Plain runtime variables are enough; you don't need to tick "Build Variable". Both are required — without them the app shows *Database not connected*.
 5. Set your domain and click **Deploy**. Coolify uses the image's built-in `HEALTHCHECK` (`GET /healthz`).
 6. In Supabase: **Authentication → URL Configuration**, add your Coolify domain to *Site URL / Redirect URLs*.
 
@@ -314,7 +314,7 @@ docker run -d -p 8080:80 \
   -e VITE_SUPABASE_URL=https://<project>.supabase.co \
   -e VITE_SUPABASE_ANON_KEY=<anon-key> \
   --name dc-hospital dc-hospital
-# → http://localhost:8080   (omit the -e flags for demo mode)
+# → http://localhost:8080
 ```
 
 Or `docker compose up -d --build`; uncomment the `ports` block in `docker-compose.yml` first.
@@ -351,7 +351,7 @@ Or `docker compose up -d --build`; uncomment the `ports` block in `docker-compos
 ```
 src/
   auth/            AuthProvider, permissions matrix (source of truth for UI + RLS)
-  data/            adapter interface, localStorage adapter, Supabase adapter, deterministic seed
+  data/            adapter interface + Supabase adapter (sample seed lives in scripts/seed/)
   hooks/           React Query hooks with optimistic mutations
   resources/       declarative resource configs (columns, forms, filters, row actions, side effects)
   components/      UI kit, generic ResourcePage (table + drawer form), layout

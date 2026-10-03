@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Button, Field, Input, PageHeader, Skeleton } from '../../../src/components/ui'
 import { platformDomain, platformName } from '../../../src/lib/supabase'
 import { PLANS } from '../../../src/platform/plans'
-import { cp, friendly, isDemo } from '../api'
+import { cp, friendly } from '../api'
 import { RETENTION_KEYS, RETENTION_MIN, type BillingConfig, type RetentionKey } from '../types'
 import { dateTime, ErrorBox, Section } from '../ui'
 
@@ -40,7 +40,6 @@ export function SettingsPage() {
     <>
       <PageHeader title="Platform settings" description="Prices and billing rules for every hospital. Changes apply right away (existing invoices don’t change)."
         actions={<Button icon={<Save className="h-4 w-4" />} disabled={!dirty} loading={save.isPending} onClick={() => save.mutate(f)}>Save changes</Button>} />
-      {isDemo && <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Demo: saved in this browser for the control panel only — the demo hospitals keep the default prices.</p>}
       <div className="grid gap-6 xl:grid-cols-2">
         <Section title="Plans" subtitle="Monthly price before GST, and messages included per month on the platform’s accounts.">
           <div className="space-y-4">

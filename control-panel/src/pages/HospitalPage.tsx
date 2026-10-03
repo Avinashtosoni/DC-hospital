@@ -5,7 +5,7 @@ import { ArrowLeft, Ban, CalendarPlus, DoorClosed, ExternalLink, Globe, IndianRu
 import { toast } from 'sonner'
 import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Modal, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
 import { PLANS } from '../../../src/platform/plans'
-import { cp, friendly, isDemo } from '../api'
+import { cp, friendly } from '../api'
 import type { BillingAction, CpHospitalDetail, ModuleMap } from '../types'
 import { appUrl, canBill, date, dateTime, ErrorBox, inr, isAdmin, LicenseBadge, licenseLine, paise, planLabel, ROLE_LABEL, ROLE_TONE, Section, useMe } from '../ui'
 import { ModuleGrid } from './HospitalsPage'
@@ -283,14 +283,10 @@ function CloseSection({ h }: { h: CpHospitalDetail }) {
   const [purge, setPurge] = useState<{ slug: string; password: string } | null>(null)
   const refresh = () => { for (const k of ['cp-hospital', 'cp-hospitals', 'cp-health', 'cp-overview']) qc.invalidateQueries({ queryKey: [k] }) }
   const act = useMutation({
-    mutationFn: async (what: 'close' | 'reopen' | 'end') => {
-      if (what === 'close') return cp.closeHospital(h.id, reason, days)
-      if (what === 'reopen') return cp.reopenHospital(h.id)
-      return cp.demoEndNotice?.(h.id)
-    },
+    mutationFn: async (what: 'close' | 'reopen') => (what === 'close' ? cp.closeHospital(h.id, reason, days) : cp.reopenHospital(h.id)),
     onSuccess: (_r, what) => {
       setConfirm(null); refresh()
-      toast.success(what === 'close' ? 'Hospital closed — the owner has been e-mailed' : what === 'reopen' ? 'Hospital reopened' : 'Notice period ended (demo)')
+      toast.success(what === 'close' ? 'Hospital closed — the owner has been e-mailed' : 'Hospital reopened')
     },
     onError: (e) => toast.error(friendly(e)),
   })
@@ -325,7 +321,6 @@ function CloseSection({ h }: { h: CpHospitalDetail }) {
             <Button variant="danger" icon={<Trash2 className="h-4 w-4" />} disabled={!canPurge} onClick={() => setPurge({ slug: '', password: '' })}>
               {canPurge ? 'Delete all data…' : `Delete possible from ${date(h.purge_after)}`}
             </Button>
-            {isDemo && !canPurge && <Button variant="ghost" loading={act.isPending && act.variables === 'end'} onClick={() => act.mutate('end')}>Demo: end the notice period now</Button>}
           </div>
         </div>
       )}

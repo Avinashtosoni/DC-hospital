@@ -1,9 +1,7 @@
 /**
- * Control panel data: the cp_* database functions (scripts/sql/control_panel.sql) — or, in demo mode (no database),
- * the browser store in ./demo.ts with the same rules.
+ * Control panel data: the cp_* database functions (scripts/sql/control_panel.sql).
  */
 import { supabase } from '../../src/lib/supabase'
-import { demoCp } from './demo'
 import type {
   BillingAction, BillingConfig, CpAudit, CpHospital, CpHospitalDetail, CpLead, CpMe, CpMember, CpOverview, CpPayment,
   HospitalEdit, LeadStatus, MemberSave, NewHospital, CpHealth, CpIncident, IncidentSave, IncidentNotice, RetentionConfig,
@@ -33,8 +31,6 @@ export interface CpApi {
   reopenHospital(id: string): Promise<unknown>
   /** re-checks the signed-in admin's password first (the database wants a sign-in from the last 10 minutes) */
   purgeHospital(id: string, confirmSlug: string, password: string): Promise<{ purged: string; counts: Record<string, number> }>
-  /** demo only: let the notice period run out so a purge can be tried */
-  demoEndNotice?(id: string): Promise<void>
   health(): Promise<CpHealth>
   incidents(): Promise<CpIncident[]>
   saveIncident(p: IncidentSave): Promise<CpIncident>
@@ -79,6 +75,7 @@ const db: CpApi = {
   },
   async signOut() { await supabase!.auth.signOut() },
   async me() {
+    if (!supabase) return null
     const { data } = await supabase!.auth.getSession()
     if (!data.session) return null
     return rpc<CpMe | null>('cp_me')
@@ -129,5 +126,6 @@ const db: CpApi = {
   launchCheck: () => rpc('cp_launch_check'),
 }
 
-export const isDemo = !supabase
-export const cp: CpApi = supabase ? db : demoCp
+/** no database configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY missing) — the panel can't work */
+export const backendMissing = !supabase
+export const cp: CpApi = db

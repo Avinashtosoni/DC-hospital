@@ -56,8 +56,6 @@ export const STARTER_CONTENT: SiteContent = {
     pages: { about: true, services: true, doctors: false, packages: false, contact: true, faq: true },
     seoDescription: '{name} — book appointments online, get digital prescriptions and reports on your phone.',
     brand: { ...D.settings.brand, shortName: '' },
-    portal: { ...D.settings.portal, showDemoLogins: false },
-    booking: { ...D.settings.booking, showDemoOtp: false },
     billing: { ...D.settings.billing, legalName: '', gstin: '', regNo: '', pan: '', upiId: '' },
   },
 

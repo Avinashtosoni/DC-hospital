@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
 import { platformDomain } from '../../../src/lib/supabase'
 import { cn } from '../../../src/lib/utils'
-import { cp, friendly, isDemo } from '../api'
+import { cp, friendly } from '../api'
 import type { CpSignup, SignupSettings, SignupStatus } from '../types'
 import { appUrl, dateTime, ErrorBox, planLabel, Section } from '../ui'
 
@@ -99,7 +99,7 @@ function SignupSettingsCard() {
   const q = useQuery({ queryKey: ['cp-signup-settings'], queryFn: () => cp.signupSettings() })
   const [f, setF] = useState<SignupSettings | null>(null)
   useEffect(() => {
-    if (q.data) setF({ ...q.data, platformUrl: q.data.platformUrl || (isDemo ? '' : platformDomain ? `https://${platformDomain}` : '') })
+    if (q.data) setF({ ...q.data, platformUrl: q.data.platformUrl || (platformDomain ? `https://${platformDomain}` : '') })
   }, [q.data])
   const save = useMutation({
     mutationFn: (s: SignupSettings) => cp.saveSignupSettings({ enabled: s.enabled, mode: s.mode, trialDays: Number(s.trialDays), plan: s.plan,
@@ -112,7 +112,7 @@ function SignupSettingsCard() {
   const set = <K extends keyof SignupSettings>(k: K, v: SignupSettings[K]) => setF((x) => (x ? { ...x, [k]: v } : x))
   const signupUrl = `${f.platformUrl || (platformDomain ? `https://${platformDomain}` : location.origin)}/signup`
   return (
-    <Section title="How sign-up works" subtitle={<>The form lives at <a href={isDemo ? '/signup?platform' : signupUrl} target="_blank" rel="noreferrer" className="font-mono text-brand-700 hover:underline">{isDemo ? '/signup?platform' : signupUrl}</a></>}
+    <Section title="How sign-up works" subtitle={<>The form lives at <a href={signupUrl} target="_blank" rel="noreferrer" className="font-mono text-brand-700 hover:underline">{signupUrl}</a></>}
       action={<Button icon={<Save className="h-4 w-4" />} loading={save.isPending} onClick={() => save.mutate(f)}>Save</Button>}>
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-2">

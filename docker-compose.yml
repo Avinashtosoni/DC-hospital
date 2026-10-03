@@ -1,5 +1,5 @@
 # Works with Coolify's "Docker Compose" build pack and plain `docker compose up -d`.
-# Leave the Supabase variables empty to run in demo mode.
+# VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are required (no demo mode).
 services:
   dc-hospital:
     build:

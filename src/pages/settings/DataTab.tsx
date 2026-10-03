@@ -1,12 +1,9 @@
 import { format } from 'date-fns'
 import { useRef, useState, type ReactNode } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Database, Download, HardDrive, Info, KeyRound, RefreshCw, RotateCcw, Upload } from 'lucide-react'
+import { Archive, Database, Download, HardDrive, Info, KeyRound, RotateCcw, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../auth/AuthProvider'
-import { db } from '../../data/adapter'
 import { Badge, Button, ConfirmDialog } from '../../components/ui'
-import { isSupabaseConfigured } from '../../lib/supabase'
 import { fmtDate } from '../../lib/utils'
 import { deepMerge, defaultContent } from '../../site/cms/content'
 import { useAppSettings } from '../../settings/AppSettingsProvider'
@@ -52,11 +49,10 @@ function FullExport({ hospital }: { hospital: string }) {
 }
 
 export function DataTab({ ctx, exportOnly }: { ctx: TabCtx; exportOnly?: boolean }) {
-  const { refresh, context } = useAuth()
+  const { context } = useAuth()
   const { row } = useAppSettings()
-  const qc = useQueryClient()
   const file = useRef<HTMLInputElement>(null)
-  const [confirm, setConfirm] = useState<'demo' | 'defaults' | null>(null)
+  const [confirm, setConfirm] = useState<'defaults' | null>(null)
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify({ kind: 'dc-hospital-settings', version: 1, exported_at: new Date().toISOString(), site_settings: ctx.site, app_settings: ctx.app }, null, 2)], { type: 'application/json' })
@@ -83,17 +79,11 @@ export function DataTab({ ctx, exportOnly }: { ctx: TabCtx; exportOnly?: boolean
       ctx.editApp((d) => Object.assign(d, structuredClone(DEFAULT_APP_SETTINGS)))
       toast.info('Defaults loaded', { description: 'Click Save changes to apply. Branding and credentials are unchanged.' })
     }
-    if (what === 'demo') {
-      await db.reset?.()
-      qc.clear()
-      await refresh()
-      toast.success('Demo data restored')
-    }
   }
 
   const info: [string, ReactNode][] = [
-    ['Storage', isSupabaseConfigured ? <Badge tone="green" dot>Supabase</Badge> : <Badge tone="amber" dot>Demo · this browser</Badge>],
-    ['Database host', isSupabaseConfigured ? <span className="font-mono text-xs">{supabaseHost()}</span> : '—'],
+    ['Storage', <Badge tone="green" dot>Supabase</Badge>],
+    ['Database host', <span className="font-mono text-xs">{supabaseHost()}</span>],
     ['Settings last saved', row?.updated_at ? `${fmtDate(row.updated_at)}${row.updated_by_name ? ` by ${row.updated_by_name}` : ''}` : 'Never (defaults)'],
     ['Browser language', navigator.language],
     ['Time zone', Intl.DateTimeFormat().resolvedOptions().timeZone],
@@ -116,19 +106,7 @@ export function DataTab({ ctx, exportOnly }: { ctx: TabCtx; exportOnly?: boolean
       </Section>
 
       <Section title="Data storage" icon={<Database className="h-4 w-4" />}>
-        {isSupabaseConfigured ? (
-          <p className="text-sm text-slate-600">Data is stored in your Supabase Postgres database and protected with Row Level Security. Use Supabase's daily backups or <code className="rounded bg-slate-100 px-1 text-xs">pg_dump</code> for full database backups.</p>
-        ) : (
-          <div className="space-y-4 text-sm text-slate-600">
-            <p>Data is saved in this browser only (localStorage). To share it across devices and staff:</p>
-            <ol className="list-decimal space-y-1 pl-5">
-              <li>Create a project at supabase.com and run <code className="rounded bg-slate-100 px-1 text-xs">supabase/master.sql</code> in the SQL editor.</li>
-              <li>Set <code className="rounded bg-slate-100 px-1 text-xs">VITE_SUPABASE_URL</code> and <code className="rounded bg-slate-100 px-1 text-xs">VITE_SUPABASE_ANON_KEY</code>, then restart the app.</li>
-              <li>Deploy the messaging function: <code className="rounded bg-slate-100 px-1 text-xs">supabase functions deploy notify</code>.</li>
-            </ol>
-            <Button variant="outline" icon={<RefreshCw className="h-4 w-4" />} onClick={() => setConfirm('demo')}>Reset demo data</Button>
-          </div>
-        )}
+        <p className="text-sm text-slate-600">Data is stored in your Supabase Postgres database and protected with Row Level Security. Use Supabase's daily backups or <code className="rounded bg-slate-100 px-1 text-xs">pg_dump</code> for full database backups.</p>
       </Section>
 
       <Section title="System information" icon={<Info className="h-4 w-4" />}>
@@ -137,8 +115,6 @@ export function DataTab({ ctx, exportOnly }: { ctx: TabCtx; exportOnly?: boolean
         </dl>
       </Section>
 
-      <ConfirmDialog open={confirm === 'demo'} onClose={() => setConfirm(null)} onConfirm={run} confirmLabel="Reset data" title="Reset all demo data?"
-        description="Every change you made in this browser will be discarded and the original demo data restored. Accounts you registered will be removed." />
       <ConfirmDialog open={confirm === 'defaults'} onClose={() => setConfirm(null)} onConfirm={run} confirmLabel="Load defaults" title="Restore default settings?"
         description="Theme, layout, dashboard widgets, modules, announcement, formats, timeout and all message settings return to their defaults. Nothing changes until you click Save changes." />
     </div>

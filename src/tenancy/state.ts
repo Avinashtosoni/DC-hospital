@@ -72,6 +72,11 @@ export function activeTenantId(): string | null {
   return id ?? site?.id ?? null
 }
 /** is the hospital this tab works in the primary one? (always true for single-hospital installs) */
+/** a browser-storage key of the hospital being worked on (drafts, caches) — the primary hospital keeps the plain key */
+export function tenantKey(base: string): string {
+  const id = activeTenantId()
+  return !id || id === PRIMARY_TENANT_ID ? base : `${base}@${id}`
+}
 export function isPrimaryTenant(): boolean {
   if (!enabled) return true
   const id = activeTenantId()

@@ -16,7 +16,7 @@ import { daysUntil } from '../../billing/license'
 import type { BillingSummary, Channel, LedgerRow, PaymentRow, ProviderBillingAction, UsageMonth } from '../../billing/types'
 import { Badge, Button, EmptyState, Field, Input, PageHeader, Select, Skeleton } from '../../components/ui'
 import { isPrimaryTenant, tenancyEnabled } from '../../tenancy/state'
-import { isSupabaseConfigured, platformName } from '../../lib/supabase'
+import { platformName } from '../../lib/supabase'
 import { cn, downloadCsv } from '../../lib/utils'
 import { legalUrl } from '../../platform/legal'
 import { BILLING_DEFAULTS, rupees } from '../../platform/billing'
@@ -45,19 +45,19 @@ function useAfterChange() {
   return async () => { await qc.invalidateQueries({ queryKey: BILLING_QK }); await refresh?.() }
 }
 
-function usePay(online: 'live' | 'demo' | 'off' | undefined) {
+function usePay(_online?: 'live' | 'off') {
   const { user } = useAuth()
   const after = useAfterChange()
   return useMutation({
     mutationFn: (v: { kind: 'plan' | 'wallet'; months?: number; amount?: number; plan?: string }) =>
       billingApi.pay(v.kind, v, { name: user?.full_name ?? undefined, email: user?.email ?? undefined, contact: user?.phone ?? undefined }),
-    onSuccess: async (invoice) => { await after(); toast.success(`Payment received — invoice ${invoice}${online === 'demo' ? ' (demo: no money moved)' : ''}`) },
+    onSuccess: async (invoice) => { await after(); toast.success(`Payment received — invoice ${invoice}`) },
     onError: (e) => { if (!(e instanceof PaymentCancelled)) toast.error((e as Error).message) },
   })
 }
 
 // ------------------------------------------------------------------ plan
-function PlanCard({ s, canPay, online, target, setTarget }: { s: BillingSummary; canPay: boolean; online?: 'live' | 'demo' | 'off'; target: string; setTarget: (p: string) => void }) {
+function PlanCard({ s, canPay, online, target, setTarget }: { s: BillingSummary; canPay: boolean; online?: 'live' | 'off'; target: string; setTarget: (p: string) => void }) {
   const [months, setMonths] = useState<1 | 12>(1)
   const switching = target !== s.plan
   const targetPrice = switching ? s.plans?.[target]?.price ?? null : s.price
@@ -109,7 +109,7 @@ function PlanCard({ s, canPay, online, target, setTarget }: { s: BillingSummary;
                     {quote.data ? `Pay ${rupees(quote.data.total_paise)}` : 'Pay'}
                   </Button>
                 )}
-                <p className="text-center text-[11px] text-slate-500">{online === 'demo' ? 'Demo: the payment is simulated, no money moves.' : 'UPI, cards, net banking and wallets via Razorpay · GST invoice'}</p>
+                <p className="text-center text-[11px] text-slate-500">UPI, cards, net banking and wallets via Razorpay · GST invoice</p>
                 <PayTerms />
               </div>
             )}
@@ -222,7 +222,7 @@ function UsageChart({ rows }: { rows: UsageMonth[] | undefined }) {
 }
 
 // ------------------------------------------------------------------ wallet
-function WalletCard({ s, canPay, online }: { s: BillingSummary; canPay: boolean; online?: 'live' | 'demo' | 'off' }) {
+function WalletCard({ s, canPay, online }: { s: BillingSummary; canPay: boolean; online?: 'live' | 'off' }) {
   const [amount, setAmount] = useState(1000)
   const [debounced, setDebounced] = useState(1000)
   useEffect(() => { const t = setTimeout(() => setDebounced(amount), 350); return () => clearTimeout(t) }, [amount])
@@ -419,16 +419,6 @@ function ProviderTools({ s, admin }: { s: BillingSummary; admin: boolean }) {
                   ? <Button size="sm" variant="outline" onClick={() => run.mutate({ action: 'resume', done: 'Hospital resumed' })}>Resume</Button>
                   : <Button size="sm" variant="danger" onClick={() => { if (window.confirm('Suspend this hospital? Its website and app close until resumed.')) run.mutate({ action: 'suspend', done: 'Hospital suspended' }) }}>Suspend</Button>}
               </div>
-              {!isSupabaseConfigured && (
-                <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                  <p className="mb-2 font-medium">Demo only — jump in time to see the banners:</p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="ghost" onClick={() => run.mutate({ action: 'demo_end_trial', args: { daysAgo: 2 }, done: 'Trial ended 2 days ago → grace period' })}>Trial ended 2 days ago</Button>
-                    <Button size="sm" variant="ghost" onClick={() => run.mutate({ action: 'demo_end_trial', args: { daysAgo: 10 }, done: 'Trial ended 10 days ago → read-only' })}>…10 days ago</Button>
-                    <Button size="sm" variant="ghost" onClick={() => run.mutate({ action: 'extend_trial', args: { days: 9 }, done: 'Back in the trial' })}>Back to trial</Button>
-                  </div>
-                </div>
-              )}
             </div>
             <div className="space-y-3">
               <p className="text-sm font-semibold text-brand-950">Plan & price</p>

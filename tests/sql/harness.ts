@@ -62,3 +62,10 @@ export const USER = {
   staff: 'd0c00000-0000-4000-8000-000000000005',
   patient: 'd0c00000-0000-4000-8000-000000000006',
 }
+
+/** The booking OTP only travels by SMS / WhatsApp; tests set a known code on the row (as the database owner). */
+export const TEST_OTP = '424242'
+export async function knownOtp(db: Db, ref: string): Promise<string> {
+  await db.as(null, `update public.booking_otps set code_hash = extensions.crypt($2, extensions.gen_salt('bf', 4)) where id = $1`, [ref, TEST_OTP])
+  return TEST_OTP
+}

@@ -2,14 +2,8 @@ import { useState, type FormEvent } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { Button, Field, Input } from '../../../src/components/ui'
 import { platformName } from '../../../src/lib/supabase'
-import { cp, friendly, isDemo } from '../api'
+import { backendMissing, cp, friendly } from '../api'
 import type { CpMe } from '../types'
-
-const DEMO = [
-  { email: 'admin@hospitalcomrade.demo', label: 'Admin', hint: 'everything' },
-  { email: 'finance@hospitalcomrade.demo', label: 'Finance', hint: 'payments & wallets' },
-  { email: 'support@hospitalcomrade.demo', label: 'Support', hint: 'City Care, read-only' },
-]
 
 export function LoginPage({ onSignedIn, error }: { onSignedIn: (m: CpMe) => void; error?: unknown }) {
   const [email, setEmail] = useState('')
@@ -39,22 +33,10 @@ export function LoginPage({ onSignedIn, error }: { onSignedIn: (m: CpMe) => void
             <Input id="cp-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </Field>
           {problem && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{problem}</p>}
-          <Button type="submit" loading={busy} className="w-full">Sign in</Button>
+          {backendMissing && <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Database not connected — set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY on the server, then redeploy.</p>}
+          <Button type="submit" loading={busy} disabled={backendMissing} className="w-full">Sign in</Button>
           <p className="text-center text-xs text-slate-500">Hospital staff? Sign in on your hospital’s own website.</p>
         </form>
-        {isDemo && (
-          <div className="mt-4 rounded-2xl bg-white/10 p-4 text-white ring-1 ring-white/15">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-brand-200">Demo accounts · password Demo@123</p>
-            <div className="grid gap-1.5">
-              {DEMO.map((d) => (
-                <button key={d.email} type="button" onClick={() => { setEmail(d.email); setPassword('Demo@123'); setProblem(null) }}
-                  className="flex items-center justify-between rounded-lg bg-white/10 px-3 py-2 text-left text-sm hover:bg-white/20">
-                  <span className="font-medium">{d.label}</span><span className="text-xs text-brand-200">{d.hint}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )

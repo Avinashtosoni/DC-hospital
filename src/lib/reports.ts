@@ -1,6 +1,5 @@
 import { format, startOfMonth, subMonths } from 'date-fns'
-import { isSupabaseConfigured, supabase } from './supabase'
-import { queryAll } from '../data/adapter'
+import { supabase } from './supabase'
 import type { Expense, Invoice, Payment } from '../types'
 import { titleCase } from './utils'
 
@@ -20,7 +19,7 @@ export const revenueSource = (desc: string) =>
 
 const add = (m: Record<string, number>, k: string, v: number) => { m[k] = (m[k] ?? 0) + Number(v) }
 
-/** In-memory twin of public.financial_report (demo mode). */
+/** In-memory twin of public.financial_report (used by the tests). */
 export function rawReport(invoices: Invoice[], payments: Payment[], expenses: Expense[], from: string): RawReport {
   const r: RawReport = { billed: {}, collected: {}, expenses: {}, sources: {}, cats: {}, doctors: {} }
   for (const i of invoices) {
@@ -43,20 +42,12 @@ export const reportBuckets = (months: number) => Array.from({ length: months }, 
   return { key: format(d, 'yyyy-MM'), label: format(d, months > 6 ? 'MMM yy' : 'MMM yyyy') }
 })
 
-/** Totals are computed in the database (Supabase) or from a date window of the demo store — never whole tables. */
+/** Totals are computed in the database — never by downloading whole tables. */
 export async function fetchReport(months: number): Promise<RawReport> {
   const from = `${reportBuckets(months)[0].key}-01`
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase.rpc('financial_report', { p_from: from })
-    if (error) throw new Error(error.message)
-    return data as RawReport
-  }
-  const [inv, pay, exp] = await Promise.all([
-    queryAll('invoices', { where: [['issue_date', 'gte', from]] }),
-    queryAll('payments', { where: [['paid_on', 'gte', from]] }),
-    queryAll('expenses', { where: [['expense_date', 'gte', from]] }),
-  ])
-  return rawReport(inv, pay, exp, from)
+  const { data, error } = await supabase!.rpc('financial_report', { p_from: from })
+  if (error) throw new Error(error.message)
+  return data as RawReport
 }
 
 const entries = (m: Record<string, number>, name = (k: string) => k) =>

@@ -122,7 +122,7 @@ aur [GO_LIVE.md step 2](GO_LIVE.md#2-edge-functions) mein hain. Woh baad mein bh
 |---|---|---|
 | `VITE_SUPABASE_URL` | C1 | C1 (production project) |
 | `VITE_SUPABASE_ANON_KEY` | C3 | C3 (production project) |
-| `REQUIRE_BACKEND` | `true` | `true` |
+| `REQUIRE_BACKEND` | (optional — ab zaroori nahi, demo mode hata diya gaya hai) | (optional) |
 | `TENANCY` | `multi` | `multi` |
 | `APP_ENV` | `staging` (Google index nahi karega, "Staging" badge dikhega) | `production` |
 | `PLATFORM_NAME` / `PLATFORM_DOMAIN` | brand / `staging.<your-domain>` | brand / `<your-domain>` |

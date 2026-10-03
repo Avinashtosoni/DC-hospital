@@ -4,7 +4,7 @@
  * checked here for EVERY table that has a tenant_id, plus provider (admin / support / finance) access.
  */
 import { beforeAll, describe, expect, test } from 'vitest'
-import { freshDb, USER, type Db } from './harness'
+import { freshDb, knownOtp, USER, type Db } from './harness'
 
 let db: Db
 const A = 'a0000000-0000-4000-8000-000000000001'          // primary hospital (all demo data)
@@ -221,11 +221,11 @@ describe('definer functions stay inside the hospital', () => {
 
   test("an OTP from one hospital's website can't be verified or used on another", async () => {
     const phone = '9876577777'
-    const [otp] = await asH<{ r: { demo_code: string } }>('anon', {}, `select public.request_booking_otp($1) r`, [phone])
-    expect(otp.r.demo_code).toMatch(/^\d{6}$/)
-    const [onB] = await asH<{ r: { ok: boolean } }>('anon', { 'x-tenant-id': B }, `select public.verify_booking_otp($1, $2) r`, [phone, otp.r.demo_code])
+    const [otp] = await asH<{ r: { ref: string } }>('anon', {}, `select public.request_booking_otp($1) r`, [phone])
+    const code = await knownOtp(db, otp.r.ref)
+    const [onB] = await asH<{ r: { ok: boolean } }>('anon', { 'x-tenant-id': B }, `select public.verify_booking_otp($1, $2) r`, [phone, code])
     expect(onB.r.ok).toBe(false)
-    const [onA] = await asH<{ r: { ok: boolean; token: string } }>('anon', {}, `select public.verify_booking_otp($1, $2) r`, [phone, otp.r.demo_code])
+    const [onA] = await asH<{ r: { ok: boolean; token: string } }>('anon', {}, `select public.verify_booking_otp($1, $2) r`, [phone, code])
     expect(onA.r.ok).toBe(true)
     await expect(asH('anon', { 'x-tenant-id': B }, `select public.public_book_appointment($1, $2, current_date + 3, '10:00', 'X Y', 'male', null, null, null)`,
       [onA.r.token, B_DOC])).rejects.toThrow(/OTP_REQUIRED/)

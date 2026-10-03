@@ -1,5 +1,4 @@
-import { isSupabaseConfigured, supabase } from './supabase'
-import { queryAll } from '../data/adapter'
+import { supabase } from './supabase'
 import { invoiceBalance } from './billing'
 import type { Expense, Invoice, Payment } from '../types'
 
@@ -25,7 +24,7 @@ const OPEN = ['unpaid', 'partial', 'overdue']
 const add = (m: Record<string, number>, k: string, v: number) => { m[k] = (m[k] ?? 0) + Number(v) }
 const byBalance = (a: Invoice, b: Invoice) => invoiceBalance(b) - invoiceBalance(a)
 
-/** In-memory twin of public.dashboard_finance (demo mode, and the tests). */
+/** In-memory twin of public.dashboard_finance (used by the tests to pin the SQL's maths). */
 export function summariseFinance(invoices: Invoice[], payments: Payment[], expenses: Expense[], from: string): FinanceSummary {
   const s: FinanceSummary = { revenue: {}, expenses: {}, methods: {}, outstanding: 0, open_count: 0, top_open: [], overdue: [], recent: [] }
   for (const p of payments) if (p.paid_on >= from) { add(s.revenue, p.paid_on.slice(0, 7), p.amount); add(s.methods, p.method, p.amount) }
@@ -40,17 +39,9 @@ export function summariseFinance(invoices: Invoice[], payments: Payment[], expen
   return s
 }
 
-/** Totals are computed in the database (Supabase) — never by downloading every payment. Demo mode reads a date window. */
+/** Totals are computed in the database — never by downloading every payment. */
 export async function fetchFinance(from: string): Promise<FinanceSummary> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase.rpc('dashboard_finance', { p_from: from })
-    if (error) throw new Error(error.message)
-    return data as FinanceSummary
-  }
-  const [inv, pay, exp] = await Promise.all([
-    queryAll('invoices', { where: [['status', 'in', OPEN]] }),
-    queryAll('payments', { where: [['paid_on', 'gte', from]] }),
-    queryAll('expenses', { where: [['expense_date', 'gte', from]] }),
-  ])
-  return summariseFinance(inv, pay, exp, from)
+  const { data, error } = await supabase!.rpc('dashboard_finance', { p_from: from })
+  if (error) throw new Error(error.message)
+  return data as FinanceSummary
 }

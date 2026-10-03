@@ -1,6 +1,4 @@
 import type { DB, Profile, TableName } from '../types'
-import { isSupabaseConfigured } from '../lib/supabase'
-import { loadLocal } from './local'
 import { supabaseAdapter } from './supabaseAdapter'
 import type { Query, QueryResult } from './query'
 
@@ -8,7 +6,7 @@ export type Row<T extends TableName> = DB[T]
 export type NewRow<T extends TableName> = Omit<DB[T], 'id' | 'created_at' | 'updated_at'> & { id?: string }
 
 export interface DataAdapter {
-  mode: 'local' | 'supabase'
+  mode: 'supabase'
   list<T extends TableName>(table: T): Promise<Row<T>[]>
   /** filtered / searched / sorted / paged read — only the requested rows leave the database */
   query<T extends TableName>(table: T, q: Query): Promise<QueryResult<Row<T>>>
@@ -29,9 +27,8 @@ export interface AuthAdapter {
   signOut(): Promise<void>
   /** change the signed-in user's password (current password is re-checked) */
   changePassword(current: string, next: string): Promise<void>
-  /** e-mail a password-reset link that opens `redirectTo` (always resolves, so it never reveals whether an account exists).
-   *  Demo mode sends no e-mail and returns the link instead. */
-  requestPasswordReset(email: string, redirectTo: string): Promise<{ demoLink?: string } | void>
+  /** e-mail a password-reset link that opens `redirectTo` (always resolves, so it never reveals whether an account exists) */
+  requestPasswordReset(email: string, redirectTo: string): Promise<void>
   /** whether this page was opened from a valid reset link (a recovery session exists) */
   hasRecoverySession(): Promise<boolean>
   /** set a new password inside a recovery session */
@@ -43,18 +40,7 @@ export interface AuthAdapter {
   onChange(cb: () => void): () => void
 }
 
-/** demo mode: the same interface, loading the in-browser store on first use */
-const lazyLocal: DataAdapter = {
-  mode: 'local',
-  list: async (table) => (await loadLocal()).localAdapter.list(table),
-  query: async (table, q) => (await loadLocal()).localAdapter.query(table, q),
-  insert: async (table, row) => (await loadLocal()).localAdapter.insert(table, row),
-  update: async (table, id, patch) => (await loadLocal()).localAdapter.update(table, id, patch),
-  remove: async (table, id) => (await loadLocal()).localAdapter.remove(table, id),
-  reset: async () => { await (await loadLocal()).localAdapter.reset?.() },
-}
-
-export const db: DataAdapter = isSupabaseConfigured ? supabaseAdapter : lazyLocal
+export const db: DataAdapter = supabaseAdapter
 
 /** Reads every row of a bounded query (a date window, one patient's history…) page by page, up to `cap` rows. */
 export async function queryAll<T extends TableName>(table: T, q: Query, cap = 20_000): Promise<Row<T>[]> {

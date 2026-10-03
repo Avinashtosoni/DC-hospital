@@ -1,5 +1,4 @@
-import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { loadLocal } from '../data/local'
+import { supabase } from '../lib/supabase'
 
 export type FeedbackContext =
   | { ok: true; first_name: string; doctor: string; specialization: string; date: string; submitted: boolean }
@@ -15,13 +14,11 @@ export const TAG_LABEL: Record<string, string> = Object.fromEntries(FEEDBACK_TAG
 
 export const feedbackApi = {
   async context(apptId: string): Promise<FeedbackContext> {
-    if (!isSupabaseConfigured) return (await loadLocal()).localFeedbackContext(apptId)
     const { data, error } = await supabase!.rpc('feedback_context', { p_appt: apptId })
     if (error) return { ok: false, error: /uuid/i.test(error.message) ? 'This feedback link is not valid.' : error.message }
     return data as FeedbackContext
   },
-  async submit(apptId: string, input: FeedbackInput, source: 'portal' | 'link' = 'link') {
-    if (!isSupabaseConfigured) return (await loadLocal()).localSubmitFeedback(apptId, input, source)
+  async submit(apptId: string, input: FeedbackInput, _source: 'portal' | 'link' = 'link') {
     const { error } = await supabase!.rpc('submit_feedback', {
       p_appt: apptId, p_rating: input.rating, p_comment: input.comment ?? null, p_tags: input.tags ?? [], p_recommend: input.would_recommend ?? null,
     })

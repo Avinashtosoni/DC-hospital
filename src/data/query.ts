@@ -2,8 +2,7 @@
  * A small, backend-neutral query description used for server-side pagination, search and windowed reads.
  *
  * The same `Query` runs against Supabase (translated to PostgREST filters, so only the requested page leaves
- * the database) and against the demo store (evaluated in memory by `runQuery`), which keeps both modes
- * behaving identically.
+ * the database). `runQuery` evaluates the same description in memory (tests and small client-side lists).
  */
 export type Op = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'nin' | 'is_null' | 'not_null'
 export type Filter = readonly [column: string, op: Op, value?: unknown]
@@ -62,7 +61,7 @@ export function matches(r: unknown, [column, op, value]: Filter): boolean {
   }
 }
 
-/** Evaluate a query in memory (demo store). Mirrors the PostgREST translation in supabaseAdapter. */
+/** Evaluate a query in memory. Mirrors the PostgREST translation in supabaseAdapter. */
 export function runQuery<T>(all: T[], q: Query = {}): QueryResult<T> {
   let rows = all
   if (q.where?.length) rows = rows.filter((r) => q.where!.every((f) => matches(r, f)))

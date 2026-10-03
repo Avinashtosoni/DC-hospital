@@ -4506,11 +4506,10 @@ begin
   v_use := case when p_channel = any (v_avail) then array[p_channel] else v_avail end;
   v_queued := case when cardinality(v_use) > 0 then public.send_booking_otp(v_phone, v_code, v_id, v_use) else 0 end;
 
-  -- the code is only ever returned to the browser when no SMS/WhatsApp gateway took it AND demo mode is on
+  -- the code never goes back to the browser — only by SMS / WhatsApp (queued = 0 → the site says "please call")
   -- `ref` lets the browser ask the notify function to deliver exactly this message right away
-  return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', v_queued, 'ref', v_id,
-    'channels', case when v_queued > 0 then to_jsonb(v_use) else '[]'::jsonb end,
-    'demo_code', case when v_queued = 0 and public.booking_setting('showDemoOtp', 'true') = 'true' then v_code end);
+  return jsonb_build_object('sent', v_queued > 0, 'expires_in', 600, 'queued', v_queued, 'ref', v_id,
+    'channels', case when v_queued > 0 then to_jsonb(v_use) else '[]'::jsonb end);
 end $$;
 
 -- returns {ok:true, token} or {ok:false, error} (no exception, so the failed-attempt counter is kept)
@@ -7254,7 +7253,6 @@ begin
   values (p_tenant, 'settings', jsonb_build_object(
     'name', t.name, 'tagline', '', 'about', '', 'address', '', 'phone', '', 'appointmentsPhone', '', 'whatsapp', '', 'email', '',
     'seoDescription', t.name, 'brand', jsonb_build_object('shortName', left(t.name, 30)),
-    'booking', jsonb_build_object('showDemoOtp', false),
     'billing', jsonb_build_object('legalName', t.name, 'gstin', '', 'regNo', '', 'pan', '', 'upiId', '')))
   on conflict (tenant_id, key) do nothing;
   -- default settings (phase 3): without this row nothing is ever queued for the hospital. SMS, WhatsApp and e-mail

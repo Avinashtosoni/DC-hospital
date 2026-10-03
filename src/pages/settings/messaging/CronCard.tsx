@@ -45,12 +45,10 @@ export function CronCard({ secrets }: { ctx: TabCtx; secrets: SecretStatus[] | u
     </Section>
   )
   return (
-    <Section title={<span className="flex items-center gap-2">Automatic delivery (Supabase cron)<Badge tone={s?.demo ? 'slate' : on ? 'green' : 'amber'} dot>{s?.demo ? 'Demo' : on ? 'On' : 'Off'}</Badge></span>} icon={<Timer className="h-4 w-4" />}
+    <Section title={<span className="flex items-center gap-2">Automatic delivery (Supabase cron)<Badge tone={on ? 'green' : 'amber'} dot>{on ? 'On' : 'Off'}</Badge></span>} icon={<Timer className="h-4 w-4" />}
       description="Delivers the queue every minute, sends scheduled messages and queues tomorrow's reminders every evening — no browser needs to be open."
-      action={!s?.demo && <Button size="icon" variant="ghost" aria-label="Refresh status" onClick={() => st.refetch()}><RefreshCw className={cn('h-4 w-4', st.isFetching && 'animate-spin')} /></Button>}>
-      {st.isPending ? <Skeleton className="h-32" /> : st.isError ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{(st.error as Error).message}</p> : s?.demo ? (
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Demo mode — nothing runs in the background here. With Supabase connected, this card switches on <b>pg_cron</b> jobs that call the notify function for you.</p>
-      ) : s && (
+      action={<Button size="icon" variant="ghost" aria-label="Refresh status" onClick={() => st.refetch()}><RefreshCw className={cn('h-4 w-4', st.isFetching && 'animate-spin')} /></Button>}>
+      {st.isPending ? <Skeleton className="h-32" /> : st.isError ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{(st.error as Error).message}</p> : s && (
         <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
           <ol className="space-y-3 text-sm text-slate-700">
             {step(s.pg_cron && s.pg_net, <>Extensions <b>pg_cron</b> and <b>pg_net</b> {s.pg_cron && s.pg_net ? 'are on.' : <>— turned on automatically when you press <i>Turn on</i>; if that is not allowed, enable them in Supabase → Database → Extensions.</>}</>)}

@@ -47,7 +47,7 @@ export function PlatformPanel({ channel, info }: { channel: PlatformChannel; inf
         {provider ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />}
         <div className="min-w-0 space-y-1">
           {info.isPending ? <p>Checking {brand()} messaging…</p>
-            : provider ? <p><b>{brand()} {CH_LABEL[channel]}</b> is active{d?.demo ? ' (demo)' : ''} — sent from our verified {PROVIDER_LABEL[provider] ?? provider} account in <b>your hospital’s name</b>. No keys or provider account needed.</p>
+            : provider ? <p><b>{brand()} {CH_LABEL[channel]}</b> is active — sent from our verified {PROVIDER_LABEL[provider] ?? provider} account in <b>your hospital’s name</b>. No keys or provider account needed.</p>
               : unknown ? <p>Could not reach the <b>notify</b> function to check {brand()} messaging. Messages are still queued and sent once it is deployed.</p>
                 : <p><b>{brand()} {CH_LABEL[channel]}</b> is not available yet — messages on this channel will fail. Ask {brand()} support, or switch to <b>Your own account</b>.</p>}
           {channel === 'sms' && <p className="text-xs opacity-80">Sender ID <b className="font-mono">{d?.identity.smsSenderId || d?.details.smsSenderId || '—'}</b>{d?.identity.smsSenderId ? ' (registered for your hospital)' : ''} · DLT-approved templates · your hospital’s name is in every message.</p>}

@@ -7,7 +7,7 @@ import { setFormatPrefs } from '../lib/utils'
 import { DEFAULT_APP_SETTINGS, paletteFor, type AppSettings } from './types'
 import type { SiteSettings } from '../site/cms/types'
 import { isPrimaryTenant } from '../tenancy/state'
-import { setSettingsActor, settingsStore, type SettingsRow } from './store'
+import { settingsStore, type SettingsRow } from './store'
 
 export const APP_SETTINGS_QK = ['app-settings'] as const
 
@@ -30,12 +30,11 @@ const AppSettingsCtx = createContext<Ctx | null>(null)
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const qc = useQueryClient()
-  const enabled = settingsStore.mode === 'local' || !!user
+  const enabled = !!user
   const q = useQuery({ queryKey: APP_SETTINGS_QK, queryFn: settingsStore.load, enabled, staleTime: 5 * 60_000 })
   const savedSettings = useMemo(() => deepMerge(DEFAULT_APP_SETTINGS, q.data?.data ?? null), [q.data])
   const [preview, setPreview] = useState<AppPreview | null>(null)
   const settings = useMemo(() => (preview ? { ...savedSettings, ...preview } : savedSettings), [savedSettings, preview])
-  useEffect(() => { if (user) setSettingsActor(user.full_name) }, [user])
 
   // date/time formats are read synchronously by fmtDate/fmtTime
   setFormatPrefs({ date: settings.locale.dateFormat, time24: settings.locale.timeFormat === '24h' })

@@ -13,11 +13,9 @@ import { legalDocs } from './legal'
 
 /**
  * The Hospital Comrade product page — shown on the platform's own domain (PLATFORM_DOMAIN) when no hospital is
- * selected. Hospitals live on their own domains; the demo hospitals stay reachable with ?hospital=main / citycare.
+ * selected. Hospitals live on their own domains (or ?hospital=<slug>).
  */
 const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`
-const DEMO_URL = '/?hospital=main'
-const CLINIC_DEMO_URL = '/?hospital=citycare'
 
 const FEATURES = [
   { icon: CalendarCheck, title: 'Appointments & online booking', text: 'Doctor calendars, leaves and holidays, walk-ins and a 30-second booking page for patients — with OTP verification.' },
@@ -44,7 +42,6 @@ const FAQS = [
   { q: 'Can I use my own domain?', a: 'Yes. Your website and dashboard run on your own domain (for example www.yourhospital.in). We give you one DNS record to add and handle the SSL certificate for you.' },
   { q: 'Is my hospital’s data separate from other hospitals?', a: 'Yes. Every hospital’s data is isolated in the database itself, each staff member only sees what their role allows, and sensitive actions are logged.' },
   { q: 'Can you move my data from my old software?', a: 'Yes — patients, doctors and other masters can be imported. Enterprise plans include assisted migration.' },
-  { q: 'What does the demo contain?', a: 'Two sample hospitals with fake patients and bills. Every role has a one-click demo login, and nothing you change affects anyone else.' },
 ]
 
 /** the platform domain's pages: / (product), /signup (free trial), /legal/:slug */
@@ -108,7 +105,7 @@ function Header() {
           {links.map(([l, h]) => <a key={h} href={h} className="transition hover:text-peri-500">{l}</a>)}
         </nav>
         <div className="flex items-center gap-2">
-          <a href={DEMO_URL} className="hidden px-2 text-sm font-semibold text-peri-800 hover:text-peri-500 lg:inline">Live demo</a>
+          <a href="#contact" className="hidden px-2 text-sm font-semibold text-peri-800 hover:text-peri-500 lg:inline">Talk to us</a>
           <a href={platformHref('/signup')} className="btn-peri hidden !px-5 !py-2.5 sm:inline-flex">Start free trial<ArrowRight className="h-4 w-4" /></a>
           <button type="button" className="grid h-10 w-10 place-items-center rounded-xl text-peri-800 hover:bg-peri-100 md:hidden" aria-label={open ? 'Close menu' : 'Open menu'} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -119,7 +116,7 @@ function Header() {
         <nav aria-label="Mobile" className="border-t border-peri-200/60 bg-white md:hidden">
           <div className="l-container flex flex-col py-3">
             {links.map(([l, h]) => <a key={h} href={h} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 font-medium text-peri-900 hover:bg-peri-50">{l}</a>)}
-            <a href={DEMO_URL} className="rounded-xl px-3 py-3 font-medium text-peri-900 hover:bg-peri-50">Live demo</a>
+            <a href="#contact" onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 font-medium text-peri-900 hover:bg-peri-50">Talk to us</a>
             <a href={platformHref('/signup')} className="btn-peri mt-2">Start free trial<ArrowRight className="h-4 w-4" /></a>
           </div>
         </nav>
@@ -159,7 +156,7 @@ function Hero() {
           </p>
           <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
             <a href={platformHref('/signup')} className="btn-peri w-full sm:w-auto">Start free trial<ArrowRight className="h-4 w-4" /></a>
-            <a href={DEMO_URL} className="btn-ghost w-full sm:w-auto">Try the live demo</a>
+            <a href="#contact" className="btn-ghost w-full sm:w-auto">Book a guided demo</a>
           </div>
           <p className="mt-5 text-sm text-slate-500">Free trial, no card · Plans from <b className="text-peri-900">{inr(999)}/month</b> · <a href="#contact" className="underline-offset-4 hover:underline">Talk to us</a></p>
         </div>
@@ -349,7 +346,7 @@ function Contact() {
             <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" />
             <p className="mt-4 font-display text-xl font-bold text-peri-900">Thank you, {f.name.trim().replace(/^(dr|mr|mrs|ms|shri|smt)\.?\s+/i, '').split(/\s+/)[0]}!</p>
             <p className="mt-2 text-sm text-slate-600">We’ve received your details and will call you on {f.phone} soon.</p>
-            <a href={DEMO_URL} className="btn-peri mt-6">Explore the demo meanwhile<ArrowRight className="h-4 w-4" /></a>
+            <a href={platformHref('/signup')} className="btn-peri mt-6">Or start a free trial now<ArrowRight className="h-4 w-4" /></a>
           </div>
         ) : (
           <form onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2">
@@ -375,9 +372,6 @@ function Contact() {
           </form>
         )}
       </div>
-      <p className="mt-6 text-center text-sm text-slate-500">
-        Want to look around first? <a href={DEMO_URL} className="font-semibold text-peri-700 underline-offset-4 hover:underline">Open the demo hospital</a> or the <a href={CLINIC_DEMO_URL} className="font-semibold text-peri-700 underline-offset-4 hover:underline">demo clinic</a>.
-      </p>
     </Section>
   )
 }

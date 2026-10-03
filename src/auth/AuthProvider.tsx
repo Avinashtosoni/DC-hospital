@@ -2,34 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useQueryClient } from '@tanstack/react-query'
 import type { Profile } from '../types'
 import type { AuthAdapter, SignUpInput } from '../data/adapter'
-import { isSupabaseConfigured } from '../lib/supabase'
-import { loadLocal } from '../data/local'
 import { supabaseAuth } from '../data/supabaseAdapter'
 import { resolveSession, TenantAccessError } from '../tenancy/session'
 import { clearProviderChoice, type MyContext } from '../tenancy/state'
 import { toast } from 'sonner'
 
-/** demo mode: the in-browser accounts, loaded on first use */
-const L = async () => (await loadLocal()).localAuth
-const lazyLocalAuth: AuthAdapter = {
-  getCurrent: async () => (await L()).getCurrent(),
-  signIn: async (email, password) => (await L()).signIn(email, password),
-  signUp: async (input) => (await L()).signUp(input),
-  signOut: async () => (await L()).signOut(),
-  changePassword: async (current, next) => (await L()).changePassword(current, next),
-  requestPasswordReset: async (email, redirectTo) => (await L()).requestPasswordReset(email, redirectTo),
-  hasRecoverySession: async () => (await L()).hasRecoverySession(),
-  setNewPassword: async (next) => (await L()).setNewPassword(next),
-  signOutEverywhere: async () => (await L()).signOutEverywhere(),
-  uploadAvatar: async (userId, file) => (await L()).uploadAvatar(userId, file),
-  onChange(cb) {
-    let off = () => {}, done = false
-    void L().then((a) => { if (!done) off = a.onChange(cb) })
-    return () => { done = true; off() }
-  },
-}
-
-export const auth: AuthAdapter = isSupabaseConfigured ? supabaseAuth : lazyLocalAuth
+export const auth: AuthAdapter = supabaseAuth
 
 interface AuthCtx {
   user: Profile | null

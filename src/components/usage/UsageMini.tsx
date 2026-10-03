@@ -2,7 +2,6 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, MessagesSquare } from 'lucide-react'
 import { Card, CardHeader, Skeleton } from '../ui'
 import { CHANNEL_META } from '../../pages/settings/messaging/channelMeta'
-import { usageIsSample } from '../../settings/messaging'
 import { CHANNELS } from '../../settings/types'
 import { money } from '../../lib/utils'
 import { useUsage } from './useUsage'
@@ -15,7 +14,7 @@ export function UsageMini({ className }: { className?: string }) {
   const max = Math.max(1, ...CHANNELS.map((c) => u.summary.byChannel[c]))
   return (
     <Card className={className}>
-      <CardHeader title="Messages this month" subtitle={usageIsSample ? 'Sample data — demo mode' : 'SMS, WhatsApp, e-mail and push'} icon={<MessagesSquare className="h-4 w-4" />}
+      <CardHeader title="Messages this month" subtitle="SMS, WhatsApp, e-mail and push" icon={<MessagesSquare className="h-4 w-4" />}
         action={<Link to="/reports?tab=messaging" className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">Report<ArrowRight className="h-3 w-3" /></Link>} />
       <div className="space-y-3 p-5">
         {u.isPending ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-7" />) : <>

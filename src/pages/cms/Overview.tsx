@@ -7,7 +7,7 @@ import {
 import { Badge, Button, Skeleton } from '../../components/ui'
 import { useCount } from '../../hooks/useData'
 import { ago, cn } from '../../lib/utils'
-import { cms, type ContentRows } from '../../site/cms/store'
+import type { ContentRows } from '../../site/cms/store'
 import type { ContentKey, SiteContent } from '../../site/cms/types'
 import { SECTIONS, type Section } from './schema'
 
@@ -78,7 +78,7 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
             </div>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end sm:text-right">
-            <Badge tone={cms.mode === 'supabase' ? 'green' : 'amber'} dot><Database className="mr-0.5 h-3 w-3" />{cms.mode === 'supabase' ? 'Supabase' : 'Demo · this browser'}</Badge>
+            <Badge tone="green" dot><Database className="mr-0.5 h-3 w-3" />Supabase</Badge>
             <p className="text-xs text-brand-300">{liveDoctors} doctors · {liveServices} specialities live</p>
             <p className="hidden items-center gap-1.5 text-[11px] text-brand-400 sm:inline-flex"><Keyboard className="h-3.5 w-3.5" />Ctrl + S publish · Ctrl + Z undo</p>
           </div>

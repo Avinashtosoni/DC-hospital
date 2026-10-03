@@ -212,7 +212,7 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
   const onPlatform = tenancy && isPlatformChannel(channel) && (cfg as { source?: string }).source === 'platform'
   const status: { tone: Tone; label: string } = onPlatform && isPlatformChannel(channel) ? platformStatus(info.data, channel, cfg.enabled)
     : !cfg.enabled ? { tone: 'slate', label: 'Off' } : issues.length ? { tone: 'amber', label: 'Setup incomplete' } : { tone: 'green', label: 'Ready' }
-  const blockTest = ctx.dirty && settingsStore.mode === 'supabase'
+  const blockTest = ctx.dirty
   return (
     <Section title={<span className="flex items-center gap-2">{meta.label}<Badge tone={status.tone} dot>{status.label}</Badge></span>} icon={meta.icon}
       description={channel === 'sms' ? 'OTP, confirmations and reminders by text message.' : channel === 'whatsapp' ? 'Rich confirmations and reminders on WhatsApp.' : channel === 'push' ? 'Free pop-up notifications in the browser / installed app through Firebase Cloud Messaging.' : 'Confirmations, invoices and receipts by email.'}
@@ -402,18 +402,17 @@ function DeliveryLog() {
     onError: (e) => toast.error((e as Error).message),
   })
   const rows = useMemo(() => (log.data ?? []).filter((r) => filter === 'all' || r.status === 'failed'), [log.data, filter])
-  const live = settingsStore.mode === 'supabase'
   return (
     <Section title="Delivery log" description="The last 100 messages. OTP message bodies are never stored." icon={<History className="h-4 w-4" />}
       action={<div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" icon={<AlarmClock className="h-3.5 w-3.5" />} loading={remind.isPending} disabled={!live} onClick={() => remind.mutate()} title="Queue reminders for tomorrow's appointments">Queue reminders</Button>
-        <Button size="sm" variant="outline" icon={<Send className="h-3.5 w-3.5" />} loading={flush.isPending} disabled={!live} onClick={() => flush.mutate()}>Process queue</Button>
+        <Button size="sm" variant="outline" icon={<AlarmClock className="h-3.5 w-3.5" />} loading={remind.isPending} onClick={() => remind.mutate()} title="Queue reminders for tomorrow's appointments">Queue reminders</Button>
+        <Button size="sm" variant="outline" icon={<Send className="h-3.5 w-3.5" />} loading={flush.isPending} onClick={() => flush.mutate()}>Process queue</Button>
         <Button size="icon" variant="ghost" aria-label="Refresh log" onClick={() => log.refetch()}><RefreshCw className={cn('h-4 w-4', log.isFetching && 'animate-spin')} /></Button>
       </div>}>
       <Segmented size="sm" className="mb-3" value={filter} onChange={setFilter} options={[{ value: 'all', label: 'All' }, { value: 'failed', label: `Failed (${(log.data ?? []).filter((r) => r.status === 'failed').length})` }]} />
       {log.isPending ? <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-10" />)}</div>
         : log.isError ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{(log.error as Error).message}</p>
-          : !rows.length ? <EmptyState icon={<BellRing className="h-6 w-6" />} title={filter === 'failed' ? 'No failed messages' : 'No messages yet'} description={live ? 'Messages appear here as appointments, invoices and lab results trigger them.' : 'In demo mode only test sends are logged.'} />
+          : !rows.length ? <EmptyState icon={<BellRing className="h-6 w-6" />} title={filter === 'failed' ? 'No failed messages' : 'No messages yet'} description="Messages appear here as appointments, invoices and lab results trigger them." />
             : (
               <div className="-mx-5 overflow-x-auto">
                 <table className="w-full min-w-[680px] text-sm">
@@ -443,17 +442,15 @@ function DeliveryLog() {
 export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
   const secrets = useQuery({ queryKey: SECRETS_QK, queryFn: settingsStore.secrets })
   const ping = useMutation({ mutationFn: settingsStore.ping })
-  const live = settingsStore.mode === 'supabase'
   const { context } = useAuth()
   return (
     <div className="space-y-6">
-      <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 text-sm', live ? 'border-brand-200 bg-brand-50/60 text-brand-900' : 'border-amber-200 bg-amber-50 text-amber-900')}>
-        {live ? <ServerCog className="h-5 w-5 shrink-0" /> : <PlugZap className="h-5 w-5 shrink-0" />}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-200 bg-brand-50/60 px-4 py-3 text-sm text-brand-900">
+        <ServerCog className="h-5 w-5 shrink-0" />
         <p className="min-w-0 flex-1">
-          {live ? <>Messages are queued in the database and delivered by the <b>notify</b> Edge Function. Deploy it once with <code className="rounded bg-white/70 px-1 text-xs">supabase functions deploy notify</code>.</>
-            : <><b>Demo mode.</b> You can configure everything and test your setup, but nothing is really sent until Supabase is connected and the notify function is deployed. API keys you type here are <b>not stored</b> in this browser — only their last 4 characters, so you can see what was entered.</>}
+          Messages are queued in the database and delivered by the <b>notify</b> Edge Function. Deploy it once with <code className="rounded bg-white/70 px-1 text-xs">supabase functions deploy notify</code>.
         </p>
-        {live && <Button size="sm" variant="outline" loading={ping.isPending} icon={<PlugZap className="h-3.5 w-3.5" />} onClick={() => ping.mutate()}>Check function</Button>}
+        <Button size="sm" variant="outline" loading={ping.isPending} icon={<PlugZap className="h-3.5 w-3.5" />} onClick={() => ping.mutate()}>Check function</Button>
         {ping.data && <span className={cn('basis-full text-xs', ping.data.ok ? 'text-emerald-700' : 'text-rose-700')}>{ping.data.ok ? '✓ ' : '✕ '}{ping.data.message}</span>}
       </div>
       {secrets.isError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">Could not load saved credentials: {(secrets.error as Error).message}</p>}

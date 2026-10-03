@@ -59,7 +59,7 @@ New application from this repository (Dockerfile build), port 80. Environment va
 | Variable | Value |
 |---|---|
 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | from step 1.7 |
-| `REQUIRE_BACKEND` | `true` — never fall back to demo data |
+| `REQUIRE_BACKEND` | optional — no longer needed (demo mode was removed) |
 | `TENANCY` | `multi` |
 | `APP_ENV` | `production` |
 | `PLATFORM_NAME` | your brand, e.g. `Hospital Comrade` |

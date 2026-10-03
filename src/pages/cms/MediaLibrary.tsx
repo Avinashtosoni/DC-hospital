@@ -59,7 +59,7 @@ export function MediaLibrary({ onPick, selected }: { onPick?: (url: string) => v
         className={cn('flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-6 text-center transition', drag ? 'border-brand-500 bg-brand-50' : 'border-slate-200 bg-slate-50/60')}>
         {upload.isPending ? <Loader2 className="h-7 w-7 animate-spin text-brand-600" /> : <CloudUpload className="h-7 w-7 text-slate-400" />}
         <p className="text-sm text-slate-600">{upload.isPending ? 'Optimising & uploading…' : <>Drag images here, or <button type="button" onClick={() => input.current?.click()} className="font-semibold text-brand-700 hover:underline">browse</button></>}</p>
-        <p className="text-[11px] text-slate-400">JPG, PNG or WebP · resized to max 1600px and converted to WebP{cms.mode === 'local' ? ' · demo mode stores images in this browser' : ''}</p>
+        <p className="text-[11px] text-slate-400">JPG, PNG or WebP · resized to max 1600px and converted to WebP</p>
         <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => { const f = Array.from(e.target.files ?? []); if (f.length) upload.mutate(f); e.target.value = '' }} />
       </div>
 

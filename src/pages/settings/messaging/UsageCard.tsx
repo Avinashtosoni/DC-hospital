@@ -1,8 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight, BarChart3 } from 'lucide-react'
-import { Badge, Input, Skeleton } from '../../../components/ui'
+import { Input, Skeleton } from '../../../components/ui'
 import { useUsage } from '../../../components/usage/useUsage'
-import { usageIsSample } from '../../../settings/messaging'
 import { CHANNELS } from '../../../settings/types'
 import { money } from '../../../lib/utils'
 import { CHANNEL_META } from './channelMeta'
@@ -13,7 +12,7 @@ export function UsageCard({ ctx }: { ctx: TabCtx }) {
   const u = useUsage('month')
   const rates = ctx.app.notifications.rates
   return (
-    <Section title={<span className="flex items-center gap-2">Usage this month{usageIsSample && <Badge tone="amber">sample</Badge>}</span>} icon={<BarChart3 className="h-4 w-4" />}
+    <Section title={<span className="flex items-center gap-2">Usage this month</span>} icon={<BarChart3 className="h-4 w-4" />}
       description="Messages queued since the 1st, and your price per delivered message (used for the cost estimate — check your provider's plan)."
       action={<Link to="/reports?tab=messaging" className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 hover:underline">Full report<ArrowRight className="h-3.5 w-3.5" /></Link>}>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">

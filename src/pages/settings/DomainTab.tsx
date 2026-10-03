@@ -84,17 +84,17 @@ function DomainCard({ d, state, busy, run, onRemove }: { d: DomainRow; state: Do
 
 export function DomainTab() {
   const { context } = useAuth()
-  const demoCanManage = context?.provider_role === 'admin'
+  const canManage = context?.provider_role === 'admin'
   const tenant = activeTenantId()
   const qc = useQueryClient()
-  const q = useQuery({ queryKey: [...DOMAINS_QK, tenant], queryFn: () => domainsApi({ action: 'list' }, demoCanManage), retry: 0 })
+  const q = useQuery({ queryKey: [...DOMAINS_QK, tenant], queryFn: () => domainsApi({ action: 'list' }, canManage), retry: 0 })
   const [busy, setBusy] = useState<string | null>(null)
   const [del, setDel] = useState<string | null>(null)
   const [domain, setDomain] = useState('')
   const [method, setMethod] = useState<'cloudflare' | 'manual'>('cloudflare')
 
   const m = useMutation({
-    mutationFn: (a: DomainAction) => domainsApi(a, demoCanManage),
+    mutationFn: (a: DomainAction) => domainsApi(a, canManage),
     onMutate: (a) => setBusy(`${a.action}:${'domain' in a ? normaliseDomain(a.domain) : ''}`),
     onSuccess: (data, a) => {
       qc.setQueryData([...DOMAINS_QK, tenant], data)

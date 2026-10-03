@@ -15,10 +15,8 @@ const url = (runtime.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URL) as 
 const key = (runtime.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
 
 export const isSupabaseConfigured = Boolean(url && key)
-/** Production installs set REQUIRE_BACKEND=true so a missing Supabase config stops the app instead of silently
- *  falling back to demo mode (where data lives only in each browser). */
+/** There is no demo / in-browser mode: without the Supabase URL + anon key the app shows a setup screen and stops. */
 export const backendMissing = !isSupabaseConfigured
-  && /^(1|true|yes)$/i.test(String(runtime.REQUIRE_BACKEND || import.meta.env.VITE_REQUIRE_BACKEND || ''))
 /** single = one hospital per install · multi = Hospital Comrade SaaS (hospital picked by domain). */
 export const tenancyMode: 'single' | 'multi' = String(runtime.TENANCY || import.meta.env.VITE_TENANCY || 'single').toLowerCase() === 'multi' ? 'multi' : 'single'
 /** production | staging — staging shows a badge so nobody mistakes it for the live site. */

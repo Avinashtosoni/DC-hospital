@@ -9,10 +9,10 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Check, CheckCircle2, ExternalLink, KeyRound, Mail, MailCheck, MessageCircle, MessageSquareText, Pencil, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react'
+import { ArrowLeft, Check, CheckCircle2, KeyRound, Mail, MailCheck, MessageCircle, MessageSquareText, Pencil, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
 import { auth } from '../auth/AuthProvider'
-import { isDemoAuth, mobileReset, phone10, ResetError, validEmail, validMobile, type OtpChannel } from '../auth/passwordReset'
+import { mobileReset, phone10, ResetError, validEmail, validMobile, type OtpChannel } from '../auth/passwordReset'
 import { Button, Spinner } from '../components/ui'
 import { FormError, IconInput, PasswordInput, PasswordStrength } from '../components/auth/AuthFields'
 import { AuthShell } from './Login'
@@ -83,7 +83,6 @@ function EmailReset({ email, setEmail }: { email: string; setEmail: (v: string) 
   const { t } = useT()
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
-  const [demoLink, setDemoLink] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [left, setLeft] = useCountdown()
   const send = async () => {
@@ -91,8 +90,8 @@ function EmailReset({ email, setEmail }: { email: string; setEmail: (v: string) 
     if (!validEmail(email)) return setError(t('Please enter a valid e-mail address.'))
     setLoading(true)
     try {
-      const r = await auth.requestPasswordReset(email.trim(), `${window.location.origin}/reset-password`)
-      setDemoLink((r && r.demoLink) || null); setSent(true); setLeft(60)
+      await auth.requestPasswordReset(email.trim(), `${window.location.origin}/reset-password`)
+      setSent(true); setLeft(60)
     } catch (err) { setError((err as Error).message) } finally { setLoading(false) }
   }
   const submit = (e: FormEvent) => { e.preventDefault(); send() }
@@ -106,11 +105,6 @@ function EmailReset({ email, setEmail }: { email: string; setEmail: (v: string) 
           <p className="mt-1 text-sm text-slate-600">{t('If an account exists for {email}, we have sent a link to reset the password. The link works once and expires in 1 hour. Check your spam folder too.', { email: email.trim() })}</p>
         </div>
       </div>
-      {isDemoAuth && (
-        demoLink
-          ? <a href={demoLink} className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-brand-700 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-800"><ExternalLink className="h-4 w-4" />{t('Demo: open the reset link')}</a>
-          : <p className="mt-4 rounded-lg bg-white px-3 py-2 text-xs text-slate-500 ring-1 ring-slate-200">{t('Demo mode: no account uses this e-mail, so no link was created.')}</p>
-      )}
       <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <button type="button" onClick={send} disabled={left > 0 || loading} className="inline-flex items-center gap-1.5 font-medium text-brand-700 hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline">
           <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />{left > 0 ? t('Resend in {s}s', { s: left }) : t('Resend link')}
@@ -163,7 +157,6 @@ function MobileReset({ email, setEmail, channels, loadingChannels }: { email: st
   const [phone, setPhone] = useState('')
   const [channel, setChannel] = useState<OtpChannel>('whatsapp')
   const [sentVia, setSentVia] = useState<OtpChannel[]>([])
-  const [demoCode, setDemoCode] = useState<string | null | undefined>(undefined)
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
   const [pw, setPw] = useState('')
@@ -182,7 +175,7 @@ function MobileReset({ email, setEmail, channels, loadingChannels }: { email: st
     setLoading(true)
     try {
       const r = await mobileReset.request(email, phone, channel)
-      setSentVia(r.channels); setDemoCode(r.demoCode); setCode(''); setStep('code'); setLeft(30)
+      setSentVia(r.channels); setCode(''); setStep('code'); setLeft(30)
     } catch (err) { setError((err as Error).message) } finally { setLoading(false) }
   }
   const verify = async (c = code) => {
@@ -256,11 +249,6 @@ function MobileReset({ email, setEmail, channels, loadingChannels }: { email: st
       {step === 'code' && (
         <form onSubmit={(e) => { e.preventDefault(); verify() }} className="mt-5 space-y-4">
           <p className="text-sm text-slate-600">{t('We sent a 6-digit code by {via} to {phone} — if it belongs to the account for {email}.', { via, phone: masked, email: email.trim() })}</p>
-          {isDemoAuth && demoCode !== undefined && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200">
-              {demoCode ? <>{t('Demo mode — your code is')} <b className="font-mono tracking-widest">{demoCode}</b></> : t('Demo mode: this e-mail and mobile are not on the same account, so no code was sent.')}
-            </p>
-          )}
           <label className="block">
             <span className="label">{t('Verification code')}</span>
             <input ref={codeRef} className="input h-14 text-center font-mono text-2xl font-semibold tracking-[.6em] placeholder:tracking-[.6em]" inputMode="numeric" autoComplete="one-time-code"
@@ -329,8 +317,8 @@ export function ResetPassword() {
     setLoading(true)
     try {
       await auth.setNewPassword(pw); setState('done'); toast.success(t('Password updated'))
-      // Supabase signs the user in with the recovery session; the demo store does not
-      setTimeout(() => nav(isDemoAuth ? '/login' : '/', { replace: true }), 1400)
+      // Supabase signs the user in with the recovery session
+      setTimeout(() => nav('/', { replace: true }), 1400)
     }
     catch (err) { setError((err as Error).message) }
     finally { setLoading(false) }
@@ -354,7 +342,7 @@ export function ResetPassword() {
         <div className="text-center">
           <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-50"><CheckCircle2 className="h-9 w-9 text-emerald-500" /></div>
           <h2 className="mt-4 text-xl font-semibold text-slate-900">{t('Password updated')}</h2>
-          <p className="mt-1 text-sm text-slate-500">{isDemoAuth ? t('Taking you to sign in…') : t('Taking you to your dashboard…')}</p>
+          <p className="mt-1 text-sm text-slate-500">{t('Taking you to your dashboard…')}</p>
         </div>
       )}
       {state === 'ready' && (

@@ -25,8 +25,6 @@ export function SecurityTab({ ctx }: { ctx: TabCtx }) {
       <Section title="Sign-in & patient portal" icon={<LogIn className="h-4 w-4" />}>
         <div className="space-y-3">
           <Toggle label="Allow patients to create their own portal account" hint="Shows “Create account” on the sign-in page. New accounts get the Patient role; staff join with an invite link from Users & Roles." checked={p.allowSignup} onChange={(v) => editSite((d) => { d.portal.allowSignup = v })} />
-          <Toggle label="Show one-click demo accounts on the sign-in page" hint="Handy for demos. Turn OFF before going live." checked={p.showDemoLogins} onChange={(v) => editSite((d) => { d.portal.showDemoLogins = v })} />
-          {p.showDemoLogins && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">Demo accounts use the shared password <b>Demo@123</b>. Use the Go-live checklist above to lock them before real patients use the system.</p>}
           <Field label="Sign-in page notice (optional)"><Textarea rows={2} maxLength={240} value={p.loginNotice} onChange={(e) => editSite((d) => { d.portal.loginNotice = e.target.value })} placeholder="e.g. Staff: use your hospital email. Patients: call the front desk for access." /></Field>
         </div>
       </Section>

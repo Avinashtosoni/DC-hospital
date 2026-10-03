@@ -44,7 +44,6 @@ export function BillingTab({ ctx }: { ctx: TabCtx }) {
           <Field label="Booking code (OTP) — offer first" hint="When both WhatsApp and SMS are switched on for “Booking OTP” (Notifications tab), visitors can pick either; this one is highlighted. Signed-in patients book from the portal without an OTP.">
             <Segmented size="sm" value={bk.otpPreferred ?? 'whatsapp'} onChange={(v) => editSite((d) => { d.booking.otpPreferred = v })} options={[{ value: 'whatsapp', label: 'WhatsApp' }, { value: 'sms', label: 'SMS' }]} />
           </Field>
-          <Toggle label="Show the OTP on screen when no SMS gateway is connected" hint="For demos and testing only. Hidden automatically once SMS or WhatsApp delivers the code. Turn OFF in production." checked={bk.showDemoOtp} onChange={(v) => editSite((d) => { d.booking.showDemoOtp = v })} />
         </div>
       </Section>
     </div>

@@ -4,7 +4,7 @@
  * Secrets never leave: invite tokens are dropped; API keys live in settings, which have their own export.
  */
 import { queryAll } from '../data/adapter'
-import { isSupabaseConfigured, supabase } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 import { toCsv } from '../lib/utils'
 import { TABLES, type TableName } from '../types'
 
@@ -31,7 +31,7 @@ export async function exportHospitalZip(hospital: string, onProgress?: (done: nu
   const { zipSync, strToU8 } = await import('fflate')
   const files: Record<string, Uint8Array> = {}
   const counts: Record<string, number> = {}, skipped: Record<string, string> = {}
-  const tables: string[] = [...TABLES, ...(isSupabaseConfigured ? DB_ONLY : [])]
+  const tables: string[] = [...TABLES, ...DB_ONLY]
   let done = 0
   for (const t of tables) {
     onProgress?.(done, tables.length, t)

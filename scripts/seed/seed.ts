@@ -1,5 +1,5 @@
 /**
- * Deterministic demo data used by BOTH the local demo mode and the Supabase master SQL generator
+ * Deterministic sample data for the seeded staging database, used by the master SQL generator
  * (scripts/build-master-sql.ts). Dates are expressed relative to "today" through a DateHelper so the
  * data always feels current — locally they become ISO strings, in SQL they become `current_date + n`.
  */
@@ -7,9 +7,9 @@ import type { SiteEnquiry, AuditEntry, VisitFeedback, DoctorLeave, Holiday,
   Admission, Appointment, Bed, DB, Department, Doctor, Expense, InventoryItem, Invoice, LabTest,
   LineItem, Medication, Notice, Patient, Payment, Prescription, Profile, Role, Staff, Ward,
   SiteForm,
-} from '../types'
-import type { NotificationTemplate } from '../types'
-import { CONTACT_FORM_ID, DEFAULT_FORMS, FORM_TEMPLATES, toEnquiry, type Answers } from '../forms/schema'
+} from '../../src/types'
+import type { NotificationTemplate } from '../../src/types'
+import { CONTACT_FORM_ID, DEFAULT_FORMS, FORM_TEMPLATES, toEnquiry, type Answers } from '../../src/forms/schema'
 
 export interface DateHelper {
   /** calendar date (yyyy-mm-dd) offset from today */

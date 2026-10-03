@@ -1,6 +1,6 @@
 /** The demo sign-in accounts (shown on the login page in demo mode). Kept apart from the seed data so the login page
  *  doesn't pull the whole demo database into the main bundle. */
-import type { Role } from '../types'
+import type { Role } from '../../src/types'
 
 export const DEMO_PASSWORD = 'Demo@123'
 

@@ -11,7 +11,6 @@ export interface Lead {
   message: string
 }
 
-const LOCAL_KEY = 'dch:platform-leads:v1'
 
 /** "Talk to us" form on the product page → `platform_leads` (visible to Hospital Comrade admins only). */
 export async function submitLead(l: Lead): Promise<void> {
@@ -23,12 +22,7 @@ export async function submitLead(l: Lead): Promise<void> {
     if (error) throw new Error(error.message)
     return
   }
-  // demo mode: keep it in this browser so the flow can be tried end to end
-  await new Promise((r) => setTimeout(r, 400))
-  try {
-    const all = JSON.parse(localStorage.getItem(LOCAL_KEY) ?? '[]') as unknown[]
-    localStorage.setItem(LOCAL_KEY, JSON.stringify([{ ...l, created_at: new Date().toISOString() }, ...all].slice(0, 50)))
-  } catch { /* storage full / private mode */ }
+  throw new Error('The service is not connected yet — please e-mail or call us instead.')
 }
 
 /** same checks as the database, so people get instant feedback */
@@ -47,12 +41,10 @@ export interface SignupInfo { enabled: boolean; mode: 'instant' | 'approve'; tri
 export interface SignupForm { organisation: string; name: string; email: string; phone: string; city: string; plan: string; website: string }
 export type SignupResult = { status: 'created'; slug: string; email: string; trial_days: number } | { status: 'pending'; email: string }
 
-const DEMO_SIGNUP: SignupInfo = { enabled: true, mode: 'approve', trialDays: BILLING_DEFAULTS.trialDays, plan: 'clinic', plans: ['clinic', 'hospital', 'enterprise'] }
-const SIGNUP_KEY = 'dch:platform-signups:v1'
 
 /** is sign-up open, instant or reviewed, how many free days (platform admin's settings) */
 export async function signupInfo(): Promise<SignupInfo> {
-  if (!supabase) return DEMO_SIGNUP
+  if (!supabase) return { enabled: false, mode: 'approve', trialDays: BILLING_DEFAULTS.trialDays, plan: 'clinic', plans: [] }
   const { data, error } = await supabase.rpc('platform_signup_info')
   if (error) throw new Error(error.message)
   return data as SignupInfo
@@ -64,13 +56,7 @@ export async function trialSignup(f: SignupForm, termsVersion: string): Promise<
     if (error) throw new Error(error.message)
     return data as SignupResult
   }
-  // demo mode: nothing is created — the request is kept in this browser so the flow can be tried
-  await new Promise((r) => setTimeout(r, 500))
-  try {
-    const all = JSON.parse(localStorage.getItem(SIGNUP_KEY) ?? '[]') as unknown[]
-    localStorage.setItem(SIGNUP_KEY, JSON.stringify([{ ...f, terms_version: termsVersion, created_at: new Date().toISOString() }, ...all].slice(0, 20)))
-  } catch { /* storage full / private mode */ }
-  return { status: 'pending', email: f.email.trim().toLowerCase() }
+  throw new Error('Sign-up is not available right now — please try again later.')
 }
 
 /** same checks as platform_trial_signup() */

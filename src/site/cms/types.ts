@@ -55,8 +55,6 @@ export interface SiteSettings {
   portal: {
     /** allow patients to create their own portal account on /register */
     allowSignup: boolean
-    /** show the one-click demo accounts on the login page (turn OFF in production) */
-    showDemoLogins: boolean
     /** optional message on the sign-in page */
     loginNotice: string
   }
@@ -69,8 +67,6 @@ export interface SiteSettings {
     minNoticeMinutes: number
     /** shown on the confirmation + invoice */
     payNote: string
-    /** show the OTP on screen when no SMS gateway is connected (demo / testing only) */
-    showDemoOtp: boolean
     /** patients can move / cancel their own visit online until this many hours before it */
     rescheduleCutoffHours: number
     /** which channel is offered first for the booking code when both WhatsApp and SMS are available */

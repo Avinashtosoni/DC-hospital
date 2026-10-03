@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges'
-import { demoKey } from '../../tenancy/demo'
+import { tenantKey } from '../../tenancy/state'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -27,7 +27,7 @@ const HIST_LIMIT = 50
 const HIST_GAP = 600 // ms — keystrokes closer together than this become one undo step
 const DRAFTS_KEY = 'dch:cms-drafts:v1'
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-const readDrafts = (): Drafts => { try { return JSON.parse(sessionStorage.getItem(demoKey(DRAFTS_KEY)) ?? '{}') } catch { return {} } }
+const readDrafts = (): Drafts => { try { return JSON.parse(sessionStorage.getItem(tenantKey(DRAFTS_KEY)) ?? '{}') } catch { return {} } }
 
 export default function CmsPage() {
   const { user } = useAuth()
@@ -46,7 +46,7 @@ export default function CmsPage() {
 
   // ---- drafts (kept in sessionStorage so switching dashboard pages doesn't lose work)
   const setDrafts = useCallback((fn: (d: Drafts) => Drafts) => {
-    setDraftsState((d) => { const n = fn(d); try { sessionStorage.setItem(demoKey(DRAFTS_KEY), JSON.stringify(n)) } catch { /* quota */ } return n })
+    setDraftsState((d) => { const n = fn(d); try { sessionStorage.setItem(tenantKey(DRAFTS_KEY), JSON.stringify(n)) } catch { /* quota */ } return n })
   }, [])
   const dirtyKeys = useMemo(() => (Object.keys(drafts) as ContentKey[]).filter((k) => !same(drafts[k], saved[k])), [drafts, saved])
   const isDirty = (k: ContentKey) => dirtyKeys.includes(k)
@@ -228,7 +228,7 @@ export default function CmsPage() {
               <p className="mt-0.5 max-w-2xl text-sm text-slate-500">{section?.description ?? 'Images uploaded here can be used anywhere on the website.'}</p>
             </div>
             <div className="flex items-center gap-2">
-              <Badge tone={cms.mode === 'supabase' ? 'green' : 'amber'} dot><Database className="mr-0.5 h-3 w-3" />{cms.mode === 'supabase' ? 'Supabase' : 'Demo · this browser'}</Badge>
+              <Badge tone="green" dot><Database className="mr-0.5 h-3 w-3" />Supabase</Badge>
               <Link to="/enquiries" className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"><Inbox className="h-3.5 w-3.5" />Enquiries</Link>
             </div>
           </div>

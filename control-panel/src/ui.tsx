@@ -1,7 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import { Badge, Card, type Tone } from '../../src/components/ui'
 import { PLAN_LABEL } from '../../src/platform/plans'
-import { isDemo } from './api'
 import type { CpMe, ProviderRole } from './types'
 
 export const MeContext = createContext<{ me: CpMe; signOut: () => void } | null>(null)
@@ -83,7 +82,6 @@ export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => v
 
 /** the hospital app's address for a hospital (custom domain, else ?hospital=) */
 export function appUrl(h: { slug: string; domain: string | null }) {
-  // demo addresses (citycareclinic.in…) aren't real — the demo app picks the hospital with ?hospital=
-  if (h.domain && !isDemo) return `https://${h.domain}/`
+  if (h.domain) return `https://${h.domain}/`
   return `${location.origin}/?hospital=${encodeURIComponent(h.slug)}`
 }

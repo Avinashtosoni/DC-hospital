@@ -67,7 +67,7 @@ settings and sender identity. The Hospital Comrade team works through **provider
       `site_content` 'settings' unchanged (billing & booking always save); CMS pages, `site_forms`,
       `notification_templates`, credentials, cron setup, "send now" and demo tools refuse a locked hospital.
       Providers (any mode) are never locked. Switch modules per hospital in the control panel (hospital → Settings).
-- [x] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store
+- [x] **1.5 Demo mode**: two demo hospitals + provider demo logins in the browser store *(removed in the production audit — the app now always needs the database)*
   - `src/tenancy/demo.ts`: DC Hospital (primary, all modules) and City Care Clinic (`?hospital=citycare`, Clinic
     plan, trial, only Dashboard + Website forms unlocked). Each hospital has its own store, settings, website
     content and media (`demoKey()` → `…@citycare`); City's data is built lazily on first visit (`src/data/citySeed.ts`).
@@ -286,9 +286,8 @@ Plans, trials, payments and wallets: see *Billing (Razorpay)* below and the cont
 
 ### The platform domain and the demo
 - `https://<PLATFORM_DOMAIN>` is the Hospital Comrade product page. Never map it (or `www.`) to a hospital.
-- Demo: point `demo.<PLATFORM_DOMAIN>` at the same app. In demo mode (no database) any host other than the platform
-  domain opens the demo hospital; with a database, map `demo.<PLATFORM_DOMAIN>` to the demo hospital in Settings → Domain.
-  The product page's "Live demo" button uses `/?hospital=main` (and `citycare` for the clinic).
+- A sales demo, if wanted, is just another hospital on the database (sample data from `master.sql`), mapped to e.g.
+  `demo.<PLATFORM_DOMAIN>` in Settings → Domain. The product page no longer links to a browser-only demo.
 - Call-back requests: control panel → **Leads** (admins).
 - The control panel lives at `/control-panel/` on every address of the app; only platform team accounts can sign in.
 

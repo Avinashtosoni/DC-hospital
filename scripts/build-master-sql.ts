@@ -4,7 +4,7 @@
  *   → audit triggers → website CMS → public online-booking API
  *
  * RLS policies are generated from src/auth/permissions.ts so the database always enforces exactly
- * what the UI shows. Demo data comes from src/data/seed.ts with dates expressed relative to
+ * what the UI shows. Demo data comes from scripts/seed/seed.ts with dates expressed relative to
  * current_date, so the dataset always looks "live" whenever you run the script.
  *
  *   npm run sql:build
@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PERMISSIONS, ROW_RULES, type Action } from '../src/auth/permissions'
-import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from '../src/data/seed'
+import { buildSeed, DEMO_PASSWORD, DEMO_USERS } from './seed/seed'
 import type { Role, TableName } from '../src/types'
 import { DEFAULT_FORMS } from '../src/forms/schema'
 import { DEFAULT_APP_SETTINGS, type NotifyEvent } from '../src/settings/types'
@@ -376,12 +376,6 @@ update public.profiles set role = 'owner'
 where lower(email) = lower((select data ->> 'owner_email' from public.app_settings where key = 'bootstrap'))
   and not exists (select 1 from public.profiles where role = 'owner');
 
--- demo helpers off
-insert into public.site_content (key, data)
-values ('settings', '{"portal": {"showDemoLogins": false}, "booking": {"showDemoOtp": false}}'::jsonb)
-on conflict (tenant_id, key) do update set data = public.site_content.data
-  || jsonb_build_object('portal', coalesce(public.site_content.data -> 'portal', '{}'::jsonb) || '{"showDemoLogins": false}'::jsonb,
-                        'booking', coalesce(public.site_content.data -> 'booking', '{}'::jsonb) || '{"showDemoOtp": false}'::jsonb);
 commit;
 
 -- Done ✔  —  Now create your account with the e-mail you set above.

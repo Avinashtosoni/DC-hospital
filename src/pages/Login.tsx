@@ -1,24 +1,17 @@
 import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  ArrowLeft, ArrowRight, BedDouble, CalendarCheck, CalendarPlus, ChevronDown, Clock, Crown, HeartPulse, LockKeyhole, Mail, Receipt,
-  ShieldCheck, Stethoscope, UserCog, Users, Wallet,
+  ArrowLeft, ArrowRight, BedDouble, CalendarPlus, Clock, HeartPulse, LockKeyhole, Mail, Receipt, ShieldCheck, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../auth/AuthProvider'
 import { Button } from '../components/ui'
 import { Logo } from '../components/layout/AppLayout'
 import { FormError, IconInput, PasswordInput, friendlyAuthError } from '../components/auth/AuthFields'
-import { CITY_USERS, DEMO_PASSWORD, DEMO_USERS } from '../data/demoUsers'
-import { activeDemoTenant, DEMO_PROVIDERS, DEMO_TENANTS } from '../tenancy/demo'
-import { PROVIDER_ROLE_LABEL } from '../tenancy/state'
-import { ROLE_LABEL, type Role } from '../types'
-import { isSupabaseConfigured } from '../lib/supabase'
 import { cn } from '../lib/utils'
 import { useSiteSettings } from '../site/cms/content'
 import { LanguageSwitch, useT } from '../i18n'
 
-const ROLE_ICON: Record<Role, typeof Crown> = { owner: Crown, doctor: Stethoscope, receptionist: CalendarCheck, accountant: Wallet, staff: UserCog, patient: HeartPulse }
 const LAST_EMAIL = 'dch:last-email'
 
 const FEATURES: [typeof Users, string, string][] = [
@@ -94,12 +87,10 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [remember, setRemember] = useState(true)
   const [loading, setLoading] = useState(false)
-  const [pending, setPending] = useState<string | null>(null)
   const [error, setError] = useState('')
   const site = useSiteSettings()
   const portal = site.portal
   const { t } = useT()
-  const [demoOpen, setDemoOpen] = useState(!isSupabaseConfigured)
 
   // only same-app paths (never //evil.com or /\\evil.com)
   const next = typeof loc.state?.from === 'string' && /^\/(?![/\\])/.test(loc.state.from) && !loc.state.from.includes('\\') ? loc.state.from : '/'
@@ -118,10 +109,7 @@ export default function Login() {
     }
   }
   const submit = async (e: FormEvent) => { e.preventDefault(); setLoading(true); await doLogin(email, password); setLoading(false) }
-  const quick = async (em: string) => { setEmail(em); setPassword(DEMO_PASSWORD); setPending(em); await doLogin(em, DEMO_PASSWORD); setPending(null) }
-  const busy = loading || !!pending
-  // demo mode: the logins of the hospital this website belongs to (?hospital=citycare → City Care Clinic)
-  const demoUsers = isSupabaseConfigured || activeDemoTenant().is_primary ? DEMO_USERS : CITY_USERS
+  const busy = loading
 
   return (
     <AuthShell>
@@ -136,7 +124,7 @@ export default function Login() {
       <form onSubmit={submit} className="mt-7 space-y-4">
         <label className="block">
           <span className="label">{t('Email')}</span>
-          <IconInput icon={<Mail />} type="email" required autoComplete="username" autoFocus={!email} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@dchospital.com" />
+          <IconInput icon={<Mail />} type="email" required autoComplete="username" autoFocus={!email} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
         </label>
         <div>
           <div className="mb-1.5 flex items-center justify-between">
@@ -165,61 +153,6 @@ export default function Login() {
       </div>
       <p className="mt-4 text-center text-xs text-slate-400">{t('Hospital staff? Ask the owner for an invitation link — it gives your account the right access.')}</p>
 
-      {portal.showDemoLogins && <div className="mt-7 rounded-2xl border border-brand-100 bg-brand-50/40">
-        <button type="button" onClick={() => setDemoOpen((o) => !o)} aria-expanded={demoOpen}
-          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-brand-700">
-          {t('One-click demo accounts')}<ChevronDown className={cn('h-4 w-4 transition', demoOpen && 'rotate-180')} />
-        </button>
-        {demoOpen && <div className="animate-fade-in px-4 pb-4">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {demoUsers.map((u) => {
-              const Icon = ROLE_ICON[u.role]
-              return (
-                <button key={u.email} type="button" onClick={() => quick(u.email)} disabled={busy}
-                  className={cn('group flex flex-col items-start gap-1.5 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md disabled:pointer-events-none disabled:opacity-60', pending === u.email && 'animate-pulse border-brand-400')}>
-                  <Icon className="h-4 w-4 text-brand-600" />
-                  <span className="text-xs font-semibold text-slate-800">{ROLE_LABEL[u.role]}</span>
-                  <span className="w-full truncate text-[11px] text-slate-500">{u.full_name}</span>
-                </button>
-              )
-            })}
-          </div>
-          {!isSupabaseConfigured && <MultiHospitalDemo busy={busy} pending={pending} onPick={quick} />}
-          <p className="mt-3 text-center text-xs text-slate-500">
-            Password for all demo accounts: <code className="rounded bg-white px-1.5 py-0.5 text-slate-700 ring-1 ring-slate-200">{DEMO_PASSWORD}</code>
-            {isSupabaseConfigured ? ' · Supabase' : ' · local demo data'}
-          </p>
-        </div>}
-      </div>}
     </AuthShell>
-  )
-}
-
-/** demo mode only: the second hospital and the Hospital Comrade team logins */
-function MultiHospitalDemo({ busy, pending, onPick }: { busy: boolean; pending: string | null; onPick: (email: string) => void }) {
-  const here = activeDemoTenant()
-  const other = DEMO_TENANTS.find((t) => t.id !== here.id)!
-  return (
-    <div className="mt-4 border-t border-brand-100 pt-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-brand-700">Multi-hospital demo</span>
-        {/* a full page load: the website's hospital is decided before the app starts */}
-        <a href={`/login?hospital=${other.slug}`} className="text-xs font-semibold text-brand-700 hover:text-brand-900 hover:underline">
-          {other.is_primary ? `Back to ${other.name}` : `Open ${other.name} (second hospital)`} →
-        </a>
-      </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-        You are on <b className="font-semibold text-slate-700">{here.name}</b>&apos;s site — its accounts only work here. Platform team logins work on any hospital:
-      </p>
-      <div className="mt-2 grid grid-cols-3 gap-2">
-        {DEMO_PROVIDERS.map((p) => (
-          <button key={p.email} type="button" onClick={() => onPick(p.email)} disabled={busy}
-            className={cn('flex flex-col items-start gap-1 rounded-xl border border-brand-200 bg-brand-950 p-2.5 text-left text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-brand-900 disabled:pointer-events-none disabled:opacity-60', pending === p.email && 'animate-pulse')}>
-            <span className="text-[11px] font-semibold">{PROVIDER_ROLE_LABEL[p.role]}</span>
-            <span className="w-full truncate text-[10px] text-brand-200">{p.tenants === null ? 'All hospitals' : `${p.tenants.length} hospital${p.tenants.length > 1 ? 's' : ''}`}</span>
-          </button>
-        ))}
-      </div>
-    </div>
   )
 }

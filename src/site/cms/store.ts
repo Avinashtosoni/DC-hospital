@@ -1,10 +1,8 @@
 /**
  * Persistence for website content, revisions and media. (Website forms are sent through src/forms/api.ts.)
- *  - Supabase mode: tables `site_content`, `site_content_revisions`, `site_enquiries` + storage bucket `site-media`
- *  - Demo mode:     browser localStorage (same API, so the CMS behaves identically)
+ * tables `site_content`, `site_content_revisions`, `site_enquiries` + storage bucket `site-media`
  */
-import { isSupabaseConfigured, supabase } from '../../lib/supabase'
-import { activeDemoTenant, CITY_SITE_SETTINGS, demoKey } from '../../tenancy/demo'
+import { supabase } from '../../lib/supabase'
 import type { ContentKey } from './types'
 
 export interface ContentRow { key: ContentKey; data: unknown; updated_at: string; updated_by_name?: string | null }
@@ -15,7 +13,7 @@ export type ContentRows = Partial<Record<ContentKey, ContentRow>>
 export const MEDIA_BUCKET = 'site-media'
 
 interface CmsStore {
-  mode: 'local' | 'supabase'
+  mode: 'supabase'
   fetchAll(): Promise<ContentRows>
   save(key: ContentKey, data: unknown, by?: string): Promise<ContentRow>
   reset(key: ContentKey, by?: string): Promise<void>
@@ -39,7 +37,6 @@ export async function compressImage(file: File, maxSide = 1600, quality = 0.84):
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/webp', quality))
   return blob && blob.size < file.size ? blob : file
 }
-const blobToDataUrl = (b: Blob) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(b) })
 const safeName = (name: string) => name.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'image'
 
 // ------------------------------------------------------------------ Supabase
@@ -90,58 +87,4 @@ const supabaseStore: CmsStore = {
   },
 }
 
-// ------------------------------------------------------------------ localStorage (demo mode)
-const K = { content: 'dch:cms:v1', revisions: 'dch:cms-rev:v1', media: 'dch:cms-media:v1' }
-// each demo hospital keeps its own website content (demoKey); a new one starts with its name and contacts
-const read = <T,>(k: string, fallback: T): T => { try { const v = localStorage.getItem(demoKey(k)); return v ? JSON.parse(v) as T : k === K.content ? demoStartContent() as T : fallback } catch { return fallback } }
-const demoStartContent = (): ContentRows => (activeDemoTenant().is_primary ? {}
-  : { settings: { key: 'settings', data: CITY_SITE_SETTINGS as never, updated_at: '2026-01-01T00:00:00.000Z', updated_by_name: 'Hospital Comrade' } })
-const write = (k: string, v: unknown) => {
-  try { localStorage.setItem(demoKey(k), JSON.stringify(v)) } catch (e) {
-    if (e instanceof DOMException && /quota/i.test(e.name + e.message)) throw new Error('Browser storage is full. In demo mode images are stored in the browser — remove unused media or connect Supabase.')
-    throw e
-  }
-}
-const pause = (ms = 220) => new Promise((r) => setTimeout(r, ms))
-/** Keeps the version being replaced; a revision is stamped with when/by whom that version was published. */
-function pushRevision(key: ContentKey, prev: ContentRow | undefined) {
-  if (!prev) return
-  const all = read<Revision[]>(K.revisions, [])
-  all.unshift({ id: crypto.randomUUID(), key, data: prev.data, created_at: prev.updated_at, created_by_name: prev.updated_by_name ?? null })
-  // keep the latest 15 revisions per section
-  const counts: Record<string, number> = {}
-  write(K.revisions, all.filter((r) => (counts[r.key] = (counts[r.key] ?? 0) + 1) <= 15))
-}
-
-const localStore: CmsStore = {
-  mode: 'local',
-  async fetchAll() { return read<ContentRows>(K.content, {}) },
-  async save(key, data, by) {
-    await pause()
-    const all = read<ContentRows>(K.content, {})
-    pushRevision(key, all[key])
-    const row: ContentRow = { key, data, updated_at: new Date().toISOString(), updated_by_name: by ?? null }
-    all[key] = row
-    write(K.content, all)
-    return row
-  },
-  async reset(key) {
-    await pause()
-    const all = read<ContentRows>(K.content, {})
-    pushRevision(key, all[key])
-    delete all[key]
-    write(K.content, all)
-  },
-  async history(key) { await pause(120); return read<Revision[]>(K.revisions, []).filter((r) => r.key === key) },
-  async listMedia() { return read<MediaItem[]>(K.media, []) },
-  async upload(file) {
-    const blob = await compressImage(file, 1200, 0.8)
-    if (blob.size > 900_000) throw new Error('Image is too large for demo mode (max ~900 KB after compression). Connect Supabase for full-size uploads.')
-    const item: MediaItem = { name: `${Date.now().toString(36)}-${safeName(file.name)}`, url: await blobToDataUrl(blob), size: blob.size, created_at: new Date().toISOString() }
-    write(K.media, [item, ...read<MediaItem[]>(K.media, [])])
-    return item
-  },
-  async removeMedia(item) { write(K.media, read<MediaItem[]>(K.media, []).filter((m) => m.name !== item.name)) },
-}
-
-export const cms: CmsStore = isSupabaseConfigured ? supabaseStore : localStore
+export const cms: CmsStore = supabaseStore

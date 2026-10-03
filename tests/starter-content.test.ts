@@ -3,8 +3,7 @@ import { DEFAULT_CONTENT } from '../src/site/cms/defaults'
 import { STARTER_CONTENT } from '../src/site/cms/starter'
 import { mergeRows, toPublic } from '../src/site/cms/content'
 import { CONTENT_KEYS } from '../src/site/cms/types'
-import { chooseProviderTenant, clearProviderChoice, enableTenancy, setSiteTenant, PRIMARY_TENANT_ID } from '../src/tenancy/state'
-import { DEMO_TENANTS, CITY_TENANT_ID } from '../src/tenancy/demo'
+import { chooseProviderTenant, clearProviderChoice, enableTenancy, setSiteTenant, PRIMARY_TENANT_ID, type TenantInfo } from '../src/tenancy/state'
 import type { ContentRows } from '../src/site/cms/store'
 
 // facts that belong to DC Hospital only — a newly onboarded hospital must never show them as its own
@@ -29,8 +28,6 @@ describe('website starter content (non-primary hospitals)', () => {
     expect(STARTER_CONTENT.about.journey.milestones).toEqual([])
     expect(STARTER_CONTENT.home.sections).toMatchObject({ stats: false, testimonials: false, doctors: false, why: false })
     expect(STARTER_CONTENT.settings.pages).toMatchObject({ doctors: false, packages: false })
-    expect(STARTER_CONTENT.settings.booking.showDemoOtp).toBe(false)
-    expect(STARTER_CONTENT.settings.portal.showDemoLogins).toBe(false)
   })
 
   it('uses tokens so the hospital name and phone fill in automatically', () => {
@@ -43,8 +40,10 @@ describe('website starter content (non-primary hospitals)', () => {
 })
 
 describe('which built-in content a hospital falls back to', () => {
-  const city = DEMO_TENANTS.find((t) => t.id === CITY_TENANT_ID)!
-  const main = DEMO_TENANTS.find((t) => t.id === PRIMARY_TENANT_ID)!
+  const CITY_TENANT_ID = 'b0000000-0000-4000-8000-000000000002'
+  const tenant = (id: string, slug: string, is_primary: boolean) => ({ id, slug, name: slug, is_primary, status: 'active' }) satisfies TenantInfo
+  const city = tenant(CITY_TENANT_ID, 'citycare', false)
+  const main = tenant(PRIMARY_TENANT_ID, 'dc', true)
 
   it('single-hospital install → DC Hospital content', () => {
     expect(mergeRows(undefined).about.journey.milestones.length).toBeGreaterThan(0)

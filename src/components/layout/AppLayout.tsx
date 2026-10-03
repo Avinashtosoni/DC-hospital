@@ -1,7 +1,7 @@
 import { ErrorBoundary } from '../ErrorBoundary'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, ChevronDown, Cross, Database, EyeOff, LogOut, Megaphone, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
+import { Bell, ChevronDown, Cross, EyeOff, LogOut, Megaphone, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { NAV, navLabel } from './nav'
 import { Avatar, Badge, Spinner } from '../ui'
@@ -9,7 +9,7 @@ import { ROLE_LABEL } from '../../types'
 import { cn, ago } from '../../lib/utils'
 import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
-import { isSupabaseConfigured, appEnv } from '../../lib/supabase'
+import { appEnv } from '../../lib/supabase'
 import { ProviderBanner } from '../../tenancy/ProviderBanner'
 import { LicenseBanner } from '../../billing/LicenseBanner'
 import { useNavLocked } from '../../tenancy/modules'
@@ -194,7 +194,6 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
       <div className="flex-1 sm:hidden" />
       <div className="ml-auto flex items-center gap-2">
         {user?.role === 'patient' && <LanguageSwitch />}
-        {!isSupabaseConfigured && <Badge tone="amber" className="hidden md:inline-flex"><Database className="h-3 w-3" />Demo mode</Badge>}
         {appEnv === 'staging' && <Badge tone="violet" className="hidden md:inline-flex">Staging</Badge>}
         <div className="relative">
           <button onClick={() => setBell((b) => !b)} className="relative grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Notifications">

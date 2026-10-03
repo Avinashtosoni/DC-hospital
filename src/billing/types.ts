@@ -84,4 +84,4 @@ export interface PaymentRow {
   payment_id?: string | null
 }
 
-export type ProviderBillingAction = 'manual_payment' | 'wallet_adjust' | 'extend_trial' | 'set_plan' | 'suspend' | 'resume' | 'demo_end_trial'
+export type ProviderBillingAction = 'manual_payment' | 'wallet_adjust' | 'extend_trial' | 'set_plan' | 'suspend' | 'resume'

@@ -89,10 +89,10 @@ export function useContentRows(opts: { enabled?: boolean } = {}) {
     queryKey: CONTENT_QK,
     queryFn: async () => {
       const rows = await cms.fetchAll()
-      try { if (cms.mode === 'supabase') localStorage.setItem(cacheKey(), JSON.stringify(rows)) } catch { /* quota */ }
+      try { localStorage.setItem(cacheKey(), JSON.stringify(rows)) } catch { /* quota */ }
       return rows
     },
-    placeholderData: cms.mode === 'supabase' ? readCache : undefined,
+    placeholderData: readCache,
     staleTime: 60_000,
     retry: 1,
   })
@@ -125,7 +125,7 @@ export function SiteContentProvider({ children, fallback }: { children: ReactNod
   const { preview, drafts } = usePreviewDrafts()
   const content = useMemo(() => toPublic(mergeRows(q.data, drafts)), [q.data, drafts])
   // First visit with no cache: wait briefly for real content instead of flashing the defaults.
-  if (q.isPending && !q.data && cms.mode === 'supabase') return <>{fallback}</>
+  if (q.isPending && !q.data) return <>{fallback}</>
   return <Ctx.Provider value={{ content, preview }}>{children}</Ctx.Provider>
 }
 

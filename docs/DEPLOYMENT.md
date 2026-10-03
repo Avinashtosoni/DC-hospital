@@ -37,8 +37,8 @@ Optional: deploy production from **release tags** (`v1.4.0`) instead of `main` �
 
 | Variable | Values | Purpose |
 |---|---|---|
-| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | — | Supabase project (empty = demo mode in the browser) |
-| `REQUIRE_BACKEND` | `true` | refuse to fall back to demo mode (set for every real install) |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | — | Supabase project — required (empty = *Database not connected* screen) |
+| `REQUIRE_BACKEND` | — | no longer needed (there is no demo mode); harmless if still set |
 | `TENANCY` | `single` (default) / `multi` | `multi` = Hospital Comrade SaaS: many hospitals on one database, chosen by domain |
 | `PLATFORM_NAME` | `Hospital Comrade` (default) | SaaS brand shown on platform screens (multi mode) |
 | `PLATFORM_DOMAIN` | `hospital.digitalcomrade.in` (default) | The platform's own domain — shows the Hospital Comrade product page (demo and multi mode); change it here when the domain changes |

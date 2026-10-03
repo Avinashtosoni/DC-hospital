@@ -160,7 +160,6 @@ export const SECTIONS: Section[] = [
         hint: 'Patients book real slots at /book. Availability comes from each doctor’s days, shift, leave and hospital holidays in the dashboard.',
         fields: [
           { k: 'enabled', t: 'toggle', label: 'Accept online bookings' },
-          { k: 'showDemoOtp', t: 'toggle', label: 'Show the OTP on screen (testing only)', hint: 'Turn OFF once an SMS gateway is connected — see README → Online booking.' },
           { k: 'advanceDays', t: 'number', label: 'Book up to (days ahead)', min: 1, max: 180 },
           { k: 'minNoticeMinutes', t: 'number', label: 'Minimum notice (minutes)', min: 0, max: 1440, step: 15 },
           { k: 'payNote', t: 'textarea', label: 'Payment note on the confirmation', rows: 2, full: true },

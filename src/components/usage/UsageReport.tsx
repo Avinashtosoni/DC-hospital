@@ -2,9 +2,8 @@ import { useMemo, useState } from 'react'
 import { eachDayOfInterval, format, parseISO } from 'date-fns'
 import { AlertTriangle, CheckCircle2, Download, IndianRupee, MessagesSquare } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Badge, Button, Card, CardHeader, Select, Skeleton, StatCard } from '../ui'
+import { Button, Card, CardHeader, Select, Skeleton, StatCard } from '../ui'
 import { CHANNEL_META } from '../../pages/settings/messaging/channelMeta'
-import { usageIsSample } from '../../settings/messaging'
 import { CHANNELS, EVENTS, type Channel } from '../../settings/types'
 import { downloadCsv, money } from '../../lib/utils'
 import { RANGE_LABEL, useUsage, type UsageRange } from './useUsage'
@@ -58,7 +57,7 @@ export function UsageReport() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">Messaging usage{usageIsSample && <Badge tone="amber">Sample data · demo mode</Badge>}</h2>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">Messaging usage</h2>
           <p className="text-sm text-slate-500">How many SMS, WhatsApp, e-mail and push (FCM) messages the hospital sent, and what they cost at your rates (Settings → Notifications).</p>
         </div>
         <Select value={range} onChange={(e) => setRange(e.target.value as UsageRange)} className="w-44" aria-label="Period">
