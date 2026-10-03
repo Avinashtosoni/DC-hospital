@@ -164,6 +164,8 @@ declare
   v_vars   jsonb;
   k        text;
   v_count  int := 0;
+  v_limit  int;
+  v_used   bigint;
 begin
   if n is null or p_tpl is null then return 0; end if;
   v_vars := jsonb_build_object(
@@ -192,6 +194,18 @@ begin
       else coalesce(p_tpl ->> 'text', '') end;
     v_subj := coalesce(nullif(p_tpl ->> 'subject', ''), case when ch = 'push' then '{hospital}' else '' end);
     continue when v_body = '';
+    -- monthly cap on the shared (platform) accounts, set by the Hospital Comrade team (control panel → Messaging)
+    if ch <> 'push' and coalesce(n -> ch ->> 'source', 'own') = 'platform' then
+      select (t.billing -> 'monthlyLimit' ->> ch)::int into v_limit from public.tenants t where t.id = public.current_tenant();
+      if v_limit is not null then
+        select coalesce(sum(u.sent), 0) into v_used from public.message_usage u
+         where u.tenant_id = public.current_tenant() and u.channel = ch and u.source = 'platform'
+           and u.month = date_trunc('month', now() at time zone 'Asia/Kolkata')::date;
+        v_used := v_used + (select count(*) from public.notification_outbox o
+                             where o.tenant_id = public.current_tenant() and o.channel = ch and o.status in ('pending', 'sending'));
+        continue when v_used >= v_limit;
+      end if;
+    end if;
     for k in select jsonb_object_keys(v_vars) loop
       v_body := replace(v_body, '{' || k || '}', coalesce(v_vars ->> k, ''));
       v_subj := replace(v_subj, '{' || k || '}', coalesce(v_vars ->> k, ''));
@@ -538,6 +552,8 @@ create or replace function public.notify_cron_flush()
 returns void language plpgsql volatile security definer set search_path = public as $$
 declare v_url text; v_key text;
 begin
+  -- "sign in as user" time limit (control_panel_ops.sql) rides on this every-minute job
+  if to_regprocedure('public.impersonation_expire()') is not null then execute 'select public.impersonation_expire()'; end if;
   if not exists (select 1 from public.notification_outbox where status = 'pending' and next_attempt_at <= now()) then return; end if;
   v_url := public.tenant_secret('notify_function_url');
   v_key := public.tenant_secret('service_role_key');

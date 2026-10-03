@@ -126,7 +126,7 @@ begin
             join information_schema.tables x on x.table_schema = c.table_schema and x.table_name = c.table_name and x.table_type = 'BASE TABLE'
            where c.table_schema = 'public' and c.column_name = 'tenant_id'
              and c.table_name not in ('tenant_domains', 'provider_assignments', 'provider_audit', 'profiles', 'push_tokens', 'password_reset_otps',
-                                      'notification_outbox', 'message_usage', 'audit_log', 'billing_payments', 'wallet_ledger',
+                                      'notification_outbox', 'message_usage', 'audit_log', 'billing_payments', 'wallet_ledger', 'billing_credit_notes',
                                       'privacy_requests', 'consent_log')  -- phase 7: patients' privacy rights work even when read-only
   loop
     execute format('drop trigger if exists trg_license_guard on public.%I', t);

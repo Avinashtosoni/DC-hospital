@@ -215,6 +215,7 @@ const signupSql = readFileSync(resolve(root, 'scripts/sql/signup.sql'), 'utf8')
 const launchSql = readFileSync(resolve(root, 'scripts/sql/launch.sql'), 'utf8')
 // data-integrity rules (money, beds, same-hospital references) — last, so they cover every table created before
 const integritySql = readFileSync(resolve(root, 'scripts/sql/integrity.sql'), 'utf8')
+const controlOpsSql = readFileSync(resolve(root, 'scripts/sql/control_panel_ops.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
@@ -291,6 +292,8 @@ ${signupSql}
 ${launchSql}
 
 ${integritySql}
+
+${controlOpsSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -364,6 +367,8 @@ ${launchSql}
 
 ${integritySql}
 
+${controlOpsSql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
@@ -396,7 +401,7 @@ let nextUpgrade = upgrade
 const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
 for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
-  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql],
+  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql], ['control-ops', 'control_panel_ops.sql', controlOpsSql],
   ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
   const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)
