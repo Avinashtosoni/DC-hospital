@@ -38,16 +38,17 @@ describe('payments keep invoice totals in the database', () => {
     expect(await invoice(inv.id)).toMatchObject({ amount_paid: '0.00', status: 'unpaid' })
   })
 
-  test('moving a payment to another invoice updates both; cancelled invoices keep their status', async () => {
+  test('moving a payment to another invoice updates both; cancelled invoices take no payments', async () => {
     const other = await db.one<Inv>(USER.accountant, `insert into public.invoices (invoice_number, patient_id, items, subtotal, total, status)
-      values ('', $1, '[]', 500, 500, 'unpaid') returning id, patient_id, total::text, amount_paid::text, status`, [inv.patient_id])
+      values ('', $1, '[{"description":"X-ray","quantity":1,"unit_price":500}]', 500, 500, 'unpaid') returning id, patient_id, total::text, amount_paid::text, status`, [inv.patient_id])
     const pay = await db.one<{ id: string }>(USER.accountant, `insert into public.payments (invoice_id, amount) values ($1, 500) returning id`, [inv.id])
     await db.as(USER.owner, `update public.payments set invoice_id = $2 where id = $1`, [pay.id, other.id])
     expect(await invoice(inv.id)).toMatchObject({ amount_paid: '0.00', status: 'unpaid' })
     expect(await invoice(other.id)).toMatchObject({ amount_paid: '500.00', status: 'paid' })
     await db.as(USER.owner, `update public.invoices set status = 'cancelled' where id = $1`, [inv.id])
-    await db.as(USER.accountant, `insert into public.payments (invoice_id, amount) values ($1, 50)`, [inv.id])
-    expect(await invoice(inv.id)).toMatchObject({ amount_paid: '50.00', status: 'cancelled' })
+    // a cancelled bill takes no payments (scripts/sql/integrity.sql) and keeps its status
+    await expect(db.as(USER.accountant, `insert into public.payments (invoice_id, amount) values ($1, 50)`, [inv.id])).rejects.toThrow(/is cancelled/)
+    expect(await invoice(inv.id)).toMatchObject({ amount_paid: '0.00', status: 'cancelled' })
   })
 
   test('the recalculation helpers are not callable by users', async () => {

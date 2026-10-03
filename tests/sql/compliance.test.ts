@@ -152,7 +152,7 @@ describe('7.3 offboarding', () => {
     const pat = await one<{ id: string }>(null, `select id from public.patients where profile_id = $1`, [C_PAT])
     const doc = await one<{ id: string }>(null, `insert into public.doctors (tenant_id, full_name, specialization) values ($1, 'Dr Gone', 'GP') returning id`, [C])
     await db.as(null, `insert into public.appointments (tenant_id, patient_id, doctor_id, appointment_date, appointment_time, status) values ($1, $2, $3, current_date - 3, '10:00', 'completed')`, [C, pat.id, doc.id])
-    const inv = await one<{ id: string }>(null, `insert into public.invoices (tenant_id, invoice_number, patient_id, total, status) values ($1, 'GON-INV-1', $2, 500, 'unpaid') returning id`, [C, pat.id])
+    const inv = await one<{ id: string }>(null, `insert into public.invoices (tenant_id, invoice_number, patient_id, items, total, status) values ($1, 'GON-INV-1', $2, '[{"description":"Visit","quantity":1,"unit_price":500}]', 500, 'unpaid') returning id`, [C, pat.id])
     await db.as(null, `insert into public.payments (tenant_id, invoice_id, patient_id, amount, method) values ($1, $2, $3, 500, 'cash')`, [C, inv.id, pat.id])
     await db.as(null, `insert into public.billing_payments (tenant_id, kind, plan, months, base_paise, gst_paise, total_paise, provider, status, invoice_no, paid_at)
       values ($1, 'plan', 'clinic', 1, 99900, 17982, 117882, 'manual', 'paid', 'HC/2026-27/000777', now())`, [C])

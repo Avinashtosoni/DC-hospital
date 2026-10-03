@@ -96,10 +96,17 @@ export const supabaseAdapter: DataAdapter = {
 }
 
 /** Turn Postgres / PostgREST errors into something a receptionist can act on. */
+const PG_WORDING = /violates|constraint|duplicate key|null value in column|row-level security|permission denied|invalid input syntax|out of range/i
+/** a message raised by our own triggers / functions (a capitalised sentence), not a raw Postgres error */
+export const isOwnSentence = (m: string) => /^[A-Z]/.test(m) && !PG_WORDING.test(m)
+
 export function friendlyDbError(error: { message: string; code?: string; details?: string | null }, action: 'save' | 'delete' = 'save'): Error {
   const c = error.code ?? ''
   // the plan has ended (Hospital Comrade licence guard) — the database's own sentence says what to do
   if (isLicenseError(error.message)) return new Error(licenseStaffMessage(error.message))
+  // a rule in the database (scripts/sql/integrity.sql …) already wrote a sentence for the user — show it as is;
+  // only Postgres' own constraint / RLS wording below is translated
+  if (/^(23|42501|22023)/.test(c) && isOwnSentence(error.message)) return new Error(error.message)
   if (c === '23503' || c === '23001') {
     return new Error(action === 'delete'
       ? 'This record can\'t be deleted because appointments, bills or medical records are linked to it. Mark it inactive or cancelled instead.'
