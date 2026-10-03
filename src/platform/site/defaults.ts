@@ -356,16 +356,46 @@ export function defaultSite(): PlatformSite {
     about: {
       seo: { title: 'About us', description: '{platform} is built by {company} to give Indian hospitals and clinics simple, affordable software and a great website.' },
       heading: { eyebrow: 'About us', title: 'Software that *hospitals enjoy* using', lead: 'We build {platform} for the hospitals and clinics that keep India healthy — especially the ones big software forgot.' },
+      buttons: { primary: 'Start free trial', secondary: 'Talk to us' },
+      highlights: [
+        { value: '6', label: 'roles, one system' },
+        { value: '1', label: 'honest price per hospital' },
+        { value: '0', label: 'software to install' },
+        { value: '₹', label: 'made for Indian billing & GST' },
+      ],
+      storyHeading: { eyebrow: 'Our story', title: 'Why we built *{platform}*', lead: '' },
       story: [
         'Most hospitals we met were running on paper registers, a billing program from another decade and a website nobody could update. The software that did exist was expensive, complicated and needed an IT team.',
         '{platform} brings everything into one simple system: appointments, records, billing, wards, messages and a beautiful website — in the browser, on any device, set up in a day.',
         'We are {company}, based in {address}. We build, host and support {platform} ourselves, and we listen closely to the doctors, receptionists and owners who use it every day.',
       ],
+      promise: { text: 'If a receptionist needs a manual to use it, we have more work to do.', by: 'The {platform} team' },
       image: '',
       mission: { title: 'Our mission', text: 'Give every hospital and clinic in India software that is simple, affordable and trustworthy — so they can spend their time on patients.' },
       vision: { title: 'Our vision', text: 'A country where booking a doctor, getting a prescription and paying a bill is as easy at a small-town clinic as at a big-city hospital.' },
+      audience: {
+        eyebrow: 'Who we build for', title: 'From a *one-doctor clinic* to a busy hospital', lead: 'The same software grows with you — start small and add doctors, wards and staff when you need them.',
+        items: [
+          { icon: 'Stethoscope', title: 'Clinics & polyclinics', text: 'Appointments, prescriptions and bills without the paperwork — reception and doctor on the same screen.' },
+          { icon: 'Building2', title: 'Multi-speciality hospitals', text: 'Departments, wards, admissions, accounts and staff in one place, each role seeing only what it needs.' },
+          { icon: 'Bed', title: 'Nursing homes', text: 'Beds, admissions, discharge and daily accounts that the owner can check from a phone.' },
+          { icon: 'Smile', title: 'Dental, eye & speciality centres', text: 'Your own doctors, services and website, with WhatsApp reminders for every appointment.' },
+        ],
+      },
+      different: {
+        eyebrow: 'What makes us different', title: 'Built for how *Indian hospitals* really work', lead: '',
+        themLabel: 'Typical hospital software', usLabel: '{platform}',
+        rows: [
+          { topic: 'Setup', them: 'Installation, servers and an IT person', us: 'Opens in the browser — ready the same day' },
+          { topic: 'Pricing', them: 'Quotes on request, per-user fees', us: 'Published monthly price per hospital' },
+          { topic: 'Learning', them: 'Days of training and thick manuals', us: 'Simple screens your staff learn in an hour' },
+          { topic: 'Website', them: 'A separate vendor and another bill', us: 'Hospital website included, editable by you' },
+          { topic: 'Patients', them: 'Phone calls for every booking', us: 'Online booking with WhatsApp & SMS updates' },
+          { topic: 'Your data', them: 'Hard to get out when you leave', us: 'Export everything, any time' },
+        ],
+      },
       values: {
-        eyebrow: 'Values', title: 'What we care about', lead: '',
+        eyebrow: 'Values', title: 'What we *care about*', lead: 'Four ideas guide every feature we build and every call we answer.',
         items: [
           { icon: 'Lightbulb', title: 'Simple first', text: 'If reception needs training to use it, we haven’t finished designing it.' },
           { icon: 'ShieldCheck', title: 'Trust', text: 'Patient data is protected like it’s our own family’s.' },
@@ -382,6 +412,28 @@ export function defaultSite(): PlatformSite {
           { title: 'We protect what matters', text: 'Patient privacy and data safety are designed in from the database up, and checked with every change.' },
         ],
       },
+      commitments: {
+        eyebrow: 'Our commitments', title: 'Promises we keep to *every hospital*', lead: '',
+        items: [
+          'Your data belongs to you — export it whenever you like',
+          'Prices are published, and we tell you before anything changes',
+          'Each hospital’s records are kept separate and private',
+          'We reply to every support request within one working day',
+          'No long contracts — you can stop any time',
+          'Every role gets only the access it needs',
+        ],
+      },
+      company: {
+        eyebrow: 'Company', title: 'Who runs *{platform}*', lead: '',
+        rows: [
+          { label: 'Company', value: '{company}' },
+          { label: 'Office', value: '{address}' },
+          { label: 'E-mail', value: '{email}' },
+          { label: 'Phone', value: '{phone}' },
+          { label: 'Website', value: '{domain}' },
+        ],
+      },
+      partner: { title: 'Work with us', text: 'Hospital groups, implementation partners and resellers — or a doctor with an idea that would make your day easier. We’d love to hear from you.', button: 'Get in touch', link: '/contact' },
       team: { eyebrow: 'Team', title: 'The people behind {platform}', lead: '', items: [] },
       cta: cta('Let’s build a better hospital together', 'Start a free trial or talk to our team.'),
     },

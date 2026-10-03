@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — About us page redesign
+
+- New layout: split hero with buttons and an illustrated card (or your picture), numbers strip, story with a sticky heading and quote, icon mission/vision cards, "who we build for", a comparison table, numbered values, a vertical "how we work" timeline, a commitments band, company details and a "work with us" card.
+- All new sections are editable in control panel → Website → About us; empty sections and company rows are hidden.
+
 ## Unreleased — richer product website
 
 - New CMS-editable sections, each with built-in default content: before/after problems, "made for India", integrations strip (Home); patient journey timeline and per-role views (Features); "included in every plan" (Pricing); specialities and a go-live plan (Solutions); role access table and FAQs (Security); how we work (About); what happens next and FAQs (Contact).

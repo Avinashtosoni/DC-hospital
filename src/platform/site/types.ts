@@ -85,12 +85,21 @@ export interface SecurityContent {
 export interface AboutContent {
   seo: Seo
   heading: Heading
+  buttons: { primary: string; secondary: string }
+  highlights: { value: string; label: string }[]
+  storyHeading: Heading
   story: string[]
+  promise: { text: string; by: string }
   image: string
   mission: { title: string; text: string }
   vision: { title: string; text: string }
+  audience: Heading & { items: IconItem[] }
+  different: Heading & { themLabel: string; usLabel: string; rows: { topic: string; them: string; us: string }[] }
   values: Heading & { items: IconItem[] }
   approach: Heading & { items: Step[] }
+  commitments: Heading & { items: string[] }
+  company: Heading & { rows: { label: string; value: string }[] }
+  partner: { title: string; text: string; button: string; link: string }
   team: Heading & { items: { name: string; role: string; photo: string; bio: string }[] }
   cta: Cta
 }

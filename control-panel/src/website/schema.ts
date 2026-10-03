@@ -205,12 +205,34 @@ export const PAGES: PageMeta[] = [
     key: 'about', label: 'About us', path: '/about', icon: Info, help: 'Your story, mission, values and team.',
     fields: [
       seo(), heading('heading', 'Page heading'),
+      { k: 'buttons', t: 'group', label: 'Buttons under the heading', collapsed: true, fields: [{ k: 'primary', t: 'text', label: 'Main button (→ free trial)', hint: 'Empty = hidden.' }, { k: 'secondary', t: 'text', label: 'Second button (→ contact)', hint: 'Empty = hidden.' }] },
+      { k: 'image', t: 'image', label: 'Top picture (optional)', hint: 'Empty = an illustrated card.' },
+      {
+        k: 'highlights', t: 'list', label: 'Numbers strip', title: (v) => `${v.value} ${v.label}`, addLabel: 'Add number', newItem: () => ({ value: '', label: '' }),
+        item: [{ k: 'value', t: 'text', label: 'Number / symbol' }, { k: 'label', t: 'text', label: 'Label' }],
+      },
+      heading('storyHeading', 'Story heading', [], true),
       { k: 'story', t: 'strings', label: 'Story (one paragraph per item)', multiline: true, addLabel: 'Add paragraph' },
-      { k: 'image', t: 'image', label: 'Picture (optional)' },
+      { k: 'promise', t: 'group', label: 'Quote beside the story', collapsed: true, fields: [{ k: 'text', t: 'textarea', label: 'Quote', rows: 2, full: true, hint: 'Empty = hidden.' }, { k: 'by', t: 'text', label: 'By' }] },
       { k: 'mission', t: 'group', label: 'Mission', collapsed: true, fields: [{ k: 'title', t: 'text', label: 'Title' }, { k: 'text', t: 'textarea', label: 'Text', rows: 3, full: true }] },
       { k: 'vision', t: 'group', label: 'Vision', collapsed: true, fields: [{ k: 'title', t: 'text', label: 'Title' }, { k: 'text', t: 'textarea', label: 'Text', rows: 3, full: true }] },
+      heading('audience', 'Who we build for', [iconItems('items', 'Hospital types', 'type')], true),
+      heading('different', 'What makes us different (comparison)', [
+        { k: 'themLabel', t: 'text', label: 'Left column title' },
+        { k: 'usLabel', t: 'text', label: 'Right column title' },
+        {
+          k: 'rows', t: 'list', label: 'Rows', title: (v) => v.topic || 'New row', subtitle: (v) => v.us, addLabel: 'Add row', newItem: () => ({ topic: '', them: '', us: '' }),
+          item: [{ k: 'topic', t: 'text', label: 'Topic' }, { k: 'them', t: 'text', label: 'Typical software', full: true }, { k: 'us', t: 'text', label: 'Us', full: true }],
+        },
+      ], true),
       heading('values', 'Values', [iconItems('items', 'Values', 'value')], true),
       heading('approach', 'How we work', [steps('items', 'Points')], true),
+      heading('commitments', 'Our commitments', [{ k: 'items', t: 'strings', label: 'Promises', addLabel: 'Add promise' }], true),
+      heading('company', 'Company details', [{
+        k: 'rows', t: 'list', label: 'Rows (empty values are hidden)', title: (v) => v.label || 'New row', subtitle: (v) => v.value, addLabel: 'Add row', newItem: () => ({ label: '', value: '' }),
+        item: [{ k: 'label', t: 'text', label: 'Label' }, { k: 'value', t: 'textarea', label: 'Value', rows: 2, full: true, hint: TOKENS + ' Add GSTIN / CIN here when you have them.' }],
+      }], true),
+      { k: 'partner', t: 'group', label: '“Work with us” card', collapsed: true, fields: [{ k: 'title', t: 'text', label: 'Title', hint: 'Empty = hidden.' }, { k: 'text', t: 'textarea', label: 'Text', rows: 2, full: true }, { k: 'button', t: 'text', label: 'Button text' }, { k: 'link', t: 'text', label: 'Button link' }] },
       heading('team', 'Team (hidden while empty)', [{
         k: 'items', t: 'list', label: 'People', title: (v) => v.name || 'New person', subtitle: (v) => v.role, thumb: (v) => v.photo, addLabel: 'Add person',
         newItem: () => ({ name: '', role: '', photo: '', bio: '' }),

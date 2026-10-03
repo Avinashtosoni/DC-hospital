@@ -1,9 +1,9 @@
-import { ArrowRight, CheckCircle2, Clock, Mail, MapPin, MessageCircle, Phone } from 'lucide-react'
+import { ArrowRight, Building2, CheckCircle2, ClipboardList, Clock, Eye, Handshake, HeartHandshake, HeartPulse, Mail, MapPin, MessageCircle, Phone, Quote, ShieldCheck, Stethoscope, Target, Users, Wallet, XCircle } from 'lucide-react'
 import { safeUrl } from '../../lib/safeUrl'
 import { cn } from '../../lib/utils'
 import { iconFor } from '../../site/cms/icons'
 import { PLANS } from '../plans'
-import { A, CtaBand, FaqList, IconCard, PageHero, Section, SectionHead, StepsTimeline, useSeo } from '../site/ui'
+import { A, CtaBand, FaqList, Hi, IconCard, PageHero, Section, SectionHead, StepsTimeline, useSeo } from '../site/ui'
 import type { PlatformSite } from '../site/types'
 import { ContactForm, PlanCards } from './shared'
 
@@ -257,51 +257,178 @@ export function AboutPage({ site }: P) {
   const c = site.about
   useSeo(c.seo, 'About us')
   const img = safeUrl(c.image, 'image')
+  const company = c.company.rows.filter((r) => r.label && r.value.trim())
+  const pillars = [{ ...c.mission, icon: Target }, { ...c.vision, icon: Eye }].filter((x) => x.title)
   return (
     <>
-      <PageHero h={c.heading} />
-      <Section className="!pt-4">
-        <div className={cn('grid items-start gap-10', img && 'lg:grid-cols-2')}>
-          <div className={cn('space-y-5 text-lg leading-relaxed text-slate-700', !img && 'mx-auto max-w-3xl')}>{c.story.map((p, i) => <p key={i}>{p}</p>)}</div>
-          {img && <img src={img} alt="" loading="lazy" className="w-full rounded-[2rem] shadow-soft" />}
+      {/* hero — heading on the left, picture (or an illustrated card) on the right */}
+      <section className="relative overflow-hidden pb-12 pt-14 sm:pb-16 sm:pt-20">
+        <div aria-hidden="true" className="absolute -right-32 -top-40 h-[460px] w-[460px] rounded-full bg-[#CCCCFF] opacity-60 blur-3xl" />
+        <div aria-hidden="true" className="absolute -left-40 top-28 h-[340px] w-[340px] rounded-full bg-[#A3A3CC] opacity-25 blur-3xl" />
+        <div className="l-container relative grid items-center gap-12 lg:grid-cols-[1.1fr_1fr]">
+          <div className="text-center lg:text-left">
+            <SectionHead h={c.heading} as="h1" className="lg:!mx-0 lg:!text-left" />
+            {(c.buttons.primary || c.buttons.secondary) && (
+              <div className="mt-8 flex flex-wrap justify-center gap-3 lg:justify-start">
+                {c.buttons.primary && <A to="/signup" className="inline-flex items-center gap-2 rounded-full bg-[#292966] px-6 py-3 font-semibold text-white shadow-glow transition hover:bg-[#5C5C99]">{c.buttons.primary}<ArrowRight className="h-4 w-4" /></A>}
+                {c.buttons.secondary && <A to="/contact" className="inline-flex items-center gap-2 rounded-full border border-peri-300 bg-white px-6 py-3 font-semibold text-peri-900 transition hover:border-peri-500">{c.buttons.secondary}</A>}
+              </div>
+            )}
+          </div>
+          {img ? <img src={img} alt="" className="w-full rounded-[2rem] object-cover shadow-soft" /> : <AboutArt />}
         </div>
-        <div className="mt-14 grid gap-5 md:grid-cols-2">
-          {[c.mission, c.vision].filter((x) => x.title).map((x) => (
-            <div key={x.title} className="rounded-[2rem] bg-[#292966] p-8 text-white">
-              <h2 className="font-display text-xl font-bold">{x.title}</h2>
-              <p className="mt-3 leading-relaxed text-[#CCCCFF]">{x.text}</p>
+        {c.highlights.length > 0 && (
+          <div className="l-container relative mt-14">
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-3xl border border-peri-200/80 bg-peri-200/80 shadow-soft md:grid-cols-4">
+              {c.highlights.map((h) => (
+                <div key={h.label} className="bg-white px-5 py-6 text-center">
+                  <dt className="sr-only">{h.label}</dt>
+                  <dd className="font-display text-3xl font-extrabold text-peri-800 sm:text-4xl">{h.value}</dd>
+                  <dd className="mt-1 text-sm text-slate-600">{h.label}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+      </section>
+
+      {/* story — sticky heading + promise on the left, paragraphs on the right */}
+      {c.story.length > 0 && (
+        <Section className="!pt-4">
+          <div className="grid gap-10 lg:grid-cols-[0.9fr_1.4fr] lg:gap-16">
+            <div className="lg:sticky lg:top-28 lg:self-start">
+              <SectionHead h={c.storyHeading} className="!mx-0 !text-left" />
+              {c.promise.text && (
+                <figure className="mt-8 rounded-3xl bg-gradient-to-br from-[#CCCCFF] to-[#A3A3CC]/60 p-6">
+                  <Quote className="h-7 w-7 text-peri-700" aria-hidden="true" />
+                  <blockquote className="mt-3 font-display text-lg font-bold leading-snug text-peri-900">{c.promise.text}</blockquote>
+                  {c.promise.by && <figcaption className="mt-3 text-sm font-medium text-peri-700">— {c.promise.by}</figcaption>}
+                </figure>
+              )}
             </div>
-          ))}
-        </div>
-      </Section>
-      {c.values.items.length > 0 && (
-        <Section className="!pt-0">
-          <SectionHead h={c.values} />
-          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{c.values.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
+            <div className="space-y-5 text-lg leading-relaxed text-slate-700 [&>p:first-child]:text-xl [&>p:first-child]:text-peri-900">
+              {c.story.map((p, i) => <p key={i}>{p}</p>)}
+            </div>
+          </div>
         </Section>
       )}
-      {c.approach.items.length > 0 && (
+
+      {/* mission & vision */}
+      {pillars.length > 0 && (
         <Section className="!pt-0">
-          <SectionHead h={c.approach} />
-          <div className="mt-12 grid gap-4 sm:grid-cols-2">
-            {c.approach.items.map((a, i) => (
-              <div key={a.title} className="flex gap-4 rounded-3xl border border-peri-200/80 bg-white p-6 shadow-soft">
-                <span className="font-display text-3xl font-extrabold text-peri-300">{String(i + 1).padStart(2, '0')}</span>
-                <div><h3 className="font-display text-lg font-bold text-peri-900">{a.title}</h3><p className="mt-1.5 text-sm leading-relaxed text-slate-600">{a.text}</p></div>
+          <div className="grid gap-5 md:grid-cols-2">
+            {pillars.map((x, i) => (
+              <div key={x.title} className={cn('relative overflow-hidden rounded-[2rem] p-8 sm:p-10', i === 0 ? 'bg-[#292966] text-white' : 'bg-[#5C5C99] text-white')}>
+                <div aria-hidden="true" className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-[#CCCCFF] opacity-20 blur-2xl" />
+                <span className="relative grid h-12 w-12 place-items-center rounded-2xl bg-white/15"><x.icon className="h-6 w-6 text-[#CCCCFF]" /></span>
+                <h2 className="relative mt-5 font-display text-2xl font-extrabold">{x.title}</h2>
+                <p className="relative mt-3 text-lg leading-relaxed text-[#E6E6FF]">{x.text}</p>
               </div>
             ))}
           </div>
         </Section>
       )}
-      {c.team.items.length > 0 && (
+
+      {/* who we build for */}
+      {c.audience.items.length > 0 && (
         <Section className="!pt-0">
+          <SectionHead h={c.audience} />
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{c.audience.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
+        </Section>
+      )}
+
+      {/* what makes us different — compare row by row */}
+      {c.different.rows.length > 0 && (
+        <section className="bg-gradient-to-b from-peri-50 to-white py-16 sm:py-20">
+          <div className="l-container">
+            <SectionHead h={c.different} />
+            <div className="mx-auto mt-12 max-w-5xl overflow-hidden rounded-[2rem] border border-peri-200/80 bg-white shadow-soft">
+              <div className="hidden grid-cols-[0.8fr_1.2fr_1.2fr] border-b border-peri-200/80 text-sm font-bold uppercase tracking-wider md:grid">
+                <span className="px-6 py-4 text-peri-500" />
+                <span className="px-6 py-4 text-slate-500">{c.different.themLabel}</span>
+                <span className="bg-[#292966] px-6 py-4 text-[#CCCCFF]">{c.different.usLabel}</span>
+              </div>
+              {c.different.rows.map((r, i) => (
+                <div key={r.topic + i} className={cn('grid gap-2 px-6 py-5 md:grid-cols-[0.8fr_1.2fr_1.2fr] md:gap-0 md:p-0', i > 0 && 'border-t border-peri-100')}>
+                  <p className="font-display font-bold text-peri-900 md:px-6 md:py-5">{r.topic}</p>
+                  <p className="flex gap-2.5 text-slate-500 md:px-6 md:py-5"><XCircle className="mt-0.5 h-5 w-5 shrink-0 text-slate-300" aria-label={c.different.themLabel} />{r.them}</p>
+                  <p className="flex gap-2.5 font-medium text-peri-900 md:bg-peri-50 md:px-6 md:py-5"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-peri-600" aria-label={c.different.usLabel} />{r.us}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {c.values.items.length > 0 && (
+        <Section>
+          <SectionHead h={c.values} />
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {c.values.items.map((it, i) => {
+              const Icon = iconFor(it.icon)
+              return (
+                <div key={it.title} className="group relative overflow-hidden rounded-3xl border border-peri-200/80 bg-white p-6 shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-glow">
+                  <span aria-hidden="true" className="absolute right-5 top-3 font-display text-6xl font-extrabold text-peri-100 transition group-hover:text-peri-200">{i + 1}</span>
+                  <span className="relative grid h-12 w-12 place-items-center rounded-2xl bg-[#292966] text-[#CCCCFF]"><Icon className="h-6 w-6" /></span>
+                  <h3 className="relative mt-5 font-display text-lg font-bold text-peri-900">{it.title}</h3>
+                  {it.text && <p className="relative mt-2 text-sm leading-relaxed text-slate-600">{it.text}</p>}
+                </div>
+              )
+            })}
+          </div>
+        </Section>
+      )}
+
+      {/* how we work — a vertical timeline */}
+      {c.approach.items.length > 0 && (
+        <Section className="!pt-0">
+          <SectionHead h={c.approach} />
+          <ol className="relative mx-auto mt-12 max-w-3xl space-y-6 before:absolute before:bottom-6 before:left-6 before:top-6 before:w-0.5 before:bg-gradient-to-b before:from-[#5C5C99] before:to-[#CCCCFF]">
+            {c.approach.items.map((a, i) => (
+              <li key={a.title + i} className="relative flex gap-5">
+                <span className="relative z-10 grid h-12 w-12 shrink-0 place-items-center rounded-full border-4 border-white bg-[#292966] font-display font-extrabold text-white shadow-soft">{i + 1}</span>
+                <div className="flex-1 rounded-3xl border border-peri-200/80 bg-white p-5 shadow-soft sm:p-6">
+                  <h3 className="font-display text-lg font-bold text-peri-900">{a.title}</h3>
+                  <p className="mt-1.5 leading-relaxed text-slate-600">{a.text}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </Section>
+      )}
+
+      {/* commitments */}
+      {c.commitments.items.length > 0 && (
+        <section className="py-6 sm:py-10">
+          <div className="l-container">
+            <div className="relative overflow-hidden rounded-[2rem] bg-[#292966] px-6 py-12 sm:px-12 sm:py-14">
+              <div aria-hidden="true" className="absolute -left-24 -top-24 h-72 w-72 rounded-full bg-[#5C5C99] opacity-60 blur-3xl" />
+              <div className="relative grid gap-10 lg:grid-cols-[0.9fr_1.5fr] lg:items-center">
+                <div>
+                  {c.commitments.eyebrow && <p className="text-xs font-bold uppercase tracking-[.18em] text-[#A3A3CC]">{c.commitments.eyebrow}</p>}
+                  <h2 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-white sm:text-4xl"><Hi text={c.commitments.title} hl="text-[#CCCCFF]" /></h2>
+                  {c.commitments.lead && <p className="mt-4 text-[#CCCCFF]">{c.commitments.lead}</p>}
+                </div>
+                <ul className="grid gap-3 sm:grid-cols-2">
+                  {c.commitments.items.map((t) => (
+                    <li key={t} className="flex gap-3 rounded-2xl bg-white/10 p-4 text-[#F0F0FF] ring-1 ring-white/10"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-[#CCCCFF]" />{t}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {c.team.items.length > 0 && (
+        <Section>
           <SectionHead h={c.team} />
           <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
             {c.team.items.map((t) => {
               const photo = safeUrl(t.photo, 'image')
               return (
                 <div key={t.name} className="rounded-3xl border border-peri-200/80 bg-white p-6 text-center shadow-soft">
-                  {photo ? <img src={photo} alt="" loading="lazy" className="mx-auto h-24 w-24 rounded-full object-cover" /> : <span className="mx-auto grid h-24 w-24 place-items-center rounded-full bg-[#CCCCFF] font-display text-2xl font-extrabold text-peri-900">{t.name.charAt(0)}</span>}
+                  {photo ? <img src={photo} alt="" loading="lazy" className="mx-auto h-24 w-24 rounded-full object-cover ring-4 ring-[#CCCCFF]" /> : <span className="mx-auto grid h-24 w-24 place-items-center rounded-full bg-[#CCCCFF] font-display text-2xl font-extrabold text-peri-900">{t.name.charAt(0)}</span>}
                   <p className="mt-4 font-display font-bold text-peri-900">{t.name}</p>
                   <p className="text-sm text-peri-600">{t.role}</p>
                   {t.bio && <p className="mt-3 text-sm leading-relaxed text-slate-600">{t.bio}</p>}
@@ -311,8 +438,69 @@ export function AboutPage({ site }: P) {
           </div>
         </Section>
       )}
+
+      {/* company details + work with us */}
+      {(company.length > 0 || c.partner.title) && (
+        <Section>
+          <div className={cn('grid gap-5', company.length > 0 && c.partner.title && 'lg:grid-cols-[1.3fr_1fr]')}>
+            {company.length > 0 && (
+              <div className="rounded-[2rem] border border-peri-200/80 bg-white p-6 shadow-soft sm:p-8">
+                <SectionHead h={c.company} className="!mx-0 !text-left [&_h2]:!text-2xl" />
+                <dl className="mt-6 divide-y divide-peri-100">
+                  {company.map((r) => (
+                    <div key={r.label} className="grid gap-1 py-3 sm:grid-cols-[8rem_1fr] sm:gap-4">
+                      <dt className="text-sm font-semibold text-peri-500">{r.label}</dt>
+                      <dd className="whitespace-pre-line break-words text-slate-800">{r.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
+            {c.partner.title && (
+              <div className="flex flex-col justify-between rounded-[2rem] bg-gradient-to-br from-[#CCCCFF] to-[#A3A3CC] p-6 sm:p-8">
+                <div>
+                  <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white/70 text-peri-900"><Handshake className="h-6 w-6" /></span>
+                  <h2 className="mt-5 font-display text-2xl font-extrabold text-peri-900">{c.partner.title}</h2>
+                  {c.partner.text && <p className="mt-3 leading-relaxed text-peri-900/80">{c.partner.text}</p>}
+                </div>
+                {c.partner.button && <A to={c.partner.link || '/contact'} className="mt-8 inline-flex w-fit items-center gap-2 rounded-full bg-[#292966] px-6 py-3 font-semibold text-white transition hover:bg-[#5C5C99]">{c.partner.button}<ArrowRight className="h-4 w-4" /></A>}
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
       <CtaBand cta={c.cta} />
     </>
+  )
+}
+
+/** decorative hero card shown when no About picture is uploaded */
+function AboutArt() {
+  const roles = [[Stethoscope, 'Doctor'], [Users, 'Reception'], [Wallet, 'Accounts'], [Building2, 'Owner'], [HeartPulse, 'Patient'], [ClipboardList, 'Staff']] as const
+  return (
+    <div aria-hidden="true" className="relative mx-auto w-full max-w-md">
+      <div className="absolute inset-0 rotate-3 rounded-[2rem] bg-[#A3A3CC]/40" />
+      <div className="relative rounded-[2rem] border border-peri-200/80 bg-white/90 p-6 shadow-lift backdrop-blur sm:p-8">
+        <div className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#292966] text-[#CCCCFF]"><HeartHandshake className="h-6 w-6" /></span>
+          <div><p className="font-display font-bold text-peri-900">One hospital, one team</p><p className="text-sm text-slate-500">Everyone on the same page</p></div>
+        </div>
+        <div className="mt-6 grid grid-cols-3 gap-3">
+          {roles.map(([Icon, label]) => (
+            <div key={label} className="rounded-2xl bg-peri-50 p-3 text-center ring-1 ring-peri-100">
+              <Icon className="mx-auto h-6 w-6 text-peri-700" />
+              <p className="mt-2 text-xs font-semibold text-peri-900">{label}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-6 space-y-2.5">
+          {[78, 56, 90].map((w, i) => <div key={i} className="h-2.5 rounded-full bg-peri-100"><div className="h-full rounded-full bg-gradient-to-r from-[#5C5C99] to-[#A3A3CC]" style={{ width: `${w}%` }} /></div>)}
+        </div>
+      </div>
+      <div className="absolute -bottom-5 -left-4 flex items-center gap-2 rounded-2xl bg-white px-4 py-3 shadow-lift ring-1 ring-peri-100">
+        <ShieldCheck className="h-5 w-5 text-peri-600" /><span className="text-sm font-semibold text-peri-900">Private by design</span>
+      </div>
+    </div>
   )
 }
 
