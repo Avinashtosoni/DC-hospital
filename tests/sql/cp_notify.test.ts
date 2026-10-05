@@ -95,6 +95,8 @@ describe('alerts', () => {
     expect(a.items.map((i: any) => i.event)).toEqual(['incident_new', 'lead_new'])
     expect(await call(P_ADMIN, 'cp_alerts_read', [[a.items[1].id]], ['uuid[]'])).toBe(1)
     expect((await call(P_SUPPORT, 'cp_alerts')).unread).toBe(1)
+    expect(await call(P_ADMIN, 'cp_alerts_unread', [[a.items[1].id]], ['uuid[]'])).toBe(2)
+    expect(await call(P_SUPPORT, 'cp_alerts_unread', [[a.items[1].id]], ['uuid[]'])).toBe(1)   // not theirs → untouched
     expect(await call(P_ADMIN, 'cp_alerts_read')).toBe(0)
     await fails(call(B_OWNER, 'cp_alerts'), /Hospital Comrade team/)
   })
@@ -259,6 +261,17 @@ describe('health', () => {
     expect((await inbox(P_SUPPORT)).slice(before).map((x: any) => x.title)).toContain('Message failures spiking')
     const cat = (await call(P_ADMIN, 'cp_ops_settings')).catalog.map((e: any) => e.key)
     expect(cat).toEqual(expect.arrayContaining(['job_late', 'delivery_spike']))
+  })
+
+  test('old history goes once a night; the last 30 days stay', async () => {
+    await db.as(null, `insert into public.platform_health_checks (service, status, checked_at) values ('old', 'ok', now() - interval '31 days'), ('new', 'ok', now() - interval '29 days')`)
+    await db.as(null, `delete from public.platform_heartbeats where key = 'ops_cleanup'`)
+    await call('service', 'record_health', [[]], ['jsonb'])
+    expect((await db.as<any>(null, `select service from public.platform_health_checks where service in ('old', 'new')`)).length).toBe(2)   // not on every run
+    expect(await call(null, 'ops_nightly_cleanup', [true], ['boolean'])).toBe(true)
+    expect((await db.as<any>(null, `select service from public.platform_health_checks where service in ('old', 'new')`)).map((r: any) => r.service)).toEqual(['new'])
+    expect(await call(null, 'ops_nightly_cleanup')).toBe(false)   // done for today
+    await fails(call(P_ADMIN, 'ops_nightly_cleanup', [true], ['boolean']), /permission denied/)
   })
 
   test('the every-minute tick runs without pg_net / pg_cron', async () => {

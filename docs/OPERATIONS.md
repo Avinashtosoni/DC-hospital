@@ -118,14 +118,15 @@ The site itself: `/healthz` returns `ok` (Docker health check).
   - the site `/healthz`
   - Auth and Storage
   - every Edge Function (with latency)
+  - the database itself (a small read through the API, with response time)
   - the shared provider keys (no message is sent): Resend, SendGrid, Meta, OpenWA, Firebase, MSG91 (balance API) and Fast2SMS (wallet API, also shows the balance). AiSensy has no public key-check API, so it shows "configured"
   - database connections against `max_connections`, and file storage used against your plan limit (set **File storage limit** in Alerts → Settings; Supabase Pro = 102400 MB)
   - the Razorpay webhook: when it was last seen, with a warning if online payments came in without a webhook or if signatures are being rejected
   - hospital custom domains: HTTPS works, and for Cloudflare domains the certificate status and expiry (needs `CF_API_TOKEN` and `CF_ZONE_ID` on the ops function too)
   - database size against the limit, queue backlog, delivery failures and the scheduler
 
-  The page shows 24-hour and 7-day uptime, an hourly or daily strip (24 hours / 7 days toggle), latency, failure history and a **Check now** button.
-  A state change raises an alert: "Scheduled job late" for the scheduler, "Message failures spiking" for delivery, and "Service down" / "Limit crossed" for the rest. History is kept for 30 days.
+  The page shows 24-hour and 7-day uptime, an hourly or daily strip (24 hours / 7 days toggle), a graph button per service (uptime % bars + response-time line), latency, failure history and a **Check now** button.
+  A state change raises an alert: "Scheduled job late" for the scheduler, "Message failures spiking" for delivery, and "Service down" / "Limit crossed" for the rest. History is kept for 30 days; older rows are removed once a night (first scheduler tick after 02:00 India time).
 
 **Troubleshooting:**
 

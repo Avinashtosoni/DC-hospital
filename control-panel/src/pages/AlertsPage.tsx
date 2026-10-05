@@ -46,7 +46,9 @@ function Inbox() {
   const nav = useNavigate()
   const [unreadOnly, setUnreadOnly] = useState(false)
   const q = useQuery({ queryKey: ['cp-alerts-all', unreadOnly], queryFn: () => cp.alerts(unreadOnly, 200) })
-  const read = useMutation({ mutationFn: (ids?: string[]) => cp.readAlerts(ids), onSuccess: () => { qc.invalidateQueries({ queryKey: ['cp-alerts'] }); qc.invalidateQueries({ queryKey: ['cp-alerts-all'] }) } })
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['cp-alerts'] }); qc.invalidateQueries({ queryKey: ['cp-alerts-all'] }) }
+  const read = useMutation({ mutationFn: (ids?: string[]) => cp.readAlerts(ids), onSuccess: refresh })
+  const unread = useMutation({ mutationFn: (ids: string[]) => cp.unreadAlerts(ids), onSuccess: refresh, onError: (e) => toast.error(friendly(e)) })
   if (q.error) return <ErrorBox error={q.error} onRetry={() => q.refetch()} />
   return (
     <Card className="overflow-hidden">
@@ -69,7 +71,8 @@ function Inbox() {
               </div>
               <div className="flex shrink-0 items-start gap-1">
                 {a.link && <Button size="sm" variant="ghost" onClick={() => { if (!a.read_at) read.mutate([a.id]); if (internal(a.link)) { nav(a.link!) } else { window.open(a.link!, '_blank', 'noopener') } }}>Open</Button>}
-                {!a.read_at && <Button size="sm" variant="ghost" onClick={() => read.mutate([a.id])}>Mark read</Button>}
+                {!a.read_at ? <Button size="sm" variant="ghost" onClick={() => read.mutate([a.id])}>Mark read</Button>
+                  : <Button size="sm" variant="ghost" className="text-slate-500" onClick={() => unread.mutate([a.id])}>Mark unread</Button>}
               </div>
             </li>
           ))}

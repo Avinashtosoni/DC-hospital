@@ -16,6 +16,8 @@
 - **Live health checks:** every 5 minutes, covering site, Auth, Storage, Edge Functions, provider keys, database size, queue, failures and scheduler. Shows uptime, latency, failure history and Check now. Alerts fire when something goes down or recovers.
 - **More health checks:** Razorpay webhook last seen (and rejected signatures), database connections, file storage used, hospital domain HTTPS and certificate expiry, and MSG91 / Fast2SMS key checks. The live checks have a 24 hours / 7 days toggle.
 - **Own alerts** for "Scheduled job late" and "Message failures spiking", each switchable on its own. New limits: connections, storage, webhook hours and SSL days.
+- Health also checks the database itself (with response time). Each service has a graph of uptime and response time. Old history is cleaned up once a night.
+- Alerts in the inbox can be marked unread again.
 - Test send has one card and button per channel. Messaging (including the delivery log) is admin-only.
 - **New `ops` Edge Function.** `notify` now reads shared-account keys saved in the control panel (Edge secrets are the fallback).
 - **To upgrade:**

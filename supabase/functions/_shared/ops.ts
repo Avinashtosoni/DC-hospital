@@ -98,6 +98,15 @@ export async function checkSite(o: CheckOpts): Promise<Check> {
   return { ...base, status: r.ok ? 'ok' : 'fail', latency_ms: ms, detail: r.ok ? `HTTP ${r.status}${text ? ` · ${text}` : ''}` : `HTTP ${r.status}` }
 }
 
+/** the database answers through the API (a tiny read) — and how fast */
+export async function checkDatabase(o: CheckOpts): Promise<Check> {
+  const base = { service: 'db', label: 'Database', group: 'Database' }
+  const { r, ms, error } = await timed(o.fetch ?? fetch, `${o.supabaseUrl}/rest/v1/platform_settings?select=key&limit=1`, { headers: { apikey: o.serviceKey, Authorization: `Bearer ${o.serviceKey}` } })
+  if (!r) return { ...base, status: 'fail', latency_ms: ms, detail: error }
+  if (!r.ok) return { ...base, status: 'fail', latency_ms: ms, detail: `HTTP ${r.status}: ${(await r.text().catch(() => '')).slice(0, 120)}` }
+  return { ...base, status: 'ok', latency_ms: ms, detail: 'answering queries' }
+}
+
 export async function checkAuth(o: CheckOpts): Promise<Check> {
   const base = { service: 'auth', label: 'Sign-in (Auth)', group: 'Supabase' }
   const { r, ms, error } = await timed(o.fetch ?? fetch, `${o.supabaseUrl}/auth/v1/health`, { headers: { apikey: o.anonKey || o.serviceKey } })
@@ -244,7 +253,7 @@ export async function checkDomains(o: CheckOpts, domains: DomainRow[], opts: { c
 export async function runChecks(o: CheckOpts): Promise<Check[]> {
   const t0 = Date.now()
   const fns = EDGE_FUNCTIONS.filter((n) => n !== o.self)
-  const results = await Promise.all([checkSite(o), checkAuth(o), checkStorage(o), ...fns.map((n) => checkFunction(o, n)), checkProviders(o).catch(() => [] as Check[]),
+  const results = await Promise.all([checkSite(o), checkDatabase(o), checkAuth(o), checkStorage(o), ...fns.map((n) => checkFunction(o, n)), checkProviders(o).catch(() => [] as Check[]),
     ...(o.domains ? [checkDomains(o, o.domains, { cf: o.cf, warnDays: o.sslWarnDays })] : [])])
   const flat = results.flat()
   if (o.self) flat.push({ service: `fn:${o.self}`, label: `${o.self} function`, group: 'Edge Functions', status: 'ok', latency_ms: Date.now() - t0, detail: 'running these checks' })

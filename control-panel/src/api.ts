@@ -96,6 +96,7 @@ export interface CpApi {
   retryMessage(source: 'hospital' | 'platform', id: string): Promise<void>
   alerts(unreadOnly?: boolean, limit?: number): Promise<{ unread: number; items: CpAlert[] }>
   readAlerts(ids?: string[]): Promise<number>
+  unreadAlerts(ids: string[]): Promise<number>
   alertPrefs(): Promise<CpAlertPrefs>
   saveAlertPrefs(p: { events?: Record<string, AlertChannel[]>; whatsapp?: string | null }): Promise<CpAlertPrefs>
   opsSettings(): Promise<OpsSettings>
@@ -261,6 +262,7 @@ const db: CpApi = {
   async retryMessage(source, id) { await rpc('cp_retry_message', { p_source: source, p_id: id }) },
   alerts: (unreadOnly = false, limit = 30) => rpc('cp_alerts', { p_limit: limit, p_unread_only: unreadOnly }),
   readAlerts: (ids) => rpc('cp_alerts_read', { p_ids: ids?.length ? ids : null }),
+  unreadAlerts: (ids) => rpc('cp_alerts_unread', { p_ids: ids }),
   alertPrefs: () => rpc('cp_alert_prefs'),
   saveAlertPrefs: (p) => rpc('cp_save_alert_prefs', { p }),
   opsSettings: () => rpc('cp_ops_settings'),

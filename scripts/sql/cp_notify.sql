@@ -450,6 +450,15 @@ begin
   return (select count(*)::int from public.platform_alert_inbox where user_id = auth.uid() and read_at is null);
 end $$;
 
+-- put alerts back to unread (the member's own only)
+create or replace function public.cp_alerts_unread(p_ids uuid[])
+returns int language plpgsql volatile security definer set search_path = public as $$
+begin
+  perform public.cp_require();
+  update public.platform_alert_inbox set read_at = null where user_id = auth.uid() and read_at is not null and alert_id = any (coalesce(p_ids, '{}'));
+  return (select count(*)::int from public.platform_alert_inbox where user_id = auth.uid() and read_at is null);
+end $$;
+
 -- the member's own choices, limited to the events their role receives and the channels an admin switched on
 create or replace function public.cp_alert_prefs()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
@@ -919,11 +928,21 @@ begin
       end if;
     end if;
   end loop;
-  -- keep 30 days of history
+  return v_all;
+end $$;
+
+-- nightly clean-up (first tick after 02:00 India time): 30 days of health history, 180 of alerts, 90 of platform messages
+create or replace function public.ops_nightly_cleanup(p_force boolean default false)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare v_now timestamp := now() at time zone 'Asia/Kolkata'; v_last timestamptz;
+begin
+  select last_at into v_last from public.platform_heartbeats where key = 'ops_cleanup';
+  if not p_force and (extract(hour from v_now) < 2 or (v_last at time zone 'Asia/Kolkata')::date >= v_now::date) then return false; end if;
   delete from public.platform_health_checks where checked_at < now() - interval '30 days';
   delete from public.platform_alerts where created_at < now() - interval '180 days';
   delete from public.platform_outbox where created_at < now() - interval '90 days';
-  return v_all;
+  perform public.note_heartbeat('ops_cleanup', null);
+  return true;
 end $$;
 
 create or replace function public.cp_health_live()
@@ -973,6 +992,7 @@ declare v_min int := extract(minute from now())::int;
 begin
   perform public.run_due_broadcasts();
   if v_min = 7 then perform public.run_platform_hourly_alerts(); end if;
+  perform public.ops_nightly_cleanup();
   if exists (select 1 from public.platform_outbox where status = 'pending' and next_attempt_at <= now()) then perform public.ops_call('{"flush": true}'::jsonb); end if;
   if v_min % 5 = 0 and coalesce((public.ops_config() #>> '{health,enabled}')::boolean, true) then perform public.ops_call('{"health": true}'::jsonb); end if;
 exception when others then
@@ -984,16 +1004,16 @@ revoke all on function public.ops_defaults(), public.ops_alert_catalog(), public
   public.platform_env(), public.claim_platform_outbox(int), public.ops_default_channels(text),
   public.raise_platform_alert(text, text, text, text, text, int, text, jsonb), public.raise_platform_alert_safe(text, text, text, text, text, int, text),
   public.run_platform_hourly_alerts(), public.broadcast_recipients(jsonb), public.broadcast_dispatch(uuid), public.run_due_broadcasts(),
-  public.platform_db_checks(), public.record_health(jsonb), public.note_heartbeat(text, text), public.ops_call(jsonb), public.ops_cron_tick() from public, anon, authenticated;
+  public.platform_db_checks(), public.record_health(jsonb), public.note_heartbeat(text, text), public.ops_nightly_cleanup(boolean), public.ops_call(jsonb), public.ops_cron_tick() from public, anon, authenticated;
 grant execute on function public.platform_env(), public.claim_platform_outbox(int), public.record_health(jsonb), public.note_heartbeat(text, text), public.raise_platform_alert(text, text, text, text, text, int, text, jsonb) to service_role;
 
 revoke all on function public.cp_messaging_setup(), public.cp_save_messaging_setup(jsonb, jsonb), public.cp_save_platform_templates(jsonb),
-  public.cp_register_push(text, text), public.cp_unregister_push(text), public.cp_push_config(), public.cp_alerts(int, boolean), public.cp_alerts_read(uuid[]),
+  public.cp_register_push(text, text), public.cp_unregister_push(text), public.cp_push_config(), public.cp_alerts(int, boolean), public.cp_alerts_read(uuid[]), public.cp_alerts_unread(uuid[]),
   public.cp_alert_prefs(), public.cp_save_alert_prefs(jsonb), public.cp_ops_settings(), public.cp_save_ops_settings(jsonb),
   public.cp_broadcast_preview(jsonb, text[]), public.cp_save_broadcast(jsonb), public.cp_send_broadcast(uuid, timestamptz), public.cp_cancel_broadcast(uuid),
   public.cp_broadcasts(int), public.cp_delivery_log(jsonb), public.cp_retry_message(text, uuid), public.cp_health_live() from public, anon;
 grant execute on function public.cp_messaging_setup(), public.cp_save_messaging_setup(jsonb, jsonb), public.cp_save_platform_templates(jsonb),
-  public.cp_register_push(text, text), public.cp_unregister_push(text), public.cp_push_config(), public.cp_alerts(int, boolean), public.cp_alerts_read(uuid[]),
+  public.cp_register_push(text, text), public.cp_unregister_push(text), public.cp_push_config(), public.cp_alerts(int, boolean), public.cp_alerts_read(uuid[]), public.cp_alerts_unread(uuid[]),
   public.cp_alert_prefs(), public.cp_save_alert_prefs(jsonb), public.cp_ops_settings(), public.cp_save_ops_settings(jsonb),
   public.cp_broadcast_preview(jsonb, text[]), public.cp_save_broadcast(jsonb), public.cp_send_broadcast(uuid, timestamptz), public.cp_cancel_broadcast(uuid),
   public.cp_broadcasts(int), public.cp_delivery_log(jsonb), public.cp_retry_message(text, uuid), public.cp_health_live() to authenticated;

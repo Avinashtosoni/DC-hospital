@@ -3,7 +3,7 @@
  * for team alerts / broadcasts, panel links, and the live health checks (mocked fetch, no network).
  */
 import { describe, expect, test, vi } from 'vitest'
-import { cfExpiry, checkDomains, checkFunction, checkProviders, checkSite, msg91Balance, mergeEnv, panelLink, platformSendCtx, runChecks, loadPlatformEnv, clearPlatformEnv } from '../../supabase/functions/_shared/ops'
+import { cfExpiry, checkDatabase, checkDomains, checkFunction, checkProviders, checkSite, msg91Balance, mergeEnv, panelLink, platformSendCtx, runChecks, loadPlatformEnv, clearPlatformEnv } from '../../supabase/functions/_shared/ops'
 
 const envOf = (vars: Record<string, string>) => (k: string) => vars[k]
 const res = (status: number, body: unknown = '') => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })
@@ -124,7 +124,16 @@ describe('health checks', () => {
 
   test('runChecks covers the platform, Supabase, every function and the providers', async () => {
     const out = await runChecks({ ...base, siteUrl: 'https://hc.in', self: 'ops', fetch: (async () => res(200, '[]')) as any, domains: [] })
-    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'auth', 'storage', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
+    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'db', 'auth', 'storage', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
     expect(out.find((c) => c.service === 'fn:ops')?.status).toBe('ok')
+  })
+
+  test('database check reads through the API and reports errors', async () => {
+    const seen: string[] = []
+    const ok = await checkDatabase({ ...base, fetch: (async (u: string) => { seen.push(u); return res(200, '[]') }) as any })
+    expect(ok).toMatchObject({ service: 'db', status: 'ok', group: 'Database' })
+    expect(seen[0]).toContain('/rest/v1/platform_settings?select=key&limit=1')
+    const bad = await checkDatabase({ ...base, fetch: (async () => res(503, 'upstream connect error')) as any })
+    expect(bad).toMatchObject({ status: 'fail', detail: 'HTTP 503: upstream connect error' })
   })
 })

@@ -1,11 +1,11 @@
 /**
  * Live checks (cp_health_live): every 5 minutes the ops Edge Function checks the site, Supabase Auth / Storage, each
- * Edge Function, the shared provider accounts and the database's own numbers. Uptime, a 24-hour strip and latency
- * per service, failure history and "Check now".
+ * Edge Function, the shared provider accounts and the database's own numbers. Uptime, a 24-hour / 7-day strip, latency and an
+ * uptime + response-time graph per service, failure history and "Check now".
  */
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, ChevronDown, PlayCircle } from 'lucide-react'
+import { Activity, ChevronDown, LineChart, PlayCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge, Button, Skeleton, type Tone } from '../../../../src/components/ui'
 import { cn } from '../../../../src/lib/utils'
@@ -13,6 +13,8 @@ import { cp, friendly } from '../../api'
 import type { HealthStatus, LiveService } from '../../types'
 import { dateTime, Section } from '../../ui'
 import { ago } from '../../AlertBell'
+
+const ServiceChart = lazy(() => import('./ServiceChart'))
 
 const TONE: Record<HealthStatus, Tone> = { ok: 'green', warn: 'amber', fail: 'red', off: 'slate' }
 const LABEL: Record<HealthStatus, string> = { ok: 'OK', warn: 'Attention', fail: 'Down', off: 'Not set up' }
@@ -46,6 +48,11 @@ export function dayCells(days: LiveService['days'], now = Date.now()) {
   })
 }
 
+/** x-axis label for a cell: hour (24 h) or weekday + date (7 days) */
+export const cellLabel = (t: number | string) => typeof t === 'number'
+  ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  : new Date(t + 'T00:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+
 function Spark({ values }: { values: (number | null)[] }) {
   const last = Math.max(values.length - 1, 1)
   const pts = values.map((v, i) => [i, v] as const).filter((p): p is readonly [number, number] => p[1] != null)
@@ -60,6 +67,7 @@ export function LiveChecks() {
   const q = useQuery({ queryKey: ['cp-health-live'], queryFn: () => cp.liveHealth(), refetchInterval: 60_000, retry: false })
   const [showFailures, setShowFailures] = useState(false)
   const [range, setRange] = useState<'24h' | '7d'>('24h')
+  const [open, setOpen] = useState<string | null>(null)
   const run = useMutation({
     mutationFn: () => cp.checkNow(),
     onSuccess: () => { toast.success('Checks finished'); qc.invalidateQueries({ queryKey: ['cp-health-live'] }) },
@@ -95,7 +103,8 @@ export function LiveChecks() {
                 {services.filter((s) => (s.group ?? 'Other') === g).map((s) => {
                   const cells = range === '24h' ? hourCells(s.hours) : dayCells(s.days)
                   return (
-                    <li key={s.service} className="grid gap-2 px-3 py-2.5 text-sm md:grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)_auto] md:items-center">
+                    <li key={s.service} className="px-3 py-2.5 text-sm">
+                    <div className="grid gap-2 md:grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)_auto_auto] md:items-center">
                       <div className="flex min-w-0 items-start gap-2.5">
                         <span className={cn('mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full', DOT[s.status])} />
                         <div className="min-w-0">
@@ -110,7 +119,7 @@ export function LiveChecks() {
                       </div>
                       <div className={cn('flex h-5 items-end', range === '24h' ? 'gap-px' : 'gap-1')} aria-label={range === '24h' ? 'Last 24 hours' : 'Last 7 days'}>
                         {cells.map((c) => (
-                          <span key={c.t} title={`${typeof c.t === 'number' ? new Date(c.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date(c.t + 'T00:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} · ${c.pct == null ? 'no checks' : `${c.pct}% up`}${c.ms != null ? ` · ${c.ms} ms` : ''}`}
+                          <span key={c.t} title={`${cellLabel(c.t)} · ${c.pct == null ? 'no checks' : `${c.pct}% up`}${c.ms != null ? ` · ${c.ms} ms` : ''}`}
                             className={cn('h-full flex-1 rounded-sm', c.pct == null ? 'bg-slate-100' : c.pct === 100 ? 'bg-emerald-400' : c.pct >= 80 ? 'bg-amber-400' : 'bg-rose-500')} />
                         ))}
                       </div>
@@ -118,6 +127,19 @@ export function LiveChecks() {
                         <Spark values={cells.map((c) => c.ms)} />
                         <span className="w-14 text-right" title="Latest response time">{s.latency_ms != null ? `${s.latency_ms} ms` : ''}</span>
                       </div>
+                      <Button size="sm" variant="ghost" aria-expanded={open === s.service} aria-label={`${s.label} history graph`} icon={<LineChart className="h-4 w-4" />}
+                        className="justify-self-start md:justify-self-end" onClick={() => setOpen(open === s.service ? null : s.service)}>
+                        <span className="md:sr-only">Graph</span>
+                      </Button>
+                    </div>
+                    {open === s.service && (
+                      <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/50 p-3">
+                        <p className="mb-1 text-xs text-slate-500">{s.label} · {range === '24h' ? 'last 24 hours, per hour' : 'last 7 days, per day'}{cells.every((c) => c.pct == null) && ' · no checks yet'}</p>
+                        <Suspense fallback={<Skeleton className="h-56" />}>
+                          <ServiceChart latency={cells.some((c) => c.ms != null)} cells={cells.map((c) => ({ label: cellLabel(c.t), pct: c.pct, ms: c.ms }))} />
+                        </Suspense>
+                      </div>
+                    )}
                     </li>
                   )
                 })}
