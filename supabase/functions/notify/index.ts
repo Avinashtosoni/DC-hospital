@@ -22,7 +22,7 @@
 // account (PLATFORM_* secrets, template IDs from public.platform_settings) with the hospital's own name / sender ID —
 // see ../_shared/platform.ts. Every outcome is counted per hospital in public.message_usage, and the monthly allowance
 // in tenants.messaging.limits is enforced (OTPs always go out). { "ping": true } also reports which shared accounts exist.
-// The shared accounts' keys may be saved in the control panel (Messaging & alerts → Shared accounts, Vault-encrypted);
+// The shared accounts' keys may be saved in the control panel (Platform settings → Integrations, Vault-encrypted);
 // those win over the PLATFORM_* Edge secrets of the same name.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'

@@ -1,9 +1,10 @@
 /**
- * Control panel → Messaging & alerts, Broadcasts, live health: the pure pieces of the screens.
+ * Control panel → Platform settings → Integrations, Messaging, Alerts, Broadcasts, live health: the pure pieces of the screens.
  */
 import { describe, expect, test, vi } from 'vitest'
-vi.mock('../src/lib/supabase', () => ({ supabase: null, platformName: 'Hospital Comrade', platformDomain: 'hospital.digitalcomrade.in' }))
-import { ACCOUNTS, diffAccount, fieldsFor, providerOf } from '../control-panel/src/pages/messaging/accounts'
+vi.mock('../src/lib/supabase', () => ({ supabase: null, supabaseUrl: 'https://p.supabase.co', platformName: 'Hospital Comrade', platformDomain: 'hospital.digitalcomrade.in' }))
+import { ACCOUNTS, diffAccount, fieldsFor, isSetUp, keyMode, keysOf, providerOf } from '../control-panel/src/pages/messaging/accounts'
+import { keySource, webhookUrl } from '../control-panel/src/pages/settings/IntegrationsTab'
 import { broadcastCost } from '../control-panel/src/pages/BroadcastsPage'
 import { dayCells, hourCells, overall } from '../control-panel/src/pages/health/LiveChecks'
 import { validTo } from '../control-panel/src/pages/messaging/TestTab'
@@ -92,5 +93,38 @@ describe('test send', () => {
     expect(validTo('sms', '+91 98765 43210')).toBe(true)
     expect(validTo('whatsapp', '98765')).toBe(false)
     expect(validTo('push', '')).toBe(true)
+  })
+})
+
+describe('integrations', () => {
+  test('Razorpay first, then the four shared channels', () => {
+    expect(ACCOUNTS.map((a) => a.channel)).toEqual(['razorpay', 'sms', 'whatsapp', 'email', 'push'])
+    expect(providerOf(spec('razorpay'), {})).toBe('razorpay')
+    expect(fieldsFor(spec('razorpay'), 'razorpay').map((f) => [f.key, !!f.secret])).toEqual([
+      ['PLATFORM_RAZORPAY_KEY_ID', false], ['PLATFORM_RAZORPAY_KEY_SECRET', true], ['PLATFORM_RAZORPAY_WEBHOOK_SECRET', true]])
+  })
+  test('set up = provider picked, or the single provider\'s main field filled', () => {
+    expect(isSetUp(spec('razorpay'), {})).toBe(false)
+    expect(isSetUp(spec('razorpay'), { PLATFORM_RAZORPAY_KEY_ID: 'rzp_live_1' })).toBe(true)
+    expect(isSetUp(spec('push'), { PLATFORM_FCM_PROJECT_ID: 'hc' })).toBe(true)
+    expect(isSetUp(spec('sms'), { PLATFORM_SMS_PROVIDER: '' })).toBe(false)
+    expect(keyMode('rzp_live_x')).toBe('live'); expect(keyMode('rzp_test_x')).toBe('test'); expect(keyMode('')).toBeNull()
+  })
+  test('Razorpay never sends a provider setting; a new key pair is two secrets + the key ID', () => {
+    expect(diffAccount(spec('razorpay'), {}, { PLATFORM_RAZORPAY_KEY_ID: ' rzp_live_1 ' }, { PLATFORM_RAZORPAY_KEY_SECRET: 's', PLATFORM_RAZORPAY_WEBHOOK_SECRET: 'w' }, []))
+      .toEqual({ settings: { PLATFORM_RAZORPAY_KEY_ID: 'rzp_live_1' }, secrets: { PLATFORM_RAZORPAY_KEY_SECRET: 's', PLATFORM_RAZORPAY_WEBHOOK_SECRET: 'w' } })
+  })
+  test('key source: panel, Edge fallback, both or none', () => {
+    const none = { settings: {}, secrets: [] }
+    expect(keysOf(spec('sms'))).toEqual(expect.arrayContaining(['PLATFORM_SMS_PROVIDER', 'PLATFORM_MSG91_AUTH_KEY', 'PLATFORM_FAST2SMS_API_KEY']))
+    expect(keySource(spec('sms'), none, {})).toBe('none')
+    expect(keySource(spec('sms'), none, { PLATFORM_SMS_PROVIDER: { panel: false, edge: true } })).toBe('edge')
+    expect(keySource(spec('sms'), { settings: { PLATFORM_SMS_PROVIDER: 'msg91' }, secrets: [] }, {})).toBe('panel')
+    const rzpSecret = [{ key: 'PLATFORM_RAZORPAY_KEY_SECRET', hint: '••••', updated_at: '', updated_by_name: null }]
+    expect(keySource(spec('razorpay'), { settings: { PLATFORM_RAZORPAY_KEY_ID: 'rzp_live_1' }, secrets: [] }, {})).toBe('none')   // half a pair is not enough
+    expect(keySource(spec('razorpay'), { settings: { PLATFORM_RAZORPAY_KEY_ID: 'rzp_live_1' }, secrets: rzpSecret }, { PLATFORM_RAZORPAY_KEY_SECRET: { panel: true, edge: true } })).toBe('both')
+  })
+  test('webhook URL points at the billing function', () => {
+    expect(webhookUrl('https://p.supabase.co/')).toBe('https://p.supabase.co/functions/v1/billing?webhook=razorpay')
   })
 })

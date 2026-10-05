@@ -9,7 +9,7 @@ import type {
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
   SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
   MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
-  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig,
+  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
 
@@ -111,6 +111,10 @@ export interface CpApi {
   cancelBroadcast(id: string): Promise<Broadcast | null>
   liveHealth(): Promise<LiveHealth>
   checkNow(): Promise<unknown>
+  /** Platform settings → Integrations: check one account now (stored as a health check) */
+  checkIntegration(id: 'razorpay' | 'sms' | 'whatsapp' | 'email' | 'push'): Promise<{ ok: boolean; check: { status: HealthStatus; detail?: string; latency_ms?: number } }>
+  /** for each key: saved in the panel / set as an Edge secret (never the value) */
+  keySources(keys: string[]): Promise<{ sources: Record<string, { panel: boolean; edge: boolean }> }>
 }
 
 /** Postgres / PostgREST error → a sentence for people */
@@ -277,6 +281,8 @@ const db: CpApi = {
   cancelBroadcast: (id) => rpc('cp_cancel_broadcast', { p_id: id }),
   liveHealth: () => rpc('cp_health_live'),
   checkNow: () => invoke('ops', { health: true }),
+  checkIntegration: (id) => invoke('ops', { check: id }),
+  keySources: (keys) => invoke('ops', { sources: keys }),
 }
 
 /** no database configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY missing) — the panel can't work */

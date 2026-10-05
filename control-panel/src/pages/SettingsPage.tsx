@@ -1,17 +1,37 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eraser, Save } from 'lucide-react'
 import { toast } from 'sonner'
-import { Button, Field, Input, PageHeader, Skeleton } from '../../../src/components/ui'
+import { Button, Field, Input, PageHeader, Skeleton, Tabs } from '../../../src/components/ui'
 import { platformDomain, platformName } from '../../../src/lib/supabase'
 import { PLANS } from '../../../src/platform/plans'
 import { cp, friendly } from '../api'
 import { RETENTION_KEYS, RETENTION_MIN, type BillingConfig, type RetentionKey } from '../types'
 import { dateTime, ErrorBox, Section } from '../ui'
+import { IntegrationsTab } from './settings/IntegrationsTab'
 
 type PlanId = keyof BillingConfig['plans']
 
+type SettingsTab = 'billing' | 'integrations'
+const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [{ value: 'billing', label: 'Plans & billing' }, { value: 'integrations', label: 'Integrations' }]
+
+/** Platform settings: prices and billing rules, and the platform's own accounts (Razorpay, SMS, WhatsApp, e-mail, push) */
 export function SettingsPage() {
+  const [sp, setSp] = useSearchParams()
+  const tab: SettingsTab = sp.get('tab') === 'integrations' ? 'integrations' : 'billing'
+  const tabs = <div className="mb-5"><Tabs tabs={SETTINGS_TABS} value={tab} onChange={(v) => setSp(v === 'billing' ? {} : { tab: v }, { replace: true })} /></div>
+  if (tab === 'billing') return <BillingSettings tabs={tabs} />
+  return (
+    <>
+      <PageHeader title="Platform settings" description="Your own accounts: Razorpay for hospital payments, and the shared SMS, WhatsApp, e-mail and push accounts. Status, checks, test sends and keys." />
+      {tabs}
+      <IntegrationsTab />
+    </>
+  )
+}
+
+function BillingSettings({ tabs }: { tabs: ReactNode }) {
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['cp-settings'], queryFn: () => cp.settings() })
   const [f, setF] = useState<BillingConfig | null>(null)
@@ -30,8 +50,8 @@ export function SettingsPage() {
   })
   const dirty = !!f && !!q.data && JSON.stringify(f) !== JSON.stringify(q.data.billing)
 
-  if (q.error) return <ErrorBox error={q.error} onRetry={() => q.refetch()} />
-  if (!f) return <div className="space-y-4"><Skeleton className="h-10 w-64" /><Skeleton className="h-64" /></div>
+  if (q.error) return <>{tabs}<ErrorBox error={q.error} onRetry={() => q.refetch()} /></>
+  if (!f) return <div className="space-y-4">{tabs}<Skeleton className="h-10 w-64" /><Skeleton className="h-64" /></div>
   const num = (v: number | string | null) => (v === null ? '' : String(v))
   const set = (patch: Partial<BillingConfig>) => setF({ ...f, ...patch })
   const setPlan = (id: PlanId, patch: Partial<BillingConfig['plans'][PlanId]>) => setF({ ...f, plans: { ...f.plans, [id]: { ...f.plans[id], ...patch } } })
@@ -40,6 +60,7 @@ export function SettingsPage() {
     <>
       <PageHeader title="Platform settings" description="Prices and billing rules for every hospital. Changes apply right away (existing invoices don’t change)."
         actions={<Button icon={<Save className="h-4 w-4" />} disabled={!dirty} loading={save.isPending} onClick={() => save.mutate(f)}>Save changes</Button>} />
+      {tabs}
       <div className="grid gap-6 xl:grid-cols-2">
         <Section title="Plans" subtitle="Monthly price before GST, and messages included per month on the platform’s accounts.">
           <div className="space-y-4">
@@ -92,7 +113,7 @@ export function SettingsPage() {
           </Section>
           <Section title="Brand & domain" subtitle="Set on the server (PLATFORM_NAME / PLATFORM_DOMAIN environment variables).">
             <p className="text-sm text-slate-700"><span className="font-medium">{platformName}</span> · {platformDomain}</p>
-            <p className="mt-2 text-xs text-slate-500">Shared SMS, WhatsApp, e-mail and push accounts are set up in Messaging → Shared accounts; team alerts in Alerts → Settings.</p>
+            <p className="mt-2 text-xs text-slate-500">Razorpay and the shared SMS, WhatsApp, e-mail and push accounts are in <Link className="text-brand-700 hover:underline" to="/settings?tab=integrations">Integrations</Link>; team alerts in Alerts → Settings.</p>
           </Section>
         </div>
       </div>

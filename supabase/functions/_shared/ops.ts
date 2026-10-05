@@ -92,7 +92,7 @@ export interface CheckOpts { supabaseUrl: string; serviceKey: string; anonKey?: 
 
 export async function checkSite(o: CheckOpts): Promise<Check> {
   const base: Omit<Check, 'status'> = { service: 'site', label: 'Website & apps', group: 'Platform' }
-  if (!/^https:\/\//.test(o.siteUrl ?? '')) return { ...base, status: 'off', detail: 'Set the platform address in Messaging & alerts → Settings' }
+  if (!/^https:\/\//.test(o.siteUrl ?? '')) return { ...base, status: 'off', detail: 'Set the platform address in Alerts → Settings' }
   const { r, ms, error } = await timed(o.fetch ?? fetch, `${o.siteUrl!.replace(/\/$/, '')}/healthz`)
   if (!r) return { ...base, status: 'fail', latency_ms: ms, detail: error }
   const text = (await r.text().catch(() => '')).trim().slice(0, 60)

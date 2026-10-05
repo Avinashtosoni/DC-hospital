@@ -1,33 +1,31 @@
 /**
- * Messaging (admins only): the shared SMS / WhatsApp / e-mail / push accounts, their
- * approved template IDs, test sends and every message from every hospital.
+ * Messaging (admins only): approved template IDs on the shared accounts and every message from every hospital.
+ * The accounts themselves (keys, checks, test sends) live in Platform settings → Integrations.
  */
 import { useQuery } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useSearchParams } from 'react-router-dom'
 import { PageHeader, Skeleton, Tabs } from '../../../src/components/ui'
 import { cp } from '../api'
 import { ErrorBox } from '../ui'
-import { AccountsTab } from './messaging/AccountsTab'
 import { TemplatesTab } from './messaging/TemplatesTab'
-import { TestTab } from './messaging/TestTab'
 import { DeliveryLogTab } from './messaging/DeliveryLogTab'
 
-type Tab = 'accounts' | 'templates' | 'test' | 'log'
+type Tab = 'templates' | 'log'
+const TABS: { value: Tab; label: string }[] = [{ value: 'templates', label: 'Templates' }, { value: 'log', label: 'Delivery log' }]
 
 export function MessagingPage() {
   const [sp, setSp] = useSearchParams()
-  const tabs: { value: Tab; label: string }[] = [{ value: 'accounts', label: 'Shared accounts' }, { value: 'templates', label: 'Templates' }, { value: 'test', label: 'Test send' }, { value: 'log', label: 'Delivery log' }]
-  const tab = (tabs.find((t) => t.value === sp.get('tab'))?.value ?? tabs[0].value) as Tab
-  const setup = useQuery({ queryKey: ['cp-messaging-setup'], queryFn: () => cp.messagingSetup(), enabled: tab === 'accounts' || tab === 'templates' })
+  const asked = sp.get('tab')
+  const tab = (TABS.find((t) => t.value === asked)?.value ?? 'templates') as Tab
+  const setup = useQuery({ queryKey: ['cp-messaging-setup'], queryFn: () => cp.messagingSetup(), enabled: tab === 'templates' })
+  // old links (Shared accounts / Test send) moved to Platform settings → Integrations
+  if (asked === 'accounts' || asked === 'test') return <Navigate to="/settings?tab=integrations" replace />
   return (
     <>
-      <PageHeader title="Messaging" description="Hospital Comrade’s own SMS, WhatsApp, e-mail and push accounts — used for team alerts, broadcasts and hospitals that send through the platform." />
-      <div className="mb-5"><Tabs tabs={tabs} value={tab} onChange={(v) => setSp(v === tabs[0].value ? {} : { tab: v }, { replace: true })} /></div>
-      {(tab === 'accounts' || tab === 'templates') && (
-        setup.error ? <ErrorBox error={setup.error} onRetry={() => setup.refetch()} /> : !setup.data ? <Skeleton className="h-72" />
-          : tab === 'accounts' ? <AccountsTab setup={setup.data} /> : <TemplatesTab setup={setup.data} />
-      )}
-      {tab === 'test' && <TestTab />}
+      <PageHeader title="Messaging" description="Template IDs for the shared accounts and every message from every hospital."
+        actions={<Link className="text-sm font-medium text-brand-700 hover:underline" to="/settings?tab=integrations">Accounts, keys & test sends → Integrations</Link>} />
+      <div className="mb-5"><Tabs tabs={TABS} value={tab} onChange={(v) => setSp(v === 'templates' ? {} : { tab: v }, { replace: true })} /></div>
+      {tab === 'templates' && (setup.error ? <ErrorBox error={setup.error} onRetry={() => setup.refetch()} /> : !setup.data ? <Skeleton className="h-72" /> : <TemplatesTab setup={setup.data} />)}
       {tab === 'log' && <DeliveryLogTab />}
     </>
   )

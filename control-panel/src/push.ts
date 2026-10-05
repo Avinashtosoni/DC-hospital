@@ -1,6 +1,6 @@
 /**
  * Browser push for the control-panel team (Phase 3 alerts). Firebase loads only when someone turns it on. The web
- * config comes from cp_push_config() (Messaging → Shared accounts → Browser push); tokens are saved with
+ * config comes from cp_push_config() (Platform settings → Integrations → Browser push); tokens are saved with
  * cp_register_push() and used by the ops Edge Function.
  */
 import { cp } from './api'
@@ -25,7 +25,7 @@ async function messaging(c: PushConfig) {
 /** ask permission, get this browser's token and save it for the signed-in team member */
 export async function enablePush(c: PushConfig | null): Promise<number> {
   if (!pushSupported()) throw new Error('This browser does not support push notifications')
-  if (!c?.projectId || !c.apiKey || !c.appId || !c.messagingSenderId || !c.vapidKey) throw new Error('Browser push is not set up — an admin adds the Firebase web config in Messaging → Shared accounts and turns on Push in Alerts → Settings')
+  if (!c?.projectId || !c.apiKey || !c.appId || !c.messagingSenderId || !c.vapidKey) throw new Error('Browser push is not set up — an admin adds the Firebase web config in Platform settings → Integrations and turns on Push in Alerts → Settings')
   const perm = await Notification.requestPermission()
   if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Notifications are blocked for this site — allow them in the browser’s site settings' : 'Permission was not given')
   const reg = await navigator.serviceWorker.register(`/cp-messaging-sw.js?config=${encodeURIComponent(JSON.stringify(webConfig(c)))}`, { scope: SW_SCOPE })

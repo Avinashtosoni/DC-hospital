@@ -1,13 +1,26 @@
 /**
- * The shared accounts Hospital Comrade sends through (team alerts, broadcasts, hospitals on "use Hospital Comrade's
+ * The platform's own accounts (Platform settings → Integrations): Razorpay for hospitals paying the platform, and the
+ * shared accounts Hospital Comrade sends through (team alerts, broadcasts, hospitals on "use Hospital Comrade's
  * account"). Every field is a PLATFORM_* name read by supabase/functions/_shared/platform.ts; `secret` ones are saved
  * write-only (Vault) and never shown again.
  */
 export interface AccountField { key: string; label: string; placeholder?: string; hint?: string; secret?: boolean; multiline?: boolean; upper?: boolean }
 export interface AccountProvider { label: string; fields: AccountField[]; help?: string }
-export interface AccountSpec { channel: 'sms' | 'whatsapp' | 'email' | 'push'; title: string; blurb: string; providerKey?: string; common?: AccountField[]; providers: Record<string, AccountProvider> }
+export type IntegrationId = 'razorpay' | 'sms' | 'whatsapp' | 'email' | 'push'
+/** providerKey: the setting that picks the provider; without one the single provider is always used and `primaryKey` says "set up" */
+export interface AccountSpec { channel: IntegrationId; title: string; blurb: string; providerKey?: string; primaryKey?: string; common?: AccountField[]; providers: Record<string, AccountProvider> }
 
 export const ACCOUNTS: AccountSpec[] = [
+  {
+    channel: 'razorpay', title: 'Razorpay', blurb: 'Hospitals pay their plan and wallet top-ups online. Money goes to your Razorpay account.', primaryKey: 'PLATFORM_RAZORPAY_KEY_ID',
+    providers: {
+      razorpay: { label: 'Razorpay', help: 'Razorpay Dashboard → Account & Settings → API keys. Use rzp_test_ keys to try it, rzp_live_ keys to collect real money.', fields: [
+        { key: 'PLATFORM_RAZORPAY_KEY_ID', label: 'Key ID', placeholder: 'rzp_live_…', hint: 'Public — shown to the browser at checkout' },
+        { key: 'PLATFORM_RAZORPAY_KEY_SECRET', label: 'Key secret', secret: true, placeholder: 'From the same screen as the key ID' },
+        { key: 'PLATFORM_RAZORPAY_WEBHOOK_SECRET', label: 'Webhook secret', secret: true, placeholder: 'The secret you type when adding the webhook', hint: 'Confirms payments even when the hospital closes the browser early' },
+      ] },
+    },
+  },
   {
     channel: 'sms', title: 'SMS', blurb: 'DLT-registered SMS for OTPs and reminders on the shared account.', providerKey: 'PLATFORM_SMS_PROVIDER',
     common: [
@@ -56,7 +69,7 @@ export const ACCOUNTS: AccountSpec[] = [
     },
   },
   {
-    channel: 'push', title: 'Browser push (Firebase)', blurb: 'Notifications to the control-panel team’s browsers. The web config is public; the service account is secret.',
+    channel: 'push', title: 'Browser push (Firebase)', primaryKey: 'PLATFORM_FCM_PROJECT_ID', blurb: 'Notifications to the control-panel team’s browsers. The web config is public; the service account is secret.',
     providers: {
       firebase: { label: 'Firebase Cloud Messaging', help: 'Firebase console → Project settings → General (web app) and Cloud Messaging → Web push certificates.', fields: [
         { key: 'PLATFORM_FCM_PROJECT_ID', label: 'Project ID', placeholder: 'hospital-comrade' },
@@ -72,7 +85,18 @@ export const ACCOUNTS: AccountSpec[] = [
 
 /** the provider currently picked for a card ('' = not set up) */
 export const providerOf = (spec: AccountSpec, settings: Record<string, string>) =>
-  spec.providerKey ? (settings[spec.providerKey] ?? '').toLowerCase() : 'firebase'
+  spec.providerKey ? (settings[spec.providerKey] ?? '').toLowerCase() : Object.keys(spec.providers)[0]
+
+/** saved in the panel? (a provider picked, or the single provider's main field filled) */
+export const isSetUp = (spec: AccountSpec, settings: Record<string, string>) =>
+  spec.providerKey ? !!providerOf(spec, settings) : !!(settings[spec.primaryKey ?? ''] ?? '').trim()
+
+/** every key name a card can use (for "saved in the panel / Edge secret") */
+export const keysOf = (spec: AccountSpec) => [...new Set([...(spec.providerKey ? [spec.providerKey] : []), ...(spec.common ?? []).map((f) => f.key),
+  ...Object.values(spec.providers).flatMap((p) => p.fields.map((f) => f.key))])]
+
+/** Razorpay key mode from its prefix */
+export const keyMode = (keyId: string) => (keyId.startsWith('rzp_live_') ? 'live' : keyId.startsWith('rzp_test_') ? 'test' : null)
 
 /** fields shown for a provider */
 export const fieldsFor = (spec: AccountSpec, provider: string): AccountField[] =>
@@ -85,7 +109,7 @@ export const fieldsFor = (spec: AccountSpec, provider: string): AccountField[] =
 export function diffAccount(spec: AccountSpec, saved: Record<string, string>, draft: Record<string, string>, keys: Record<string, string>, remove: string[]) {
   const settings: Record<string, string> = {}
   const secrets: Record<string, string> = {}
-  const provider = spec.providerKey ? (draft[spec.providerKey] ?? '') : 'firebase'
+  const provider = spec.providerKey ? (draft[spec.providerKey] ?? '') : Object.keys(spec.providers)[0]
   if (spec.providerKey && (saved[spec.providerKey] ?? '') !== provider) settings[spec.providerKey] = provider
   for (const f of fieldsFor(spec, provider)) {
     if (f.secret) {

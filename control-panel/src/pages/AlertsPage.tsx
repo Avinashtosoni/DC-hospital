@@ -147,7 +147,7 @@ function PushCard({ devices }: { devices: number }) {
   const [here, setHere] = useState(() => !!savedPushToken() && pushPermission() === 'granted')
   const run = useMutation({
     mutationFn: () => (here ? disablePush(cfg.data ?? null) : enablePush(cfg.data ?? null)),
-    onSuccess: () => { setHere(!here); qc.invalidateQueries({ queryKey: ['cp-alert-prefs'] }); qc.invalidateQueries({ queryKey: ['cp-push-config'] }); toast.success(here ? 'Notifications turned off on this browser' : 'Notifications on — send yourself a test from Messaging → Test send') },
+    onSuccess: () => { setHere(!here); qc.invalidateQueries({ queryKey: ['cp-alert-prefs'] }); qc.invalidateQueries({ queryKey: ['cp-push-config'] }); toast.success(here ? 'Notifications turned off on this browser' : 'Notifications on — send yourself a test from Platform settings → Integrations') },
     onError: (e) => toast.error(friendly(e)),
   })
   return (
@@ -155,7 +155,7 @@ function PushCard({ devices }: { devices: number }) {
       <h3 className="flex items-center gap-2 font-display text-sm font-semibold text-brand-950"><Smartphone className="h-4 w-4" />Browser push</h3>
       <p className="mb-3 text-xs text-slate-500">{devices ? `On for ${devices} browser${devices > 1 ? 's' : ''} of yours.` : 'Not on for any of your browsers yet.'}</p>
       {!pushSupported() ? <p className="text-xs text-amber-700">This browser does not support push notifications.</p>
-        : cfg.isSuccess && !cfg.data ? <p className="text-xs text-amber-700">Not set up yet — an admin adds the Firebase web config in Messaging → Shared accounts.</p>
+        : cfg.isSuccess && !cfg.data ? <p className="text-xs text-amber-700">Not set up yet — an admin adds the Firebase web config in Platform settings → Integrations.</p>
           : <Button size="sm" variant={here ? 'outline' : 'primary'} loading={run.isPending} icon={here ? <BellOff className="h-3.5 w-3.5" /> : <BellRing className="h-3.5 w-3.5" />} onClick={() => run.mutate()}>{here ? 'Turn off on this browser' : 'Turn on for this browser'}</Button>}
     </Card>
   )
