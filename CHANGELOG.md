@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased: control panel messaging, alerts, broadcasts and live health
+
+- **Messaging page:**
+  - Shared SMS, WhatsApp, e-mail and Firebase push accounts, with keys kept in Supabase Vault. Keys are write-only, saving one needs your password, and every change is audited.
+  - Template IDs per message, test sends, and a cross-hospital delivery log with Retry.
+- **Broadcasts:**
+  - Channels: banner, e-mail, WhatsApp, SMS and push.
+  - Audience: by plan, status, a hand-picked list of hospitals, and role.
+  - Preview with recipient count and cost, schedule option, and a delivery report. The platform pays.
+- **Team alerts:**
+  - Header bell and an Alerts page.
+  - Admin switches per channel and per event, with severity and limits.
+  - Personal choices per member (bell, e-mail, browser push, WhatsApp), plus a separate control-panel push service worker.
+- **Live health checks:** every 5 minutes, covering site, Auth, Storage, Edge Functions, provider keys, database size, queue, failures and scheduler. Shows uptime, latency, failure history and Check now. Alerts fire when something goes down or recovers.
+- **New `ops` Edge Function.** `notify` now reads shared-account keys saved in the control panel (Edge secrets are the fallback).
+- **To upgrade:**
+  - Re-run `supabase/upgrade-2026-10.sql`.
+  - Run `supabase functions deploy notify ops`.
+  - Enable the `supabase_vault` extension.
+
 ## Unreleased — About us page redesign
 
 - New layout: split hero with buttons and an illustrated card (or your picture), numbers strip, story with a sticky heading and quote, icon mission/vision cards, "who we build for", a comparison table, numbered values, a vertical "how we work" timeline, a commitments band, company details and a "work with us" card.

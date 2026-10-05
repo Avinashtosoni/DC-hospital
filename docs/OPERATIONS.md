@@ -87,6 +87,48 @@ per hospital, the latest delivery errors, payments in the last 7 days, database 
 
 The site itself: `/healthz` returns `ok` (Docker health check).
 
+### Live checks, alerts, broadcasts and shared accounts
+
+**Setup (once):**
+
+1. Run `supabase/upgrade-2026-10.sql` again in the SQL editor. It is safe to re-run, and it adds `cp_notify`.
+2. Run `npx supabase functions deploy notify ops`.
+3. Enable **Database → Extensions → `supabase_vault`** (encrypts the API keys), plus `pg_cron` and `pg_net` (the scheduler).
+4. Make sure the hospital's scheduler is on (Settings → Notifications → automatic delivery). The ops tick runs inside the same
+   every-minute job (`notify_cron_flush` → `ops_cron_tick`). It calls the `ops` function next to `notify`.
+5. In the control panel, open **Alerts → Settings** and set the **Platform address** (`https://hospital.digitalcomrade.in`).
+
+**Control panel pages:**
+
+- **Messaging → Shared accounts** (admin): pick the SMS, WhatsApp, e-mail and Firebase push providers and save their keys.
+  - Keys are write-only: you only ever see `••••1234` plus who saved it and when. Changing a key asks for your password and is audited (`messaging:setup`).
+  - A value saved here wins over the Edge secret with the same `PLATFORM_*` name.
+  - **Templates**: approved WhatsApp template names, their parameter order and DLT IDs, per message.
+  - **Test send**: sends one real message.
+  - **Delivery log** (admin + support): every message from every hospital and from the platform, with **Retry** for failed ones. One-time codes and tests can't be retried.
+- **Broadcasts** (admin): in-app banner, e-mail, WhatsApp, SMS and push to all hospitals, or by plan, status or a hand-picked list, sent to the roles you choose.
+  - The preview shows the recipient count and estimated cost. You can send now or schedule.
+  - The delivery report is per channel.
+  - Paid channels go out on the shared accounts at the platform's cost. A hospital's wallet is never charged.
+- **Alerts** (bell in the header): sign-ups, call-back requests, payments paid or failed, trial ending, low wallet, incidents, a service down or recovered, and limits crossed.
+  - Admins switch channels (bell, e-mail, browser push, WhatsApp) and events on or off, and set severity and limits.
+  - Each member picks their own channels in **My notifications**, adds their own WhatsApp number, and turns on push per browser.
+  - Repeats are deduplicated, with a cooldown.
+- **System health → Live checks**: every 5 minutes the checks cover:
+  - the site `/healthz`
+  - Auth and Storage
+  - every Edge Function (with latency)
+  - the shared provider keys (no message is sent)
+  - database size against the limit, queue backlog, delivery failures and the scheduler
+
+  The page shows 24-hour and 7-day uptime, an hourly strip, latency, failure history and a **Check now** button.
+  A state change raises an alert. History is kept for 30 days.
+
+**Troubleshooting:**
+
+- "Last run … looks stopped": the scheduler is off, or `ops` isn't deployed. Check `select public.ops_call('{"health":true}')` and look at the Edge Function logs.
+- Push "not set up": either the Firebase web config is missing in Messaging → Shared accounts, or Push is switched off in Alerts → Settings.
+
 ## 7.6 Retention
 
 The nightly job **`dch-retention`** (03:00 IST) runs `run_retention()`; replaces the old weekly

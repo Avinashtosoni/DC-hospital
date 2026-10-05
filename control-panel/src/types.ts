@@ -276,3 +276,52 @@ export interface CpPost {
   status: 'draft' | 'published'; published_at: string | null; seo: { title?: string; description?: string }; created_at: string; updated_at: string; updated_by: string | null
 }
 export type PostSave = Omit<CpPost, 'id' | 'created_at' | 'updated_at' | 'updated_by'> & { id?: string }
+
+// ------------------------------------------------------------------ messaging & alerts, broadcasts, live health (cp_notify.sql)
+export type AlertChannel = 'bell' | 'email' | 'push' | 'whatsapp'
+export type AlertSeverity = 'info' | 'warning' | 'critical'
+export interface MessagingSetup {
+  /** PLATFORM_* plain settings (provider names, sender IDs, Firebase web config) */
+  settings: Record<string, string>
+  /** saved API keys — never the value, only the last 4 characters */
+  secrets: { key: string; hint: string; updated_at: string; updated_by_name: string | null }[]
+  templates: Record<string, PlatformTemplateIds>
+  vault: boolean
+}
+export interface PlatformTemplateIds { waTemplate?: string; waParams?: string; smsTemplateId?: string }
+export interface CpAlert { id: string; created_at: string; event: string; severity: AlertSeverity; title: string; body: string; link: string | null; read_at: string | null }
+export interface CpAlertPrefs {
+  channels: Record<AlertChannel, boolean>
+  events: { key: string; label: string; group: string; severity: AlertSeverity; roles: string[]; enabled: boolean; mine: AlertChannel[] }[]
+  whatsapp: string | null
+  devices: number
+}
+export interface OpsThresholds { queueBacklog: number; failurePct: number; dbPct: number; dbLimitMb: number; latencyMs: number; walletLowPaise: number; trialDays: number }
+export interface OpsSettings {
+  channels: Record<AlertChannel, boolean>
+  events: Record<string, { enabled: boolean; severity: AlertSeverity }>
+  thresholds: OpsThresholds
+  health: { enabled: boolean; siteUrl: string }
+  catalog: { key: string; label: string; group: string; severity: AlertSeverity; roles: string[] }[]
+}
+export type BroadcastChannel = 'inapp' | 'email' | 'sms' | 'whatsapp' | 'push'
+export interface BroadcastAudience { hospitals: string[] | null; plans: string[]; statuses: string[]; roles: string[] }
+export interface BroadcastSave { id?: string; title: string; body: string; link: string; level: AlertSeverity; channels: BroadcastChannel[]; audience: BroadcastAudience }
+export interface Broadcast extends Omit<BroadcastSave, 'id' | 'link'> {
+  id: string; link: string | null; status: 'draft' | 'scheduled' | 'sent' | 'cancelled'; scheduled_at: string | null; sent_at: string | null
+  stats: Partial<Record<BroadcastChannel, number>>; created_by_name: string | null; created_at: string
+  delivery: Partial<Record<BroadcastChannel, { sent: number; failed: number; pending: number }>>
+}
+export interface BroadcastPreview { hospitals: number; people: number; email: number; sms: number; whatsapp: number; push: number; sample: string[] }
+export interface DeliveryRow {
+  source: 'hospital' | 'platform'; id: string; created_at: string; hospital_id: string | null; hospital: string | null; kind: string; channel: Channel | 'push'
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped'; attempts: number; error: string | null; provider_ref: string | null; recipient: string; subject: string | null; sent_at: string | null
+}
+export interface DeliveryFilter { status?: string; source?: string; channel?: string; hospital?: string; q?: string }
+export type HealthStatus = 'ok' | 'warn' | 'fail' | 'off'
+export interface LiveService {
+  service: string; label: string; group: string | null; status: HealthStatus; since: string; last_checked_at: string; latency_ms: number | null; detail: string | null
+  uptime24: number | null; uptime7d: number | null; hours: { h: string; ok: number; n: number; ms: number | null }[]
+}
+export interface LiveHealth { last_run: string | null; settings: { enabled: boolean; siteUrl: string }; services: LiveService[]; failures: { at: string; service: string; label: string; status: HealthStatus; detail: string | null }[] }
+export interface PushConfig { apiKey: string; projectId: string; messagingSenderId: string; appId: string; vapidKey: string; devices: number }

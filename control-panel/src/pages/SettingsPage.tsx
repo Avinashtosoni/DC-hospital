@@ -92,7 +92,7 @@ export function SettingsPage() {
           </Section>
           <Section title="Brand & domain" subtitle="Set on the server (PLATFORM_NAME / PLATFORM_DOMAIN environment variables).">
             <p className="text-sm text-slate-700"><span className="font-medium">{platformName}</span> · {platformDomain}</p>
-            <p className="mt-2 text-xs text-slate-500">Platform messaging accounts (SMS, WhatsApp, e-mail) are set as Edge Function secrets — see docs/MULTI_TENANCY.md.</p>
+            <p className="mt-2 text-xs text-slate-500">Shared SMS, WhatsApp, e-mail and push accounts are set up in Messaging → Shared accounts; team alerts in Alerts → Settings.</p>
           </Section>
         </div>
       </div>

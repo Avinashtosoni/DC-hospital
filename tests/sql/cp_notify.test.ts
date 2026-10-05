@@ -103,7 +103,7 @@ describe('alerts', () => {
     await fails(call(P_SUPPORT, 'cp_save_alert_prefs', [{ events: { lead_new: ['bell'] } }], ['jsonb']).then(() => call(P_SUPPORT, 'cp_save_alert_prefs', [{ events: { nope: ['bell'] } }], ['jsonb'])), /Unknown alert/)
     await fails(call(P_ADMIN, 'cp_save_alert_prefs', [{ events: { lead_new: ['fax'] } }], ['jsonb']), /Unknown channel/)
     await fails(call(P_ADMIN, 'cp_save_alert_prefs', [{ whatsapp: '123' }], ['jsonb']), /10-digit/)
-    let prefs = await call(P_ADMIN, 'cp_save_alert_prefs', [{ events: { lead_new: ['bell', 'whatsapp', 'push'] }, whatsapp: '+91 99999 88888' }], ['jsonb'])
+    const prefs = await call(P_ADMIN, 'cp_save_alert_prefs', [{ events: { lead_new: ['bell', 'whatsapp', 'push'] }, whatsapp: '+91 99999 88888' }], ['jsonb'])
     expect(prefs.whatsapp).toBe('9999988888')
     expect(prefs.events.find((e: any) => e.key === 'lead_new').mine).toEqual(['bell', 'whatsapp', 'push'])
     // support sees only its events

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Globe, Inbox, LogOut, Megaphone, Menu, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
+import { Activity, Bell, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Globe, Inbox, LogOut, Megaphone, Menu, MessageSquare, Radio, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
 import { Avatar, Badge, Spinner } from '../../src/components/ui'
 import { cn } from '../../src/lib/utils'
 import { ErrorBoundary } from '../../src/components/ErrorBoundary'
@@ -23,6 +23,10 @@ import { HealthPage } from './pages/HealthPage'
 import { IncidentsPage } from './pages/IncidentsPage'
 import { AnnouncementsPage } from './pages/AnnouncementsPage'
 import { WebsitePage } from './pages/WebsitePage'
+import { MessagingPage } from './pages/MessagingPage'
+import { BroadcastsPage } from './pages/BroadcastsPage'
+import { AlertsPage } from './pages/AlertsPage'
+import { AlertBell } from './AlertBell'
 
 const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }[] = [
   { to: '/', label: 'Overview', icon: <Gauge className="h-4 w-4" />, roles: ['admin', 'support', 'finance'] },
@@ -32,6 +36,9 @@ const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }
   { to: '/leads', label: 'Leads', icon: <Inbox className="h-4 w-4" />, roles: ['admin'] },
   { to: '/health', label: 'System health', icon: <Activity className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/website', label: 'Website', icon: <Globe className="h-4 w-4" />, roles: ['admin', 'support'] },
+  { to: '/messaging', label: 'Messaging', icon: <MessageSquare className="h-4 w-4" />, roles: ['admin', 'support'] },
+  { to: '/broadcasts', label: 'Broadcasts', icon: <Radio className="h-4 w-4" />, roles: ['admin'] },
+  { to: '/alerts', label: 'Alerts', icon: <Bell className="h-4 w-4" />, roles: ['admin', 'support', 'finance'] },
   { to: '/announcements', label: 'Announcements', icon: <Megaphone className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/incidents', label: 'Incidents', icon: <ShieldAlert className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/team', label: 'Team', icon: <Users className="h-4 w-4" />, roles: ['admin'] },
@@ -61,6 +68,9 @@ export function App() {
           <Route path="/leads" element={<Only roles={['admin']}><LeadsPage /></Only>} />
           <Route path="/health" element={<Only roles={['admin', 'support']}><HealthPage /></Only>} />
           <Route path="/website" element={<Only roles={['admin', 'support']}><WebsitePage /></Only>} />
+          <Route path="/messaging" element={<Only roles={['admin', 'support']}><MessagingPage /></Only>} />
+          <Route path="/broadcasts" element={<Only roles={['admin']}><BroadcastsPage /></Only>} />
+          <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/announcements" element={<Only roles={['admin', 'support']}><AnnouncementsPage /></Only>} />
           <Route path="/incidents" element={<Only roles={['admin', 'support']}><IncidentsPage /></Only>} />
           <Route path="/team" element={<Only roles={['admin']}><TeamPage /></Only>} />
@@ -129,6 +139,7 @@ function Shell({ children }: { children: ReactNode }) {
         <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="rounded-lg p-2 text-slate-600 hover:bg-brand-50 lg:hidden"><Menu className="h-5 w-5" /></button>
         <p className="font-display text-sm font-semibold text-brand-950 lg:hidden">{platformName}</p>
         <div className="ml-auto flex items-center gap-2">
+          <AlertBell />
           <Badge tone={ROLE_TONE[me.role]}>{ROLE_LABEL[me.role]}</Badge>
         </div>
       </header>

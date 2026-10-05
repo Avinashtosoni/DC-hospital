@@ -10,6 +10,7 @@ import { cn } from '../../../src/lib/utils'
 import { cp } from '../api'
 import { date, dateTime, ErrorBox, relDays, Section, useMe } from '../ui'
 import { LaunchChecklist } from './LaunchChecklist'
+import { LiveChecks } from './health/LiveChecks'
 
 const mb = (b: number | null | undefined) => (b == null ? '—' : b > 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${(b / 1024 ** 2).toFixed(1)} MB`)
 const minsAgo = (v: string | null) => (v ? Math.round((Date.now() - Date.parse(v)) / 60_000) : null)
@@ -50,6 +51,7 @@ export function HealthPage() {
         actions={<Button variant="outline" icon={<RefreshCw className={cn('h-4 w-4', q.isFetching && 'animate-spin')} />} onClick={() => q.refetch()}>Refresh</Button>} />
       {!h ? <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-20 rounded-2xl" />)}</div> : (
         <div className="space-y-6">
+          <LiveChecks />
           {me.role === 'admin' && <LaunchChecklist />}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Stat label="Scheduler" icon={<Timer className="h-5 w-5" />} tone={!h.extensions.pg_cron || late.length ? 'red' : 'green'}

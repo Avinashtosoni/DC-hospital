@@ -8,6 +8,8 @@ import type {
   CpSignup, SignupSettings, LaunchReport, HospitalProfile, HospitalUsers, UserAction, HospitalData, BrowseKind, BrowsePage,
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
   SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
+  MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
+  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
 
@@ -82,6 +84,32 @@ export interface CpApi {
   /** re-checks the admin's password, starts the session (impersonate Edge Function) and returns the address to open */
   impersonate(userId: string, reason: string, password: string): Promise<{ url: string; expires_at: string; email: string }>
   impersonations(): Promise<ImpersonationRow[]>
+  // messaging & alerts, broadcasts, live health (cp_notify.sql + the ops Edge Function)
+  messagingSetup(): Promise<MessagingSetup>
+  /** API keys need the admin's password again (the database wants a sign-in from the last 10 minutes) */
+  saveMessagingSetup(settings: Record<string, string>, secrets: Record<string, string>, password?: string): Promise<MessagingSetup>
+  saveTemplates(t: Record<string, PlatformTemplateIds>): Promise<Record<string, PlatformTemplateIds>>
+  testMessage(channel: 'sms' | 'whatsapp' | 'email' | 'push', to: string): Promise<{ ok: boolean; message: string }>
+  /** the notify function's view of the shared accounts — proves which keys the Edge Functions can see */
+  platformStatus(): Promise<{ platform: Record<string, string | null> }>
+  deliveryLog(f: DeliveryFilter): Promise<DeliveryRow[]>
+  retryMessage(source: 'hospital' | 'platform', id: string): Promise<void>
+  alerts(unreadOnly?: boolean, limit?: number): Promise<{ unread: number; items: CpAlert[] }>
+  readAlerts(ids?: string[]): Promise<number>
+  alertPrefs(): Promise<CpAlertPrefs>
+  saveAlertPrefs(p: { events?: Record<string, AlertChannel[]>; whatsapp?: string | null }): Promise<CpAlertPrefs>
+  opsSettings(): Promise<OpsSettings>
+  saveOpsSettings(p: Partial<Omit<OpsSettings, 'catalog'>>): Promise<OpsSettings>
+  pushConfig(): Promise<PushConfig | null>
+  registerPush(token: string): Promise<number>
+  unregisterPush(token?: string): Promise<number>
+  broadcasts(): Promise<Broadcast[]>
+  broadcastPreview(a: BroadcastAudience, channels: BroadcastChannel[]): Promise<BroadcastPreview>
+  saveBroadcast(b: BroadcastSave): Promise<Broadcast>
+  sendBroadcast(id: string, at?: string | null): Promise<Broadcast>
+  cancelBroadcast(id: string): Promise<Broadcast | null>
+  liveHealth(): Promise<LiveHealth>
+  checkNow(): Promise<unknown>
 }
 
 /** Postgres / PostgREST error → a sentence for people */
@@ -113,7 +141,7 @@ async function invoke<T>(name: string, body: Record<string, unknown>, headers?: 
   const { data, error } = await supabase!.functions.invoke(name, { body, headers })
   if (error) {
     let msg = error.message
-    try { const j = await (error as { context?: Response }).context?.json(); if (j?.error) msg = j.error } catch { /* not JSON */ }
+    try { const j = await (error as { context?: Response }).context?.json(); if (j?.error || j?.message) msg = j.error || j.message } catch { /* not JSON */ }
     if (/Failed to send a request|not found|404/i.test(msg)) msg = `The "${name}" Edge Function is not deployed yet (supabase functions deploy ${name}).`
     throw new Error(msg)
   }
@@ -218,6 +246,35 @@ const db: CpApi = {
     return { url: `${location.origin}/?hospital=${encodeURIComponent(r.slug)}#imp=${hand}`, expires_at: r.expires_at, email: r.email }
   },
   impersonations: () => rpc('cp_impersonations', { p_limit: 100 }),
+  messagingSetup: () => rpc('cp_messaging_setup'),
+  async saveMessagingSetup(settings, secrets, password) {
+    if (Object.keys(secrets).length) {
+      if (!password) throw new Error('Confirm your password to change API keys.')
+      await reauth(password)
+    }
+    return rpc('cp_save_messaging_setup', { p_settings: settings, p_secrets: secrets })
+  },
+  saveTemplates: (t) => rpc('cp_save_platform_templates', { p_templates: t }),
+  testMessage: (channel, to) => invoke('ops', { test: { channel, to } }),
+  platformStatus: () => invoke('notify', { ping: true }),
+  deliveryLog: (f) => rpc('cp_delivery_log', { p: { ...f, limit: 200 } }),
+  async retryMessage(source, id) { await rpc('cp_retry_message', { p_source: source, p_id: id }) },
+  alerts: (unreadOnly = false, limit = 30) => rpc('cp_alerts', { p_limit: limit, p_unread_only: unreadOnly }),
+  readAlerts: (ids) => rpc('cp_alerts_read', { p_ids: ids?.length ? ids : null }),
+  alertPrefs: () => rpc('cp_alert_prefs'),
+  saveAlertPrefs: (p) => rpc('cp_save_alert_prefs', { p }),
+  opsSettings: () => rpc('cp_ops_settings'),
+  saveOpsSettings: (p) => rpc('cp_save_ops_settings', { p }),
+  pushConfig: () => rpc('cp_push_config'),
+  registerPush: (token) => rpc('cp_register_push', { p_token: token, p_user_agent: navigator.userAgent.slice(0, 300) }),
+  unregisterPush: (token) => rpc('cp_unregister_push', { p_token: token ?? null }),
+  broadcasts: () => rpc('cp_broadcasts', { p_limit: 100 }),
+  broadcastPreview: (a, channels) => rpc('cp_broadcast_preview', { p_audience: a, p_channels: channels }),
+  saveBroadcast: (b) => rpc('cp_save_broadcast', { p: b }),
+  sendBroadcast: (id, at) => rpc('cp_send_broadcast', { p_id: id, p_at: at ?? null }),
+  cancelBroadcast: (id) => rpc('cp_cancel_broadcast', { p_id: id }),
+  liveHealth: () => rpc('cp_health_live'),
+  checkNow: () => invoke('ops', { health: true }),
 }
 
 /** no database configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY missing) — the panel can't work */
