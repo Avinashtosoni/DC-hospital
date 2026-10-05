@@ -5,7 +5,8 @@ import { describe, expect, test, vi } from 'vitest'
 vi.mock('../src/lib/supabase', () => ({ supabase: null, platformName: 'Hospital Comrade', platformDomain: 'hospital.digitalcomrade.in' }))
 import { ACCOUNTS, diffAccount, fieldsFor, providerOf } from '../control-panel/src/pages/messaging/accounts'
 import { broadcastCost } from '../control-panel/src/pages/BroadcastsPage'
-import { hourCells, overall } from '../control-panel/src/pages/health/LiveChecks'
+import { dayCells, hourCells, overall } from '../control-panel/src/pages/health/LiveChecks'
+import { validTo } from '../control-panel/src/pages/messaging/TestTab'
 import { canRetry } from '../control-panel/src/pages/messaging/DeliveryLogTab'
 import { TEMPLATE_EVENTS } from '../control-panel/src/pages/messaging/TemplatesTab'
 
@@ -73,5 +74,23 @@ describe('live health', () => {
     expect(cells[23]).toMatchObject({ pct: 50, ms: 300 })
     expect(cells[22].pct).toBeNull()
     expect(cells[21]).toMatchObject({ pct: 100, ms: 200 })
+  })
+  test('7 daily cells on India dates, oldest first', () => {
+    const now = Date.parse('2026-10-05T20:00:00Z')   // 6 Oct 01:30 IST
+    const cells = dayCells([{ d: '2026-10-06', ok: 280, n: 288, ms: 210 }, { d: '2026-10-01', ok: 0, n: 288, ms: null }], now)
+    expect(cells.map((c) => c.t)).toEqual(['2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06'])
+    expect(cells[6]).toMatchObject({ pct: 97, ms: 210 })
+    expect(cells[1].pct).toBe(0)
+    expect(cells[0].pct).toBeNull()
+  })
+})
+
+describe('test send', () => {
+  test('recipient checks per channel', () => {
+    expect(validTo('email', ' a@b.in ')).toBe(true)
+    expect(validTo('email', 'nope')).toBe(false)
+    expect(validTo('sms', '+91 98765 43210')).toBe(true)
+    expect(validTo('whatsapp', '98765')).toBe(false)
+    expect(validTo('push', '')).toBe(true)
   })
 })

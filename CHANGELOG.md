@@ -14,10 +14,13 @@
   - Admin switches per channel and per event, with severity and limits.
   - Personal choices per member (bell, e-mail, browser push, WhatsApp), plus a separate control-panel push service worker.
 - **Live health checks:** every 5 minutes, covering site, Auth, Storage, Edge Functions, provider keys, database size, queue, failures and scheduler. Shows uptime, latency, failure history and Check now. Alerts fire when something goes down or recovers.
+- **More health checks:** Razorpay webhook last seen (and rejected signatures), database connections, file storage used, hospital domain HTTPS and certificate expiry, and MSG91 / Fast2SMS key checks. The live checks have a 24 hours / 7 days toggle.
+- **Own alerts** for "Scheduled job late" and "Message failures spiking", each switchable on its own. New limits: connections, storage, webhook hours and SSL days.
+- Test send has one card and button per channel. Messaging (including the delivery log) is admin-only.
 - **New `ops` Edge Function.** `notify` now reads shared-account keys saved in the control panel (Edge secrets are the fallback).
 - **To upgrade:**
   - Re-run `supabase/upgrade-2026-10.sql`.
-  - Run `supabase functions deploy notify ops`.
+  - Run `supabase functions deploy notify ops` and `supabase functions deploy billing --no-verify-jwt`.
   - Enable the `supabase_vault` extension.
 
 ## Unreleased — About us page redesign

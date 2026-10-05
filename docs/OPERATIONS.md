@@ -92,7 +92,7 @@ The site itself: `/healthz` returns `ok` (Docker health check).
 **Setup (once):**
 
 1. Run `supabase/upgrade-2026-10.sql` again in the SQL editor. It is safe to re-run, and it adds `cp_notify`.
-2. Run `npx supabase functions deploy notify ops`.
+2. Run `npx supabase functions deploy notify ops` and `npx supabase functions deploy billing --no-verify-jwt` (billing now records when the Razorpay webhook was last seen).
 3. Enable **Database → Extensions → `supabase_vault`** (encrypts the API keys), plus `pg_cron` and `pg_net` (the scheduler).
 4. Make sure the hospital's scheduler is on (Settings → Notifications → automatic delivery). The ops tick runs inside the same
    every-minute job (`notify_cron_flush` → `ops_cron_tick`). It calls the `ops` function next to `notify`.
@@ -105,7 +105,7 @@ The site itself: `/healthz` returns `ok` (Docker health check).
   - A value saved here wins over the Edge secret with the same `PLATFORM_*` name.
   - **Templates**: approved WhatsApp template names, their parameter order and DLT IDs, per message.
   - **Test send**: sends one real message.
-  - **Delivery log** (admin + support): every message from every hospital and from the platform, with **Retry** for failed ones. One-time codes and tests can't be retried.
+  - **Delivery log** (admins only): every message from every hospital and from the platform, with **Retry** for failed ones. One-time codes and tests can't be retried.
 - **Broadcasts** (admin): in-app banner, e-mail, WhatsApp, SMS and push to all hospitals, or by plan, status or a hand-picked list, sent to the roles you choose.
   - The preview shows the recipient count and estimated cost. You can send now or schedule.
   - The delivery report is per channel.
@@ -118,11 +118,14 @@ The site itself: `/healthz` returns `ok` (Docker health check).
   - the site `/healthz`
   - Auth and Storage
   - every Edge Function (with latency)
-  - the shared provider keys (no message is sent)
+  - the shared provider keys (no message is sent): Resend, SendGrid, Meta, OpenWA, Firebase, MSG91 (balance API) and Fast2SMS (wallet API, also shows the balance). AiSensy has no public key-check API, so it shows "configured"
+  - database connections against `max_connections`, and file storage used against your plan limit (set **File storage limit** in Alerts → Settings; Supabase Pro = 102400 MB)
+  - the Razorpay webhook: when it was last seen, with a warning if online payments came in without a webhook or if signatures are being rejected
+  - hospital custom domains: HTTPS works, and for Cloudflare domains the certificate status and expiry (needs `CF_API_TOKEN` and `CF_ZONE_ID` on the ops function too)
   - database size against the limit, queue backlog, delivery failures and the scheduler
 
-  The page shows 24-hour and 7-day uptime, an hourly strip, latency, failure history and a **Check now** button.
-  A state change raises an alert. History is kept for 30 days.
+  The page shows 24-hour and 7-day uptime, an hourly or daily strip (24 hours / 7 days toggle), latency, failure history and a **Check now** button.
+  A state change raises an alert: "Scheduled job late" for the scheduler, "Message failures spiking" for delivery, and "Service down" / "Limit crossed" for the rest. History is kept for 30 days.
 
 **Troubleshooting:**
 

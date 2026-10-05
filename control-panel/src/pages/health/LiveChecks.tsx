@@ -36,11 +36,22 @@ export function hourCells(hours: LiveService['hours'], now = Date.now()) {
   })
 }
 
+/** 7 daily cells (India dates), oldest first */
+export function dayCells(days: LiveService['days'], now = Date.now()) {
+  const by = new Map((days ?? []).map((d) => [String(d.d).slice(0, 10), d]))
+  return Array.from({ length: 7 }, (_, i) => {
+    const key = new Date(now + 330 * 60_000 - (6 - i) * 86_400_000).toISOString().slice(0, 10)
+    const d = by.get(key)
+    return { t: key, pct: d && d.n ? Math.round((100 * d.ok) / d.n) : null, ms: d?.ms ?? null }
+  })
+}
+
 function Spark({ values }: { values: (number | null)[] }) {
+  const last = Math.max(values.length - 1, 1)
   const pts = values.map((v, i) => [i, v] as const).filter((p): p is readonly [number, number] => p[1] != null)
   if (pts.length < 2) return <span className="text-[11px] text-slate-400">—</span>
   const max = Math.max(...pts.map((p) => p[1]), 1)
-  const d = pts.map(([i, v], k) => `${k ? 'L' : 'M'}${(i / 23) * 96 + 2},${22 - (v / max) * 18}`).join(' ')
+  const d = pts.map(([i, v], k) => `${k ? 'L' : 'M'}${(i / last) * 96 + 2},${22 - (v / max) * 18}`).join(' ')
   return <svg viewBox="0 0 100 24" className="h-6 w-24" aria-hidden><path d={d} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-brand-500" /></svg>
 }
 
@@ -48,6 +59,7 @@ export function LiveChecks() {
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['cp-health-live'], queryFn: () => cp.liveHealth(), refetchInterval: 60_000, retry: false })
   const [showFailures, setShowFailures] = useState(false)
+  const [range, setRange] = useState<'24h' | '7d'>('24h')
   const run = useMutation({
     mutationFn: () => cp.checkNow(),
     onSuccess: () => { toast.success('Checks finished'); qc.invalidateQueries({ queryKey: ['cp-health-live'] }) },
@@ -67,7 +79,13 @@ export function LiveChecks() {
     <Section
       title={<span className="flex items-center gap-2"><Activity className="h-4 w-4" />Live checks {h && services.length > 0 && <Badge tone={TONE[state]} dot>{state === 'ok' ? 'All systems normal' : state === 'warn' ? 'Needs attention' : state === 'fail' ? 'Something is down' : 'Not set up'}</Badge>}</span>}
       subtitle={!h ? 'Loading…' : h.last_run ? <>Last run {ago(h.last_run)}{stale ? <span className="text-amber-700"> — automatic checks look stopped (scheduler / ops function)</span> : ' · every 5 minutes'}{!h.settings.enabled && ' · automatic checks are off'}</> : 'Never run yet — deploy the ops function (supabase functions deploy ops) and press Check now.'}
-      action={<Button size="sm" variant="outline" loading={run.isPending} icon={<PlayCircle className="h-4 w-4" />} onClick={() => run.mutate()}>Check now</Button>}>
+      action={<div className="flex items-center gap-2">
+        <div className="flex rounded-lg border border-slate-200 p-0.5 text-xs" role="group" aria-label="History range">
+          {(['24h', '7d'] as const).map((r) => <button key={r} type="button" aria-pressed={range === r} onClick={() => setRange(r)}
+            className={cn('rounded-md px-2.5 py-1 font-medium', range === r ? 'bg-brand-900 text-white' : 'text-slate-600 hover:bg-brand-50')}>{r === '24h' ? '24 hours' : '7 days'}</button>)}
+        </div>
+        <Button size="sm" variant="outline" loading={run.isPending} icon={<PlayCircle className="h-4 w-4" />} onClick={() => run.mutate()}>Check now</Button>
+      </div>}>
       {!h ? <Skeleton className="h-40" /> : !services.length ? <p className="text-sm text-slate-500">No results yet.</p> : (
         <div className="space-y-5">
           {groups.map((g) => (
@@ -75,7 +93,7 @@ export function LiveChecks() {
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">{g}</p>
               <ul className="divide-y divide-slate-100 rounded-xl border border-slate-100">
                 {services.filter((s) => (s.group ?? 'Other') === g).map((s) => {
-                  const cells = hourCells(s.hours)
+                  const cells = range === '24h' ? hourCells(s.hours) : dayCells(s.days)
                   return (
                     <li key={s.service} className="grid gap-2 px-3 py-2.5 text-sm md:grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)_auto] md:items-center">
                       <div className="flex min-w-0 items-start gap-2.5">
@@ -90,15 +108,15 @@ export function LiveChecks() {
                         <span title="Uptime, 24 hours"><b className="text-brand-950">{s.uptime24 ?? '—'}{s.uptime24 != null && '%'}</b> 24h</span>
                         <span title="Uptime, 7 days"><b className="text-brand-950">{s.uptime7d ?? '—'}{s.uptime7d != null && '%'}</b> 7d</span>
                       </div>
-                      <div className="flex h-5 items-end gap-px" aria-label="Last 24 hours">
+                      <div className={cn('flex h-5 items-end', range === '24h' ? 'gap-px' : 'gap-1')} aria-label={range === '24h' ? 'Last 24 hours' : 'Last 7 days'}>
                         {cells.map((c) => (
-                          <span key={c.t} title={`${new Date(c.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${c.pct == null ? 'no checks' : `${c.pct}% up`}${c.ms != null ? ` · ${c.ms} ms` : ''}`}
+                          <span key={c.t} title={`${typeof c.t === 'number' ? new Date(c.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date(c.t + 'T00:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} · ${c.pct == null ? 'no checks' : `${c.pct}% up`}${c.ms != null ? ` · ${c.ms} ms` : ''}`}
                             className={cn('h-full flex-1 rounded-sm', c.pct == null ? 'bg-slate-100' : c.pct === 100 ? 'bg-emerald-400' : c.pct >= 80 ? 'bg-amber-400' : 'bg-rose-500')} />
                         ))}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-slate-500 md:justify-end">
                         <Spark values={cells.map((c) => c.ms)} />
-                        <span className="w-14 text-right">{s.latency_ms != null ? `${s.latency_ms} ms` : ''}</span>
+                        <span className="w-14 text-right" title="Latest response time">{s.latency_ms != null ? `${s.latency_ms} ms` : ''}</span>
                       </div>
                     </li>
                   )

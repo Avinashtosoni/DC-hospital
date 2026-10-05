@@ -164,6 +164,11 @@ const THRESHOLDS: { key: keyof OpsSettings['thresholds']; label: string; unit: s
   { key: 'dbPct', label: 'Database size warning', unit: '% of limit' },
   { key: 'dbLimitMb', label: 'Database size limit', unit: 'MB', hint: 'Your Supabase plan (Pro: 8192)' },
   { key: 'latencyMs', label: 'Slow response', unit: 'ms' },
+  { key: 'connPct', label: 'Database connections warning', unit: '% of max' },
+  { key: 'storagePct', label: 'File storage warning', unit: '% of limit' },
+  { key: 'storageLimitMb', label: 'File storage limit', unit: 'MB', hint: 'Your Supabase plan (Pro: 102400 = 100 GB)' },
+  { key: 'webhookHours', label: 'Razorpay webhook missing after', unit: 'hours', hint: 'Only when online payments came in' },
+  { key: 'sslDays', label: 'SSL certificate expiry warning', unit: 'days before' },
   { key: 'walletLowPaise', label: 'Hospital wallet low below', unit: 'paise', hint: '20000 = ₹200' },
   { key: 'trialDays', label: 'Trial ending alert', unit: 'days before' },
 ]

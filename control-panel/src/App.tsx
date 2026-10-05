@@ -36,7 +36,7 @@ const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }
   { to: '/leads', label: 'Leads', icon: <Inbox className="h-4 w-4" />, roles: ['admin'] },
   { to: '/health', label: 'System health', icon: <Activity className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/website', label: 'Website', icon: <Globe className="h-4 w-4" />, roles: ['admin', 'support'] },
-  { to: '/messaging', label: 'Messaging', icon: <MessageSquare className="h-4 w-4" />, roles: ['admin', 'support'] },
+  { to: '/messaging', label: 'Messaging', icon: <MessageSquare className="h-4 w-4" />, roles: ['admin'] },
   { to: '/broadcasts', label: 'Broadcasts', icon: <Radio className="h-4 w-4" />, roles: ['admin'] },
   { to: '/alerts', label: 'Alerts', icon: <Bell className="h-4 w-4" />, roles: ['admin', 'support', 'finance'] },
   { to: '/announcements', label: 'Announcements', icon: <Megaphone className="h-4 w-4" />, roles: ['admin', 'support'] },
@@ -68,7 +68,7 @@ export function App() {
           <Route path="/leads" element={<Only roles={['admin']}><LeadsPage /></Only>} />
           <Route path="/health" element={<Only roles={['admin', 'support']}><HealthPage /></Only>} />
           <Route path="/website" element={<Only roles={['admin', 'support']}><WebsitePage /></Only>} />
-          <Route path="/messaging" element={<Only roles={['admin', 'support']}><MessagingPage /></Only>} />
+          <Route path="/messaging" element={<Only roles={['admin']}><MessagingPage /></Only>} />
           <Route path="/broadcasts" element={<Only roles={['admin']}><BroadcastsPage /></Only>} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/announcements" element={<Only roles={['admin', 'support']}><AnnouncementsPage /></Only>} />

@@ -296,7 +296,8 @@ export interface CpAlertPrefs {
   whatsapp: string | null
   devices: number
 }
-export interface OpsThresholds { queueBacklog: number; failurePct: number; dbPct: number; dbLimitMb: number; latencyMs: number; walletLowPaise: number; trialDays: number }
+export interface OpsThresholds { queueBacklog: number; failurePct: number; dbPct: number; dbLimitMb: number; latencyMs: number; walletLowPaise: number; trialDays: number
+  connPct: number; storagePct: number; storageLimitMb: number; webhookHours: number; sslDays: number }
 export interface OpsSettings {
   channels: Record<AlertChannel, boolean>
   events: Record<string, { enabled: boolean; severity: AlertSeverity }>
@@ -322,6 +323,7 @@ export type HealthStatus = 'ok' | 'warn' | 'fail' | 'off'
 export interface LiveService {
   service: string; label: string; group: string | null; status: HealthStatus; since: string; last_checked_at: string; latency_ms: number | null; detail: string | null
   uptime24: number | null; uptime7d: number | null; hours: { h: string; ok: number; n: number; ms: number | null }[]
+  days: { d: string; ok: number; n: number; ms: number | null }[]
 }
 export interface LiveHealth { last_run: string | null; settings: { enabled: boolean; siteUrl: string }; services: LiveService[]; failures: { at: string; service: string; label: string; status: HealthStatus; detail: string | null }[] }
 export interface PushConfig { apiKey: string; projectId: string; messagingSenderId: string; appId: string; vapidKey: string; devices: number }

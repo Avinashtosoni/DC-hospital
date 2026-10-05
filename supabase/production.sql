@@ -8685,7 +8685,7 @@ begin
         perform public.raise_platform_alert_safe('job_late', coalesce(r.label, r.service) || case when r.status = 'fail' then ' stopped' else ' has failing jobs' end,
           coalesce(r.detail, ''), '/health', 'health:' || r.service || ':' || r.status, 60);
       elsif r.status in ('fail', 'warn') and r.service = 'db:delivery' then
-        perform public.raise_platform_alert_safe('delivery_spike', 'Message failures spiking', coalesce(r.detail, ''), '/messaging?tab=log', 'health:' || r.service || ':' || r.status, 60);
+        perform public.raise_platform_alert_safe('delivery_spike', 'Message failures spiking', coalesce(r.detail, ''), '/health', 'health:' || r.service || ':' || r.status, 60);
       elsif r.status = 'fail' then
         perform public.raise_platform_alert_safe('health_down', coalesce(r.label, r.service) || ' is down', coalesce(r.detail, ''), '/health', 'health:' || r.service || ':fail', 30);
       elsif r.status = 'warn' and coalesce(v_prev, 'ok') in ('ok', 'off') then
