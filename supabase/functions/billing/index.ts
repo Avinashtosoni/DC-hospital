@@ -1,6 +1,7 @@
 // Supabase Edge Function: hospitals pay Hospital Comrade — plan renewals and wallet top-ups through Razorpay. Phase 4.3.
 //
 //   supabase functions deploy billing --no-verify-jwt        (the Razorpay webhook has no Supabase token)
+//   Keys: control panel → Platform settings → Integrations → Razorpay (Vault), or as a fallback
 //   supabase secrets set RAZORPAY_KEY_ID=rzp_live_… RAZORPAY_KEY_SECRET=… RAZORPAY_WEBHOOK_SECRET=… PLATFORM_NAME="Hospital Comrade"
 //   Razorpay Dashboard → Webhooks → URL https://<project>.supabase.co/functions/v1/billing?webhook=razorpay
 //     secret = RAZORPAY_WEBHOOK_SECRET, events: payment.captured, payment.failed, order.paid
@@ -17,7 +18,8 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders, resolveCaller } from '../_shared/tenant.ts'
-import { createOrder, razorpayConfig, verifyPayment, verifyWebhook, webhookPayment } from '../_shared/razorpay.ts'
+import { createOrder, razorpayFromPlatform, verifyPayment, verifyWebhook, webhookPayment } from '../_shared/razorpay.ts'
+import { loadPlatformEnv } from '../_shared/ops.ts'
 
 const cors = corsHeaders('POST, OPTIONS')
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -42,8 +44,11 @@ async function heartbeat(key: string, detail: string) {
   try { await admin.rpc('note_heartbeat', { p_key: key, p_detail: detail.slice(0, 300) }) } catch { /* older database */ }
 }
 
+/** panel keys (Vault) first, then the RAZORPAY_* Edge secrets */
+const razorpay = async () => razorpayFromPlatform(await loadPlatformEnv(admin, (k) => Deno.env.get(k)))
+
 async function webhook(req: Request, raw: string) {
-  const cfg = razorpayConfig((k) => Deno.env.get(k))
+  const cfg = await razorpay()
   if (!cfg?.webhookSecret) return json({ error: 'webhook secret not set' }, 503)
   if (!(await verifyWebhook(cfg.webhookSecret, raw, req.headers.get('x-razorpay-signature')))) {
     await heartbeat('razorpay_webhook_bad', 'signature did not match')
@@ -79,7 +84,7 @@ Deno.serve(async (req) => {
   const isPlatform = caller.provider === 'admin' || caller.provider === 'finance'
   if (!isOwner && !isPlatform) return json({ error: 'Only the hospital owner can pay for Hospital Comrade.' }, 403)
 
-  const cfg = razorpayConfig((k) => Deno.env.get(k))
+  const cfg = await razorpay()
   const action = String(body?.action ?? 'config')
   try {
     if (action === 'config') return json({ enabled: !!cfg, key_id: cfg?.keyId ?? null })

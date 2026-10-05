@@ -8,13 +8,15 @@
 //   { "health": true }                                 run the live checks and store them (record_health) — service role, or a
 //                                                      control-panel admin / support member ("Check now")
 //   { "test": { "channel": "email", "to": "…" } }      send a test on the shared account — control-panel admin; push → their own browsers
+//   { "check": "razorpay" | "sms" | "whatsapp" | "email" | "push" }   check one account now (Platform settings → Integrations) — admin
+//   { "sources": ["PLATFORM_…"] }                  for each key: saved in the panel / set as an Edge secret (never the value) — admin
 //
 // Shared-account keys come from the control panel (platform_env(): settings + Vault) with the PLATFORM_* Edge secrets as
 // fallback. Nothing secret is ever returned. See ../_shared/ops.ts and scripts/sql/cp_notify.sql.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { deliver, isPermanent, retryDelayMs, type Channel, type Msg } from '../_shared/providers.ts'
-import { loadPlatformEnv, panelLink, platformSendCtx, runChecks } from '../_shared/ops.ts'
+import { checkProviders, checkRazorpay, clearPlatformEnv, keySources, loadPlatformEnv, panelLink, platformSendCtx, runChecks } from '../_shared/ops.ts'
 import { corsHeaders } from '../_shared/tenant.ts'
 
 const cors = corsHeaders()
@@ -124,6 +126,27 @@ Deno.serve(async (req) => {
       status: r.ok ? 'sent' : 'failed', attempts: 1, error: r.error ?? null, provider_ref: (r as any).ref ?? null, sent_at: r.ok ? new Date().toISOString() : null })
     const provider = channel === 'push' ? 'Firebase' : c.n[channel]?.provider
     return json({ ok: r.ok, message: r.ok ? `Sent via ${provider}${(r as any).ref ? ` · ${(r as any).ref}` : ''}` : r.error })
+  }
+
+  // Platform settings → Integrations: check one account now (stored like a scheduled check), and where keys come from
+  if (body.check) {
+    if (w?.kind !== 'team' || w.role !== 'admin') return json({ error: 'Only admins can check integrations' }, 403)
+    const id = String(body.check)
+    if (!['razorpay', 'sms', 'whatsapp', 'email', 'push'].includes(id)) return json({ error: 'Unknown integration' }, 400)
+    clearPlatformEnv()
+    const { env } = await ctx()
+    const o = { supabaseUrl: SUPABASE_URL, serviceKey: SERVICE_KEY, env }
+    const check = id === 'razorpay' ? await checkRazorpay(o) : (await checkProviders(o)).find((c) => c.service === `provider:${id}`)
+    if (!check) return json({ error: 'No result' }, 500)
+    const { error } = await admin.rpc('record_health', { p_results: [check] })
+    if (error) return json({ error: error.message }, 500)
+    return json({ ok: check.status === 'ok', check })
+  }
+  if (body.sources) {
+    if (w?.kind !== 'team' || w.role !== 'admin') return json({ error: 'Only admins can see this' }, 403)
+    let saved: Record<string, unknown> = {}
+    try { const { data } = await admin.rpc('platform_env'); if (data && typeof data === 'object') saved = data } catch { /* older database */ }
+    return json({ sources: keySources(Array.isArray(body.sources) ? body.sources.map(String) : [], saved, (k) => Deno.env.get(k)) })
   }
 
   return json({ error: 'Unknown request' }, 400)

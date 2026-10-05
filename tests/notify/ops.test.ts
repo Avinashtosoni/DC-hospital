@@ -3,7 +3,7 @@
  * for team alerts / broadcasts, panel links, and the live health checks (mocked fetch, no network).
  */
 import { describe, expect, test, vi } from 'vitest'
-import { cfExpiry, checkDatabase, checkDomains, checkFunction, checkProviders, checkSite, msg91Balance, mergeEnv, panelLink, platformSendCtx, runChecks, loadPlatformEnv, clearPlatformEnv } from '../../supabase/functions/_shared/ops'
+import { cfExpiry, checkDatabase, checkRazorpay, keySources, checkDomains, checkFunction, checkProviders, checkSite, msg91Balance, mergeEnv, panelLink, platformSendCtx, runChecks, loadPlatformEnv, clearPlatformEnv } from '../../supabase/functions/_shared/ops'
 
 const envOf = (vars: Record<string, string>) => (k: string) => vars[k]
 const res = (status: number, body: unknown = '') => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })
@@ -124,7 +124,7 @@ describe('health checks', () => {
 
   test('runChecks covers the platform, Supabase, every function and the providers', async () => {
     const out = await runChecks({ ...base, siteUrl: 'https://hc.in', self: 'ops', fetch: (async () => res(200, '[]')) as any, domains: [] })
-    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'db', 'auth', 'storage', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
+    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'db', 'auth', 'storage', 'provider:razorpay', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
     expect(out.find((c) => c.service === 'fn:ops')?.status).toBe('ok')
   })
 
@@ -135,5 +135,22 @@ describe('health checks', () => {
     expect(seen[0]).toContain('/rest/v1/platform_settings?select=key&limit=1')
     const bad = await checkDatabase({ ...base, fetch: (async () => res(503, 'upstream connect error')) as any })
     expect(bad).toMatchObject({ status: 'fail', detail: 'HTTP 503: upstream connect error' })
+  })
+
+  test('Razorpay: off, test mode, live without webhook secret, rejected keys', async () => {
+    const ok = (async () => res(200, '{"items":[]}')) as any
+    expect(await checkRazorpay({ ...base, env: envOf({}) })).toMatchObject({ service: 'provider:razorpay', group: 'Payments', status: 'off' })
+    const live = await checkRazorpay({ ...base, fetch: ok, env: envOf({ PLATFORM_RAZORPAY_KEY_ID: 'rzp_live_1', PLATFORM_RAZORPAY_KEY_SECRET: 's', PLATFORM_RAZORPAY_WEBHOOK_SECRET: 'w' }) })
+    expect(live).toMatchObject({ status: 'ok', detail: 'live mode · keys accepted · keys from the panel' })
+    const test = await checkRazorpay({ ...base, fetch: ok, env: envOf({ RAZORPAY_KEY_ID: 'rzp_test_1', RAZORPAY_KEY_SECRET: 's' }) })
+    expect(test).toMatchObject({ status: 'warn', detail: 'test mode · keys accepted · keys from Edge secrets · webhook secret missing · test keys: no real money is collected' })
+    const bad = await checkRazorpay({ ...base, fetch: (async () => res(401, '{}')) as any, env: envOf({ RAZORPAY_KEY_ID: 'rzp_live_1', RAZORPAY_KEY_SECRET: 's' }) })
+    expect(bad).toMatchObject({ status: 'fail', detail: 'Razorpay rejected the key ID / secret · keys from Edge secrets' })
+  })
+
+  test('key sources: presence only, Razorpay also counts its own RAZORPAY_* secrets', () => {
+    const s = keySources(['PLATFORM_RESEND_API_KEY', 'PLATFORM_RAZORPAY_KEY_SECRET', 'PLATFORM_SMS_PROVIDER', 'bad key'],
+      { PLATFORM_RESEND_API_KEY: 're_x', PLATFORM_SMS_PROVIDER: ' ' }, envOf({ RAZORPAY_KEY_SECRET: 'x', PLATFORM_SMS_PROVIDER: 'msg91' }))
+    expect(s).toEqual({ PLATFORM_RESEND_API_KEY: { panel: true, edge: false }, PLATFORM_RAZORPAY_KEY_SECRET: { panel: false, edge: true }, PLATFORM_SMS_PROVIDER: { panel: false, edge: true } })
   })
 })

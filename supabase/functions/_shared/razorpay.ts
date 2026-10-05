@@ -15,6 +15,30 @@ export function razorpayConfig(env: (k: string) => string | undefined): Razorpay
   return { keyId, keySecret, webhookSecret: (env('RAZORPAY_WEBHOOK_SECRET') ?? '').trim() || undefined }
 }
 
+export type RazorpaySource = 'panel' | 'edge'
+
+/**
+ * Keys saved in the control panel (Platform settings → Integrations, PLATFORM_RAZORPAY_*) win as a pair; otherwise the
+ * RAZORPAY_* Edge secrets. The webhook secret is separate from the API keys, so it falls back on its own.
+ */
+export function razorpayFromPlatform(env: (k: string) => string | undefined): (RazorpayConfig & { source: RazorpaySource }) | null {
+  const v = (k: string) => (env(k) ?? '').trim()
+  const webhookSecret = v('PLATFORM_RAZORPAY_WEBHOOK_SECRET') || v('RAZORPAY_WEBHOOK_SECRET') || undefined
+  if (v('PLATFORM_RAZORPAY_KEY_ID') && v('PLATFORM_RAZORPAY_KEY_SECRET')) return { keyId: v('PLATFORM_RAZORPAY_KEY_ID'), keySecret: v('PLATFORM_RAZORPAY_KEY_SECRET'), webhookSecret, source: 'panel' }
+  const c = razorpayConfig(env)
+  return c ? { ...c, webhookSecret, source: 'edge' } : null
+}
+
+export const razorpayMode = (keyId: string): 'live' | 'test' | 'unknown' => (keyId.startsWith('rzp_live_') ? 'live' : keyId.startsWith('rzp_test_') ? 'test' : 'unknown')
+
+/** are the API keys accepted? (lists one order — nothing is created) */
+export async function checkRazorpayKeys(cfg: RazorpayConfig, f: typeof fetch = fetch): Promise<{ ok: boolean; status: number; message: string }> {
+  const r = await f('https://api.razorpay.com/v1/orders?count=1', { headers: { Authorization: `Basic ${btoa(`${cfg.keyId}:${cfg.keySecret}`)}` } })
+  if (r.ok) return { ok: true, status: r.status, message: 'keys accepted' }
+  const data: any = await r.json().catch(() => ({}))
+  return { ok: false, status: r.status, message: r.status === 401 ? 'Razorpay rejected the key ID / secret' : data?.error?.description || `Razorpay answered HTTP ${r.status}` }
+}
+
 export interface OrderInput { amount: number; receipt: string; notes?: Record<string, string> }
 export interface Order { id: string; amount: number; currency: string; status: string }
 

@@ -13,6 +13,7 @@
 import { parseServiceAccount, accessToken } from './fcm.ts'
 import { openwaStatus, type Ctx } from './providers.ts'
 import { platformAccounts, PLATFORM_CHANNELS, type Env, type PlatformTemplate } from './platform.ts'
+import { checkRazorpayKeys, razorpayFromPlatform, razorpayMode } from './razorpay.ts'
 
 /** control-panel values first, then the Edge secret */
 export const mergeEnv = (saved: Record<string, unknown> | null | undefined, fallback: Env): Env => (k) => {
@@ -121,6 +122,34 @@ export async function checkStorage(o: CheckOpts): Promise<Check> {
   if (!r.ok) return { ...base, status: 'fail', latency_ms: ms, detail: `HTTP ${r.status}` }
   const list = await r.json().catch(() => [])
   return { ...base, status: 'ok', latency_ms: ms, detail: `${Array.isArray(list) ? list.length : 0} buckets` }
+}
+
+/** Razorpay (hospitals pay the platform): keys accepted, test / live, webhook secret present */
+export async function checkRazorpay(o: CheckOpts): Promise<Check> {
+  const base = { service: 'provider:razorpay', label: 'Razorpay (online payments)', group: 'Payments' }
+  const cfg = razorpayFromPlatform(o.env)
+  if (!cfg) return { ...base, status: 'off', detail: 'Not configured — hospitals can only pay by bank transfer' }
+  const t0 = Date.now()
+  try {
+    const r = await checkRazorpayKeys(cfg, o.fetch ?? fetch)
+    const mode = razorpayMode(cfg.keyId)
+    const from = cfg.source === 'panel' ? 'keys from the panel' : 'keys from Edge secrets'
+    if (!r.ok) return { ...base, status: 'fail', latency_ms: Date.now() - t0, detail: `${r.message} · ${from}` }
+    const notes = [`${mode === 'unknown' ? '' : `${mode} mode · `}keys accepted`, from, ...(cfg.webhookSecret ? [] : ['webhook secret missing'])]
+    return { ...base, status: cfg.webhookSecret && mode !== 'test' ? 'ok' : 'warn', latency_ms: Date.now() - t0, detail: notes.join(' · ') + (mode === 'test' ? ' · test keys: no real money is collected' : '') }
+  } catch (e) {
+    return { ...base, status: 'fail', latency_ms: Date.now() - t0, detail: `could not reach Razorpay (${(e as Error).message.slice(0, 100)})` }
+  }
+}
+
+/** for each PLATFORM_* key: saved in the panel and/or set as an Edge secret (presence only — never the value) */
+export function keySources(keys: string[], saved: Record<string, unknown> | null | undefined, edge: Env) {
+  const has = (v: unknown) => v != null && String(v).trim() !== ''
+  const alias = (k: string) => (k.startsWith('PLATFORM_RAZORPAY_') ? k.replace(/^PLATFORM_/, '') : null)   // billing's own RAZORPAY_* secrets
+  return Object.fromEntries(keys.filter((k) => /^PLATFORM_[A-Z0-9_]{2,60}$/.test(k)).slice(0, 80).map((k) => {
+    const a = alias(k)
+    return [k, { panel: has(saved?.[k]), edge: has(edge(k)) || (!!a && has(edge(a))) }]
+  }))
 }
 
 /** a deployed function answers (anything but "not found" / a server error); { ping: true } is harmless everywhere */
@@ -253,7 +282,7 @@ export async function checkDomains(o: CheckOpts, domains: DomainRow[], opts: { c
 export async function runChecks(o: CheckOpts): Promise<Check[]> {
   const t0 = Date.now()
   const fns = EDGE_FUNCTIONS.filter((n) => n !== o.self)
-  const results = await Promise.all([checkSite(o), checkDatabase(o), checkAuth(o), checkStorage(o), ...fns.map((n) => checkFunction(o, n)), checkProviders(o).catch(() => [] as Check[]),
+  const results = await Promise.all([checkSite(o), checkDatabase(o), checkAuth(o), checkRazorpay(o), checkStorage(o), ...fns.map((n) => checkFunction(o, n)), checkProviders(o).catch(() => [] as Check[]),
     ...(o.domains ? [checkDomains(o, o.domains, { cf: o.cf, warnDays: o.sslWarnDays })] : [])])
   const flat = results.flat()
   if (o.self) flat.push({ service: `fn:${o.self}`, label: `${o.self} function`, group: 'Edge Functions', status: 'ok', latency_ms: Date.now() - t0, detail: 'running these checks' })
