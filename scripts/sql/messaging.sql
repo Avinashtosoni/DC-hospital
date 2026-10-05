@@ -554,6 +554,8 @@ declare v_url text; v_key text;
 begin
   -- "sign in as user" time limit (control_panel_ops.sql) rides on this every-minute job
   if to_regprocedure('public.impersonation_expire()') is not null then execute 'select public.impersonation_expire()'; end if;
+  -- control panel: team alerts, broadcasts and health checks (cp_notify.sql)
+  if to_regprocedure('public.ops_cron_tick()') is not null then execute 'select public.ops_cron_tick()'; end if;
   if not exists (select 1 from public.notification_outbox where status = 'pending' and next_attempt_at <= now()) then return; end if;
   v_url := public.tenant_secret('notify_function_url');
   v_key := public.tenant_secret('service_role_key');
