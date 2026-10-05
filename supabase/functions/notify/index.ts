@@ -22,11 +22,14 @@
 // account (PLATFORM_* secrets, template IDs from public.platform_settings) with the hospital's own name / sender ID —
 // see ../_shared/platform.ts. Every outcome is counted per hospital in public.message_usage, and the monthly allowance
 // in tenants.messaging.limits is enforced (OTPs always go out). { "ping": true } also reports which shared accounts exist.
+// The shared accounts' keys may be saved in the control panel (Messaging & alerts → Shared accounts, Vault-encrypted);
+// those win over the PLATFORM_* Edge secrets of the same name.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
 import { deliverRouted, platformCtx, platformDetails, platformStatus, sourceOf, usageMonth, walletOf, type Meter, type Source } from '../_shared/platform.ts'
 import { corsHeaders, groupByTenant, resolveCaller, type Caller } from '../_shared/tenant.ts'
+import { loadPlatformEnv } from '../_shared/ops.ts'
 
 const cors = corsHeaders()
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -42,7 +45,10 @@ const caller = (req: Request): Promise<Caller> => resolveCaller(req, { serviceKe
 
 /** everything needed to deliver one hospital's messages (the service role skips RLS → filter on tenant_id) */
 interface Setup { own: Ctx; platform: Ctx; meter: Meter }
+/** shared-account settings: saved in the control panel (platform_env, Vault) first, then the PLATFORM_* Edge secrets */
+const platformEnv = () => loadPlatformEnv(admin, (k) => Deno.env.get(k))
 async function loadCtx(tenant: string, events: string[] = []): Promise<Setup> {
+  const env = await platformEnv()
   const tplIds = [...new Set(events.filter((e) => e.startsWith('tpl:')).map((e) => e.slice(4)))]
   const [{ data: s }, { data: sec }, { data: site }, { data: tpls }, { data: t }, { data: plat }, { data: usage }] = await Promise.all([
     admin.from('app_settings').select('data').eq('tenant_id', tenant).eq('key', 'app').maybeSingle(),
@@ -76,7 +82,7 @@ async function loadCtx(tenant: string, events: string[] = []): Promise<Setup> {
   const pset = Object.fromEntries(((plat ?? []) as any[]).map((r) => [r.key, r.data])) as { messaging?: any; billing?: any }
   return {
     own,
-    platform: platformCtx(own, (k) => Deno.env.get(k), { platform: pset.messaging ?? null, tenant: tm, replyTo: String((site?.data as any)?.email ?? '') }),
+    platform: platformCtx(own, env, { platform: pset.messaging ?? null, tenant: tm, replyTo: String((site?.data as any)?.email ?? '') }),
     meter: { tenant: tm, wallet: walletOf(t, pset.billing), used: Object.fromEntries(((usage ?? []) as any[]).map((r) => [r.channel, Number(r.sent) || 0])) },
   }
 }
@@ -136,7 +142,10 @@ Deno.serve(async (req) => {
   let body: any = {}
   try { body = await req.json() } catch { /* empty */ }
 
-  if (body.ping) return json({ ok: true, message: 'notify function is deployed and reachable', platform: platformStatus((k) => Deno.env.get(k)), platform_details: platformDetails((k) => Deno.env.get(k)) })
+  if (body.ping) {
+    const env = await platformEnv()
+    return json({ ok: true, message: 'notify function is deployed and reachable', platform: platformStatus(env), platform_details: platformDetails(env) })
+  }
 
   if (body.test) {
     // owner only
