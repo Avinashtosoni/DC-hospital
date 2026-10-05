@@ -3,7 +3,7 @@
  * for team alerts / broadcasts, panel links, and the live health checks (mocked fetch, no network).
  */
 import { describe, expect, test, vi } from 'vitest'
-import { checkFunction, checkProviders, checkSite, mergeEnv, panelLink, platformSendCtx, runChecks, loadPlatformEnv, clearPlatformEnv } from '../../supabase/functions/_shared/ops'
+import { cfExpiry, checkDomains, checkFunction, checkProviders, checkSite, msg91Balance, mergeEnv, panelLink, platformSendCtx, runChecks, loadPlatformEnv, clearPlatformEnv } from '../../supabase/functions/_shared/ops'
 
 const envOf = (vars: Record<string, string>) => (k: string) => vars[k]
 const res = (status: number, body: unknown = '') => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })
@@ -81,14 +81,50 @@ describe('health checks', () => {
     const by = Object.fromEntries(out.map((c) => [c.service, c]))
     expect(by['provider:email']).toMatchObject({ status: 'ok', detail: 'resend · key accepted' })   // sending-only key
     expect(by['provider:whatsapp']).toMatchObject({ status: 'fail', detail: 'meta rejected the key (HTTP 401)' })
-    expect(by['provider:sms']).toMatchObject({ status: 'ok', detail: 'msg91 · configured (key not checked)' })
+    expect(by['provider:sms']).toMatchObject({ status: 'fail', detail: expect.stringContaining('msg91 rejected the auth key') })
     expect(by['provider:push']).toMatchObject({ status: 'off' })
     expect(seen.every((u) => !/\/emails|messages|send-text|\/flow/.test(u))).toBe(true)
   })
 
+  test('MSG91 and Fast2SMS keys are checked against their balance APIs', async () => {
+    const sms = (provider: string, f: any) => checkProviders({ ...base, fetch: f, env: envOf({ PLATFORM_SMS_PROVIDER: provider, PLATFORM_MSG91_AUTH_KEY: 'k91', PLATFORM_FAST2SMS_API_KEY: 'kf2' }) })
+      .then((out) => out.find((c) => c.service === 'provider:sms')!)
+    expect(await sms('msg91', async (u: string) => { expect(u).toContain('control.msg91.com/api/balance.php?authkey=k91&type=4'); return res(200, '{"SMS":"120.50"}') }))
+      .toMatchObject({ status: 'ok', detail: 'msg91 · key accepted · balance 120.50' })
+    expect((await sms('msg91', async () => res(200, 'Invalid authkey'))).status).toBe('fail')
+    expect((await sms('msg91', async () => { throw new Error('dns') })).status).toBe('warn')
+    expect(await sms('fast2sms', async (_u: string, init: any) => { expect(init.headers.authorization).toBe('kf2'); return res(200, { return: true, wallet: '493.20' }) }))
+      .toMatchObject({ status: 'ok', detail: 'fast2sms · key accepted · wallet ₹493.20' })
+    expect((await sms('fast2sms', async () => res(200, { return: true, wallet: '12.00' }))).status).toBe('warn')
+    expect(await sms('fast2sms', async () => res(401, { return: false, status_code: 412, message: 'Invalid Authentication, Check Authorization Key' })))
+      .toMatchObject({ status: 'fail', detail: 'fast2sms rejected the key: Invalid Authentication, Check Authorization Key' })
+    expect((await sms('fast2sms', async () => res(400, { return: false, status_code: 414 }))).status).toBe('warn')
+    expect(msg91Balance('77')).toBe(' · balance 77')
+    expect(msg91Balance('<html>')).toBe('')
+  })
+
+  test('hospital domains: HTTPS works, Cloudflare certificate status and expiry', async () => {
+    expect((await checkDomains(base, [])).status).toBe('off')
+    const soon = new Date(Date.now() + 5 * 86_400_000).toISOString()
+    const later = new Date(Date.now() + 60 * 86_400_000).toISOString()
+    expect(cfExpiry({ ssl: { certificates: [{ expires_on: later }, { expires_on: soon }] } })).toBe(new Date(Date.parse(soon)).toISOString())
+    const f = async (u: string) => {
+      if (u.startsWith('https://broken.in')) throw new Error('invalid peer certificate: Expired')
+      if (u.includes('custom_hostnames/cf1')) return res(200, { result: { ssl: { status: 'active', certificates: [{ expires_on: later }] } } })
+      if (u.includes('custom_hostnames/cf2')) return res(200, { result: { ssl: { status: 'active', certificates: [{ expires_on: soon }] } } })
+      return res(200, 'ok')
+    }
+    const ok = await checkDomains({ ...base, fetch: f as any }, [{ domain: 'city.in', method: 'cloudflare', cf_hostname_id: 'cf1' }, { domain: 'own.in', method: 'manual', cf_hostname_id: null }], { cf: { token: 't', zone: 'z' } })
+    expect(ok).toMatchObject({ service: 'ssl:domains', status: 'ok', detail: `2 domains · HTTPS ok · next certificate expiry ${later.slice(0, 10)}` })
+    const warn = await checkDomains({ ...base, fetch: f as any }, [{ domain: 'soon.in', method: 'cloudflare', cf_hostname_id: 'cf2' }], { cf: { token: 't', zone: 'z' } })
+    expect(warn).toMatchObject({ status: 'warn', detail: `soon.in: certificate expires ${soon.slice(0, 10)}` })
+    const bad = await checkDomains({ ...base, fetch: f as any }, [{ domain: 'broken.in', method: 'manual', cf_hostname_id: null }, { domain: 'own.in', method: 'manual', cf_hostname_id: null }])
+    expect(bad).toMatchObject({ status: 'fail', detail: expect.stringContaining('broken.in: HTTPS failed (invalid peer certificate') })
+  })
+
   test('runChecks covers the platform, Supabase, every function and the providers', async () => {
-    const out = await runChecks({ ...base, siteUrl: 'https://hc.in', self: 'ops', fetch: (async () => res(200, '[]')) as any })
-    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'auth', 'storage', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push']))
+    const out = await runChecks({ ...base, siteUrl: 'https://hc.in', self: 'ops', fetch: (async () => res(200, '[]')) as any, domains: [] })
+    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'auth', 'storage', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
     expect(out.find((c) => c.service === 'fn:ops')?.status).toBe('ok')
   })
 })

@@ -188,13 +188,15 @@ describe('delivery log', () => {
   test('both queues, filters, retry of failed messages only', async () => {
     const row = (await outbox(`kind = 'broadcast' and channel = 'email'`))[0]
     await db.as(null, `update public.platform_outbox set status = 'failed', error = 'Resend rejected the API key' where id = $1`, [row.id])
-    const log = await call(P_SUPPORT, 'cp_delivery_log', [{ status: 'failed' }], ['jsonb'])
+    const log = await call(P_ADMIN, 'cp_delivery_log', [{ status: 'failed' }], ['jsonb'])
     expect(log.map((r: any) => [r.source, r.id, r.hospital])).toContainEqual(['platform', row.id, 'City Hospital'])
-    expect(await call(P_SUPPORT, 'cp_delivery_log', [{ source: 'hospital', channel: 'push' }], ['jsonb'])).toEqual([expect.objectContaining({ recipient: 'device', kind: 'platform_broadcast' })])
+    expect(await call(P_ADMIN, 'cp_delivery_log', [{ source: 'hospital', channel: 'push' }], ['jsonb'])).toEqual([expect.objectContaining({ recipient: 'device', kind: 'platform_broadcast' })])
     await fails(call(P_FINANCE, 'cp_delivery_log', [{}], ['jsonb']), /Hospital Comrade team/)
-    await call(P_SUPPORT, 'cp_retry_message', ['platform', row.id], ['text', 'uuid'])
+    await fails(call(P_SUPPORT, 'cp_delivery_log', [{}], ['jsonb']), /Hospital Comrade team/)   // admins only
+    await fails(call(P_SUPPORT, 'cp_retry_message', ['platform', row.id], ['text', 'uuid']), /Hospital Comrade team/)
+    await call(P_ADMIN, 'cp_retry_message', ['platform', row.id], ['text', 'uuid'])
     expect((await outbox(`id = '${row.id}'`))[0]).toMatchObject({ status: 'pending', attempts: 0, error: null })
-    await fails(call(P_SUPPORT, 'cp_retry_message', ['platform', row.id], ['text', 'uuid']), /Only failed messages/)
+    await fails(call(P_ADMIN, 'cp_retry_message', ['platform', row.id], ['text', 'uuid']), /Only failed messages/)
   })
 
   test('claiming for delivery', async () => {
@@ -213,19 +215,50 @@ describe('health', () => {
       { service: 'site', label: 'Website', group: 'Platform', status: 'ok', latency_ms: 9000, detail: 'HTTP 200' },
       { service: 'provider:sms', label: 'SMS', group: 'Providers', status: 'off', detail: 'not configured' },
     ]], ['jsonb'])
-    expect(r.map((x: any) => x.service)).toEqual(expect.arrayContaining(['db:size', 'db:queue', 'db:delivery', 'db:cron']))
+    expect(r.map((x: any) => x.service)).toEqual(expect.arrayContaining(['db:size', 'db:connections', 'db:queue', 'db:delivery', 'db:cron', 'webhook:razorpay']))
+    expect(r.find((x: any) => x.service === 'db:connections')).toMatchObject({ status: 'ok', detail: expect.stringMatching(/^\d+ of \d+ in use/) })
+    expect(r.find((x: any) => x.service === 'webhook:razorpay')).toMatchObject({ status: 'off', detail: 'No webhook received yet' })
     const titles = (await inbox(P_SUPPORT)).slice(before).map((x: any) => x.title)
-    expect(titles).toEqual(expect.arrayContaining(['notify function is down', 'Website needs attention', 'Scheduler is down']))   // PGlite has no pg_cron
+    expect(titles).toEqual(expect.arrayContaining(['notify function is down', 'Website needs attention', 'Scheduler stopped']))   // PGlite has no pg_cron → its own “job late” alert
     await call('service', 'record_health', [[{ service: 'fn:notify', label: 'notify function', status: 'ok', latency_ms: 80 }]], ['jsonb'])
     expect((await inbox(P_SUPPORT)).map((x: any) => x.title)).toContain('notify function is back to normal')
     const live = await call(P_SUPPORT, 'cp_health_live')
     const notify = live.services.find((s: any) => s.service === 'fn:notify')
-    expect(notify).toMatchObject({ status: 'ok', uptime24: 50, group: 'Edge Functions' })
+    expect(notify).toMatchObject({ status: 'ok', uptime24: 50, uptime7d: 50, group: 'Edge Functions' })
+    expect(notify.days).toEqual([expect.objectContaining({ ok: 1, n: 2 })])
     expect(live.services.find((s: any) => s.service === 'site')).toMatchObject({ status: 'warn', detail: 'HTTP 200 · slow (9000 ms)' })
     expect(live.failures.length).toBeGreaterThan(0)
     expect(live.settings).toMatchObject({ enabled: true, siteUrl: 'https://hospital.example.in' })
     await fails(call(P_FINANCE, 'cp_health_live'), /Hospital Comrade team/)
     await fails(call(P_ADMIN, 'record_health', [[]], ['jsonb']), /permission denied/)
+  })
+
+  test('Razorpay webhook: last seen, payments without a webhook, rejected signatures', async () => {
+    const wh = async () => (await call('service', 'record_health', [[]], ['jsonb'])).find((x: any) => x.service === 'webhook:razorpay')
+    await call('service', 'note_heartbeat', ['razorpay_webhook', 'payment.captured'], ['text', 'text'])
+    expect(await wh()).toMatchObject({ status: 'ok', detail: expect.stringMatching(/^Last webhook /) })
+    await fails(call(P_ADMIN, 'note_heartbeat', ['razorpay_webhook', 'x'], ['text', 'text']), /permission denied/)
+    // paid in the browser an hour ago, but the last webhook is older than that
+    await db.as(null, `update public.platform_heartbeats set last_at = now() - interval '3 hours' where key = 'razorpay_webhook'`)
+    await db.as(null, `insert into public.billing_payments (tenant_id, kind, base_paise, total_paise, status, provider, order_id, paid_at)
+                       select id, 'wallet', 50000, 50000, 'paid', 'razorpay', 'order_wh_test', now() - interval '1 hour' from public.tenants limit 1`)
+    expect(await wh()).toMatchObject({ status: 'warn', detail: expect.stringContaining('1 online payment(s)') })
+    await call('service', 'note_heartbeat', ['razorpay_webhook', 'payment.captured'], ['text', 'text'])
+    expect((await wh()).status).toBe('ok')
+    await call('service', 'note_heartbeat', ['razorpay_webhook_bad', 'signature did not match'], ['text', 'text'])
+    expect(await wh()).toMatchObject({ status: 'warn', detail: expect.stringContaining('bad signature') })
+  })
+
+  test('delivery failures spiking raise their own alert', async () => {
+    const before = (await inbox(P_SUPPORT)).length
+    await db.as(null, `update public.platform_health_state set status = 'ok' where service = 'db:delivery'`)
+    await db.as(null, `insert into public.platform_outbox (kind, channel, recipient, body, status, created_at)
+                       select 'test', 'email', 'x' || g || '@example.in', 'x', case when g <= 6 then 'failed' else 'sent' end, now() from generate_series(1, 12) g`)
+    const r = await call('service', 'record_health', [[]], ['jsonb'])
+    expect(r.find((x: any) => x.service === 'db:delivery').status).toBe('warn')
+    expect((await inbox(P_SUPPORT)).slice(before).map((x: any) => x.title)).toContain('Message failures spiking')
+    const cat = (await call(P_ADMIN, 'cp_ops_settings')).catalog.map((e: any) => e.key)
+    expect(cat).toEqual(expect.arrayContaining(['job_late', 'delivery_spike']))
   })
 
   test('the every-minute tick runs without pg_net / pg_cron', async () => {

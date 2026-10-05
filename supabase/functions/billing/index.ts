@@ -37,13 +37,22 @@ async function apply(paymentRow: string, ref: string | null, method: string | nu
   return data as { ok: boolean; already: boolean; invoice_no: string }
 }
 
+/** "last seen" for System health → Razorpay webhook (never blocks the webhook itself) */
+async function heartbeat(key: string, detail: string) {
+  try { await admin.rpc('note_heartbeat', { p_key: key, p_detail: detail.slice(0, 300) }) } catch { /* older database */ }
+}
+
 async function webhook(req: Request, raw: string) {
   const cfg = razorpayConfig((k) => Deno.env.get(k))
   if (!cfg?.webhookSecret) return json({ error: 'webhook secret not set' }, 503)
-  if (!(await verifyWebhook(cfg.webhookSecret, raw, req.headers.get('x-razorpay-signature')))) return json({ error: 'bad signature' }, 401)
+  if (!(await verifyWebhook(cfg.webhookSecret, raw, req.headers.get('x-razorpay-signature')))) {
+    await heartbeat('razorpay_webhook_bad', 'signature did not match')
+    return json({ error: 'bad signature' }, 401)
+  }
   let event: any
   try { event = JSON.parse(raw) } catch { return json({ error: 'Invalid JSON' }, 400) }
   const w = webhookPayment(event)
+  await heartbeat('razorpay_webhook', String(w.event ?? event?.event ?? ''))
   if (!w.orderId) return json({ ok: true, ignored: w.event })
   const { data: row } = await admin.from('billing_payments').select('id, status').eq('order_id', w.orderId).maybeSingle()
   if (!row) return json({ ok: true, ignored: 'unknown order' })    // not ours (another app on the same account) — don't make Razorpay retry

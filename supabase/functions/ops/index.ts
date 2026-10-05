@@ -38,7 +38,8 @@ async function who(req: Request): Promise<Who> {
 async function settings() {
   const { data } = await admin.from('platform_settings').select('key, data').in('key', ['ops', 'messaging'])
   const by = Object.fromEntries(((data ?? []) as any[]).map((r) => [r.key, r.data ?? {}]))
-  return { siteUrl: String(by.ops?.health?.siteUrl ?? ''), templates: (by.messaging?.templates ?? {}) as Record<string, any> }
+  return { siteUrl: String(by.ops?.health?.siteUrl ?? ''), templates: (by.messaging?.templates ?? {}) as Record<string, any>,
+    sslDays: Number(by.ops?.thresholds?.sslDays ?? 14) || 14 }
 }
 
 const devices = {
@@ -95,8 +96,11 @@ Deno.serve(async (req) => {
 
   if (body.health) {
     if (!(w?.kind === 'service' || (w?.kind === 'team' && (w.role === 'admin' || w.role === 'support')))) return json({ error: 'Only admins and support can run the checks' }, 403)
-    const { env, siteUrl } = await ctx()
-    const checks = await runChecks({ supabaseUrl: SUPABASE_URL, serviceKey: SERVICE_KEY, anonKey: Deno.env.get('SUPABASE_ANON_KEY'), siteUrl, env, self: 'ops' })
+    const [{ env, siteUrl }, s, doms] = await Promise.all([ctx(), settings(),
+      admin.from('tenant_domains').select('domain, method, cf_hostname_id').not('verified_at', 'is', null).order('created_at').limit(40)])
+    const token = Deno.env.get('CF_API_TOKEN'), zone = Deno.env.get('CF_ZONE_ID')
+    const checks = await runChecks({ supabaseUrl: SUPABASE_URL, serviceKey: SERVICE_KEY, anonKey: Deno.env.get('SUPABASE_ANON_KEY'), siteUrl, env, self: 'ops',
+      domains: (doms.data ?? []) as any[], cf: token && zone ? { token, zone } : null, sslWarnDays: s.sslDays })
     const { data, error } = await admin.rpc('record_health', { p_results: checks })
     if (error) return json({ error: error.message }, 500)
     return json({ ok: true, results: data })

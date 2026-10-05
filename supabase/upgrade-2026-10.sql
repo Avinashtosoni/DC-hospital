@@ -7436,7 +7436,8 @@ returns jsonb language sql immutable as $$
   select '{
     "channels":   {"bell": true, "email": true, "push": false, "whatsapp": false},
     "events":     {},
-    "thresholds": {"queueBacklog": 200, "failurePct": 10, "dbPct": 80, "dbLimitMb": 8192, "latencyMs": 3000, "walletLowPaise": 20000, "trialDays": 3},
+    "thresholds": {"queueBacklog": 200, "failurePct": 10, "dbPct": 80, "dbLimitMb": 8192, "latencyMs": 3000, "walletLowPaise": 20000, "trialDays": 3,
+                   "connPct": 80, "storagePct": 80, "storageLimitMb": 102400, "webhookHours": 24, "sslDays": 14},
     "health":     {"enabled": true, "siteUrl": ""}
   }'::jsonb
 $$;
@@ -7453,7 +7454,9 @@ returns jsonb language sql immutable as $$
     {"key": "wallet_low",       "label": "Hospital wallet running low",              "group": "Money",  "severity": "warning",  "roles": ["admin", "finance"]},
     {"key": "incident_new",     "label": "Incident logged",                          "group": "Safety", "severity": "critical", "roles": ["admin", "support"]},
     {"key": "health_down",      "label": "Service down",                             "group": "System", "severity": "critical", "roles": ["admin", "support"]},
-    {"key": "threshold",        "label": "Limit crossed (queue, failures, database)", "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
+    {"key": "job_late",         "label": "Scheduled job late or failing",            "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
+    {"key": "delivery_spike",   "label": "Message failures spiking",                 "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
+    {"key": "threshold",        "label": "Limit crossed (queue, database, storage, SSL…)", "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
     {"key": "health_recovered", "label": "Service back to normal",                   "group": "System", "severity": "info",     "roles": ["admin", "support"]}
   ]'::jsonb
 $$;
@@ -8132,7 +8135,7 @@ declare
   v_hosp uuid := nullif(p ->> 'hospital', '')::uuid; v_q text := nullif(trim(coalesce(p ->> 'q', '')), '');
   v_limit int := greatest(1, least(coalesce((p ->> 'limit')::int, 100), 300));
 begin
-  perform public.cp_require(array['admin', 'support']);
+  perform public.cp_require(array['admin']);
   return coalesce((select jsonb_agg(x order by x.created_at desc) from (
       select * from (
         select 'hospital' as source, o.id, o.created_at, o.tenant_id as hospital_id, t.name as hospital, o.event as kind, o.channel, o.status, o.attempts, o.error, o.provider_ref,
@@ -8159,7 +8162,7 @@ end $$;
 create or replace function public.cp_retry_message(p_source text, p_id uuid)
 returns void language plpgsql volatile security definer set search_path = public as $$
 begin
-  perform public.cp_require(array['admin', 'support']);
+  perform public.cp_require(array['admin']);
   if p_source = 'platform' then
     update public.platform_outbox set status = 'pending', attempts = 0, error = null, next_attempt_at = now() where id = p_id and status in ('failed', 'skipped');
   elsif p_source = 'hospital' then
@@ -8168,7 +8171,7 @@ begin
   else raise exception 'Unknown source.'; end if;
   if not found then raise exception 'Only failed messages can be retried (one-time codes and tests cannot).'; end if;
   insert into public.provider_audit (user_id, user_name, mode, action, target, detail)
-  values (auth.uid(), (select full_name from public.profiles where id = auth.uid()), public.provider_role(), 'message:retry', p_source, jsonb_build_object('id', p_id));
+  values (auth.uid(), (select full_name from public.profiles where id = auth.uid()), 'admin', 'message:retry', p_source, jsonb_build_object('id', p_id));
 end $$;
 
 -- ------------------------------------------------------------------ 5. health
@@ -8200,7 +8203,24 @@ alter table public.platform_health_state enable row level security;
 revoke all on public.platform_health_state from anon, authenticated;
 grant all on public.platform_health_state to service_role;
 
--- the database's own checks: size, message queues, delivery failures, scheduler
+-- "last seen" times written by Edge Functions (Razorpay webhook received / rejected)
+create table if not exists public.platform_heartbeats (
+  key      text primary key check (key ~ '^[a-z0-9_:-]{2,60}$'),
+  last_at  timestamptz not null default now(),
+  detail   text check (char_length(detail) <= 300),
+  count    bigint not null default 1
+);
+alter table public.platform_heartbeats enable row level security;
+revoke all on public.platform_heartbeats from anon, authenticated;
+grant all on public.platform_heartbeats to service_role;
+
+create or replace function public.note_heartbeat(p_key text, p_detail text default null)
+returns void language sql volatile security definer set search_path = public as $$
+  insert into public.platform_heartbeats (key, last_at, detail) values (p_key, now(), left(p_detail, 300))
+  on conflict (key) do update set last_at = now(), detail = excluded.detail, count = public.platform_heartbeats.count + 1;
+$$;
+
+-- the database's own checks: size, connections, storage, message queues, delivery failures, scheduler, Razorpay webhook
 create or replace function public.platform_db_checks()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare
@@ -8209,7 +8229,41 @@ declare
   v_limit numeric := greatest(coalesce((th ->> 'dbLimitMb')::numeric, 8192), 1) * 1024 * 1024;
   v_pct numeric; v_backlog int; v_total int; v_failed int; v_fpct numeric; v_cron boolean := exists (select 1 from pg_extension where extname = 'pg_cron');
   v_last timestamptz; v_bad int := 0; out jsonb := '[]'::jsonb; v_q int := greatest(coalesce((th ->> 'queueBacklog')::int, 200), 1);
+  v_conn int; v_max int; v_cpct numeric; v_st bigint; v_slimit numeric; v_spct numeric;
+  v_hours int := greatest(coalesce((th ->> 'webhookHours')::int, 24), 1); v_wh timestamptz; v_whbad timestamptz; v_paid int; v_oldest timestamptz;
 begin
+  -- connections in use vs max_connections
+  select count(*) into v_conn from pg_stat_activity;
+  v_max := greatest(coalesce(current_setting('max_connections', true)::int, 100), 1);
+  v_cpct := round(v_conn * 100.0 / v_max, 1);
+  out := out || jsonb_build_object('service', 'db:connections', 'label', 'Database connections', 'group', 'Database',
+    'status', case when v_cpct >= greatest(coalesce((th ->> 'connPct')::numeric, 80), 95) then 'fail' when v_cpct >= coalesce((th ->> 'connPct')::numeric, 80) then 'warn' else 'ok' end,
+    'detail', v_conn || ' of ' || v_max || ' in use (' || v_cpct || '%)');
+  -- file storage used (all buckets) vs the plan's limit
+  if exists (select 1 from information_schema.columns where table_schema = 'storage' and table_name = 'objects' and column_name = 'metadata') then
+    execute $q$ select coalesce(sum((metadata ->> 'size')::bigint), 0) from storage.objects $q$ into v_st;
+    v_slimit := greatest(coalesce((th ->> 'storageLimitMb')::numeric, 102400), 1) * 1024 * 1024;
+    v_spct := round(v_st * 100.0 / v_slimit, 1);
+    out := out || jsonb_build_object('service', 'storage:usage', 'label', 'File storage used', 'group', 'Database',
+      'status', case when v_spct >= greatest(coalesce((th ->> 'storagePct')::numeric, 80), 95) then 'fail' when v_spct >= coalesce((th ->> 'storagePct')::numeric, 80) then 'warn' else 'ok' end,
+      'detail', pg_size_pretty(v_st) || ' of ' || pg_size_pretty(v_slimit::bigint) || ' (' || v_spct || '%)');
+  end if;
+  -- Razorpay webhook: every online payment marked paid should be followed by a webhook
+  select last_at into v_wh from public.platform_heartbeats where key = 'razorpay_webhook';
+  select last_at into v_whbad from public.platform_heartbeats where key = 'razorpay_webhook_bad';
+  select count(*), min(paid_at) into v_paid, v_oldest from public.billing_payments
+   where provider = 'razorpay' and status = 'paid' and paid_at > now() - make_interval(hours => v_hours) and paid_at < now() - interval '15 minutes';
+  out := out || jsonb_build_object('service', 'webhook:razorpay', 'label', 'Razorpay webhook', 'group', 'Payments',
+    'status', case when v_whbad is not null and v_whbad > coalesce(v_wh, '-infinity') and v_whbad > now() - make_interval(hours => v_hours) then 'warn'
+                   when v_paid > 0 and coalesce(v_wh, '-infinity') < v_oldest then 'warn'
+                   when v_wh is null then 'off' else 'ok' end,
+    'detail', case when v_whbad is not null and v_whbad > coalesce(v_wh, '-infinity') and v_whbad > now() - make_interval(hours => v_hours)
+                     then 'Webhooks are being rejected (bad signature) — the webhook secret in Razorpay and RAZORPAY_WEBHOOK_SECRET differ'
+                   when v_paid > 0 and coalesce(v_wh, '-infinity') < v_oldest
+                     then v_paid || ' online payment(s) in the last ' || v_hours || ' h but no webhook since — check Razorpay → Webhooks'
+                   when v_wh is null then 'No webhook received yet'
+                   else 'Last webhook ' || to_char(v_wh at time zone 'Asia/Kolkata', 'DD Mon HH24:MI') || ' IST' end);
+
   v_pct := round(v_size * 100.0 / v_limit, 1);
   out := out || jsonb_build_object('service', 'db:size', 'label', 'Database size', 'group', 'Database',
     'status', case when v_pct >= greatest(coalesce((th ->> 'dbPct')::numeric, 80), 95) then 'fail' when v_pct >= coalesce((th ->> 'dbPct')::numeric, 80) then 'warn' else 'ok' end,
@@ -8261,7 +8315,12 @@ begin
       since = case when public.platform_health_state.status = excluded.status then public.platform_health_state.since else now() end,
       last_checked_at = now(), latency_ms = excluded.latency_ms, detail = excluded.detail;
     if v_prev is distinct from r.status then
-      if r.status = 'fail' then
+      if r.status in ('fail', 'warn') and r.service = 'db:cron' then
+        perform public.raise_platform_alert_safe('job_late', coalesce(r.label, r.service) || case when r.status = 'fail' then ' stopped' else ' has failing jobs' end,
+          coalesce(r.detail, ''), '/health', 'health:' || r.service || ':' || r.status, 60);
+      elsif r.status in ('fail', 'warn') and r.service = 'db:delivery' then
+        perform public.raise_platform_alert_safe('delivery_spike', 'Message failures spiking', coalesce(r.detail, ''), '/messaging?tab=log', 'health:' || r.service || ':' || r.status, 60);
+      elsif r.status = 'fail' then
         perform public.raise_platform_alert_safe('health_down', coalesce(r.label, r.service) || ' is down', coalesce(r.detail, ''), '/health', 'health:' || r.service || ':fail', 30);
       elsif r.status = 'warn' and coalesce(v_prev, 'ok') in ('ok', 'off') then
         perform public.raise_platform_alert_safe('threshold', coalesce(r.label, r.service) || ' needs attention', coalesce(r.detail, ''), '/health', 'health:' || r.service || ':warn', 60);
@@ -8290,6 +8349,11 @@ begin
                        from public.platform_health_checks c where c.service = s.service and c.checked_at > now() - interval '24 hours'),
         'uptime7d', (select round(100.0 * count(*) filter (where c.status in ('ok', 'warn')) / nullif(count(*) filter (where c.status <> 'off'), 0), 2)
                        from public.platform_health_checks c where c.service = s.service and c.checked_at > now() - interval '7 days'),
+        'days', coalesce((select jsonb_agg(jsonb_build_object('d', d.d, 'ok', d.ok, 'n', d.n, 'ms', d.ms) order by d.d)
+                    from (select date_trunc('day', c.checked_at at time zone 'Asia/Kolkata')::date d, count(*) filter (where c.status in ('ok', 'warn'))::int ok,
+                                 count(*) filter (where c.status <> 'off')::int n, round(avg(c.latency_ms))::int ms
+                            from public.platform_health_checks c where c.service = s.service and c.checked_at > now() - interval '7 days'
+                           group by 1) d), '[]'::jsonb),
         'hours', coalesce((select jsonb_agg(jsonb_build_object('h', h.h, 'ok', h.ok, 'n', h.n, 'ms', h.ms) order by h.h)
                     from (select date_trunc('hour', c.checked_at) h, count(*) filter (where c.status in ('ok', 'warn'))::int ok,
                                  count(*) filter (where c.status <> 'off')::int n, round(avg(c.latency_ms))::int ms
@@ -8330,8 +8394,8 @@ revoke all on function public.ops_defaults(), public.ops_alert_catalog(), public
   public.platform_env(), public.claim_platform_outbox(int), public.ops_default_channels(text),
   public.raise_platform_alert(text, text, text, text, text, int, text, jsonb), public.raise_platform_alert_safe(text, text, text, text, text, int, text),
   public.run_platform_hourly_alerts(), public.broadcast_recipients(jsonb), public.broadcast_dispatch(uuid), public.run_due_broadcasts(),
-  public.platform_db_checks(), public.record_health(jsonb), public.ops_call(jsonb), public.ops_cron_tick() from public, anon, authenticated;
-grant execute on function public.platform_env(), public.claim_platform_outbox(int), public.record_health(jsonb), public.raise_platform_alert(text, text, text, text, text, int, text, jsonb) to service_role;
+  public.platform_db_checks(), public.record_health(jsonb), public.note_heartbeat(text, text), public.ops_call(jsonb), public.ops_cron_tick() from public, anon, authenticated;
+grant execute on function public.platform_env(), public.claim_platform_outbox(int), public.record_health(jsonb), public.note_heartbeat(text, text), public.raise_platform_alert(text, text, text, text, text, int, text, jsonb) to service_role;
 
 revoke all on function public.cp_messaging_setup(), public.cp_save_messaging_setup(jsonb, jsonb), public.cp_save_platform_templates(jsonb),
   public.cp_register_push(text, text), public.cp_unregister_push(text), public.cp_push_config(), public.cp_alerts(int, boolean), public.cp_alerts_read(uuid[]),
