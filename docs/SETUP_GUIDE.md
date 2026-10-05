@@ -102,8 +102,8 @@ npx supabase functions deploy ops                    # control panel: team alert
 |---|---|
 | `PLATFORM_NAME` | `Hospital Comrade` (ya aapka brand) |
 | `PLATFORM_DOMAIN` | `<your-domain>` (bina `https://` ke) |
-| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | **C8** (staging = `rzp_test_…`) |
-| `RAZORPAY_WEBHOOK_SECRET` | **C9** |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | **C8** (staging = `rzp_test_…`). Ya control panel → Platform settings → Integrations → Razorpay mein daalein (Vault, panel wali keys pehle use hoti hain) |
+| `RAZORPAY_WEBHOOK_SECRET` | **C9** (ya wahi Integrations card) |
 | `PLATFORM_EMAIL_PROVIDER` | `resend` ya `sendgrid` |
 | `PLATFORM_EMAIL_FROM` | jaise `notifications@<your-domain>` (yeh domain provider par verified hona chahiye) |
 | `PLATFORM_RESEND_API_KEY` *ya* `PLATFORM_SENDGRID_API_KEY` | **C10** |

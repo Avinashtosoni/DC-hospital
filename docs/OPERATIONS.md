@@ -100,11 +100,20 @@ The site itself: `/healthz` returns `ok` (Docker health check).
 
 **Control panel pages:**
 
-- **Messaging → Shared accounts** (admin): pick the SMS, WhatsApp, e-mail and Firebase push providers and save their keys.
-  - Keys are write-only: you only ever see `••••1234` plus who saved it and when. Changing a key asks for your password and is audited (`messaging:setup`).
-  - A value saved here wins over the Edge secret with the same `PLATFORM_*` name.
+- **Platform settings → Integrations** (admin): one card each for **Razorpay**, **SMS**, **WhatsApp**, **E-mail** and **Browser push (Firebase)**.
+  - **Status**: Connected / Needs attention / Error / Not set up, from the latest health check, with its detail (e.g. "fast2sms · key accepted · wallet ₹493"). It also says where the keys come from: saved in the panel, Edge Function secrets (fallback), or both.
+  - **Check connection** checks that one account right away (no message is sent) and stores the result like a scheduled check. It also runs automatically after you save.
+  - **Send test** (SMS, WhatsApp, e-mail, push) sends one real message on the shared account.
+  - **Manage keys**: pick the provider (or "Not used" to switch the channel off), fill the fields, remove a saved key.
+    - Keys are write-only: you only ever see `••••1234` plus who saved it and when.
+    - Changing a key asks for your password and is audited (`messaging:setup`).
+    - A value saved here wins over the Edge secret with the same `PLATFORM_*` name.
+  - **Razorpay**:
+    - Key ID, key secret and webhook secret. Panel keys are used as a pair (both saved), otherwise the `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` Edge secrets. The webhook secret falls back on its own.
+    - The card shows test / live mode, whether webhooks are arriving, and the webhook URL to copy. Razorpay events: `payment.captured`, `payment.failed`, `order.paid`.
+    - Saved keys reach the `billing` function within a minute.
+- **Messaging** (admin):
   - **Templates**: approved WhatsApp template names, their parameter order and DLT IDs, per message.
-  - **Test send**: sends one real message.
   - **Delivery log** (admins only): every message from every hospital and from the platform, with **Retry** for failed ones. One-time codes and tests can't be retried.
 - **Broadcasts** (admin): in-app banner, e-mail, WhatsApp, SMS and push to all hospitals, or by plan, status or a hand-picked list, sent to the roles you choose.
   - The preview shows the recipient count and estimated cost. You can send now or schedule.
@@ -131,7 +140,7 @@ The site itself: `/healthz` returns `ok` (Docker health check).
 **Troubleshooting:**
 
 - "Last run … looks stopped": the scheduler is off, or `ops` isn't deployed. Check `select public.ops_call('{"health":true}')` and look at the Edge Function logs.
-- Push "not set up": either the Firebase web config is missing in Messaging → Shared accounts, or Push is switched off in Alerts → Settings.
+- Push "not set up": either the Firebase web config is missing in Platform settings → Integrations, or Push is switched off in Alerts → Settings.
 
 ## 7.6 Retention
 

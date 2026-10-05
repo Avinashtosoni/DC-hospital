@@ -2,6 +2,14 @@
 
 ## Unreleased: control panel messaging, alerts, broadcasts and live health
 
+- **Platform settings → Integrations:**
+  - Razorpay, SMS, WhatsApp, e-mail and Firebase push are now in one place.
+  - Each card shows the live status, where the keys come from (panel or Edge secret), Check connection, Send test, and write-only keys.
+  - Razorpay keys can now be saved in the panel (Vault). The `billing` function prefers them over the `RAZORPAY_*` secrets.
+  - The card shows test / live mode, whether webhooks are arriving, and the webhook URL to copy.
+  - Health also checks the Razorpay keys.
+- **Messaging** keeps Templates and the Delivery log. Old Shared accounts / Test send links go to Integrations.
+
 - **Messaging page:**
   - Shared SMS, WhatsApp, e-mail and Firebase push accounts, with keys kept in Supabase Vault. Keys are write-only, saving one needs your password, and every change is audited.
   - Template IDs per message, test sends, and a cross-hospital delivery log with Retry.
