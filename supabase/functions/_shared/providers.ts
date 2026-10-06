@@ -91,7 +91,7 @@ export function phoneFromChatId(id: string) {
 }
 const openwaBase = (url: string) => {
   const u = (url ?? '').trim().replace(/\/+$/, '').replace(/\/api$/, '')
-  if (!/^https?:\/\//.test(u)) throw new Error('WA CRM / OpenWA URL must start with https:// (e.g. https://wacrm.example.in)')
+  if (!/^https?:\/\//.test(u)) throw new Error('OpenWA URL must start with https:// (e.g. https://wa.example.in/api)')
   return u
 }
 
@@ -99,20 +99,20 @@ const openwaBase = (url: string) => {
 export async function openwaStatus(c: Ctx): Promise<{ ok: boolean; status?: string; phone?: string; error?: string }> {
   const cfg = c.n.whatsapp ?? {}
   try {
-    need(cfg.openwaSession, 'OpenWA session ID'); need(c.secrets.openwa_api_key, 'WA CRM / OpenWA API key')
+    need(cfg.openwaSession, 'OpenWA session ID'); need(c.secrets.openwa_api_key, 'OpenWA API key')
     const r = await fetch(`${openwaBase(cfg.openwaUrl)}/api/sessions/${encodeURIComponent(cfg.openwaSession)}`, { headers: { 'X-API-Key': c.secrets.openwa_api_key }, redirect: 'manual' })
     if (r.status === 401) throw new Error('OpenWA rejected the API key (401)')
     if (r.status === 403) throw new Error('This API key is not allowed to use that session (403)')
     if (r.status === 404) throw new Error('OpenWA session was not found — check the session ID')
     if (!r.ok) throw new Error(`OpenWA HTTP ${r.status}: ${String(await err(r)).slice(0, 160)}`)
     const j = await r.json()
-    return { ok: j.status === 'ready', status: j.status, phone: j.phone ?? undefined, error: j.status === 'ready' ? undefined : `WhatsApp session is "${j.status}" — open WA CRM and scan the QR code / reconnect` }
+    return { ok: j.status === 'ready', status: j.status, phone: j.phone ?? undefined, error: j.status === 'ready' ? undefined : `WhatsApp session is "${j.status}" — open the OpenWA dashboard and scan the QR code / reconnect` }
   } catch (e) { return { ok: false, error: (e as Error).message } }
 }
 
 async function openwa(m: Msg, c: Ctx): Promise<Result> {
   const cfg = c.n.whatsapp ?? {}
-  need(cfg.openwaSession, 'OpenWA session ID'); need(c.secrets.openwa_api_key, 'WA CRM / OpenWA API key')
+  need(cfg.openwaSession, 'OpenWA session ID'); need(c.secrets.openwa_api_key, 'OpenWA API key')
   const base = openwaBase(cfg.openwaUrl)
   const chatId = chatIdFor(m.recipient, cfg.chatIdFormat)
   const r = await fetch(`${base}/api/sessions/${encodeURIComponent(cfg.openwaSession)}/messages/send-text`, {
@@ -124,7 +124,7 @@ async function openwa(m: Msg, c: Ctx): Promise<Result> {
     const msg = String(await err(r)).slice(0, 200)
     if (r.status === 401) throw new Error('OpenWA rejected the API key (401)')
     if (r.status === 404) throw new Error(`OpenWA session was not found — check the session ID (${msg})`)
-    if (r.status === 409) throw new Error('WhatsApp session is not connected (409) — open WA CRM and scan the QR code')
+    if (r.status === 409) throw new Error('WhatsApp session is not connected (409) — open the OpenWA dashboard and scan the QR code')
     if (r.status === 429) throw new Error(`OpenWA is pacing sends (429) — will retry: ${msg}`)
     throw new Error(`OpenWA HTTP ${r.status}: ${msg}`)
   }
@@ -215,7 +215,7 @@ async function aisensy(m: Msg, c: Ctx): Promise<Result> {
   const cfg = c.n.whatsapp ?? {}
   const tpl = c.n.templates?.[m.event] ?? {}
   need(c.secrets.aisensy_api_key, 'AiSensy API key')
-  if (m.event === 'bot') throw new Error('AiSensy cannot send free-text chatbot replies — use WA CRM / OpenWA, Meta Cloud API or Twilio for the chatbot')
+  if (m.event === 'bot') throw new Error('AiSensy cannot send free-text chatbot replies — use OpenWA, Meta Cloud API or Twilio for the chatbot')
   let campaign: string, values: string[]
   if (m.event === 'test') {
     need(cfg.aisensyTestCampaign, 'AiSensy test campaign name')

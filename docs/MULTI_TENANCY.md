@@ -334,7 +334,7 @@ template (or AiSensy campaign) names with their variables in order — start the
 names the hospital — and the DLT template IDs; per hospital set an optional own DLT header (+ its DLT IDs) and the
 monthly allowances. India DLT: templates are registered under the platform's principal entity with a `{#var#}` for
 the hospital name. Template-only providers (AiSensy, Meta, MSG91, DLT SMS) can't send a hospital's *custom messages*
-unless a matching shared template exists; WA CRM / OpenWA sends each hospital's own wording.
+unless a matching shared template exists; OpenWA sends each hospital's own wording.
 
 ### Billing (Razorpay) — once
 1. Razorpay Dashboard (Hospital Comrade's own account) → API keys. Webhooks → URL

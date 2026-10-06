@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased: control panel messaging, alerts, broadcasts and live health
+## Unreleased: wacrm WhatsApp provider and OTP verification
+
+- **wacrm (WhatsApp CRM, Meta Cloud API)** is a WhatsApp provider for hospitals and for the shared platform account.
+  - Key and scope check via `/api/v1/me`.
+  - System health check.
+  - **Connect** registers the signed `message.received` webhook, so patient replies reach the booking chatbot (`X-Wacrm-Signature` verified).
+  - The old "WA CRM / OpenWA" wording is now just "OpenWA".
+- **Sign-in verification (OTP):**
+  - A 6-digit code after the password, once per device sign-in.
+  - Hospitals (staff only, or everyone) and the control-panel team each get an on/off switch and channel choice (WhatsApp / SMS / e-mail).
+  - Enforced in the database: `current_tenant()` and `provider_role()` stay empty until the code is entered.
+  - Safeguards:
+    - Switching it on needs your own verified code.
+    - People with no reachable channel aren't locked out.
+    - Impersonation sessions count as verified.
+    - Password re-checks keep the verified session.
+  - New pages: **Settings → Security**, **Platform settings → Security**, and **Hospital → Security** in the control panel.
+- **Booking OTP:**
+  - On/off switch: when off, `/book` confirms straight away, still rate-limited per number.
+  - Channel choice, including **e-mail**.
+- New message templates: **Sign-in code** (`login_otp`) and **Team sign-in code** (`platform_otp`).
+
+## Earlier: control panel messaging, alerts, broadcasts and live health
 
 - **Platform settings → Integrations:**
   - Razorpay, SMS, WhatsApp, e-mail and Firebase push are now in one place.

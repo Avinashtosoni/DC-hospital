@@ -1,4 +1,4 @@
-// Incoming OpenWA / WA CRM webhook → chatbot message. Shared by supabase/functions/whatsapp-bot and the tests.
+// Incoming OpenWA webhook → chatbot message. Shared by supabase/functions/whatsapp-bot and the tests.
 // OpenWA signs every delivery: X-OpenWA-Signature: sha256=<hex HMAC-SHA256 of the raw body, keyed with the webhook secret>.
 // deno-lint-ignore-file no-explicit-any
 import { phoneFromChatId } from './providers.ts'

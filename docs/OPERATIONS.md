@@ -128,7 +128,7 @@ The site itself: `/healthz` returns `ok` (Docker health check).
   - Auth and Storage
   - every Edge Function (with latency)
   - the database itself (a small read through the API, with response time)
-  - the shared provider keys (no message is sent): Resend, SendGrid, Meta, OpenWA, Firebase, MSG91 (balance API) and Fast2SMS (wallet API, also shows the balance). AiSensy has no public key-check API, so it shows "configured"
+  - the shared provider keys (no message is sent): Resend, SendGrid, Meta, OpenWA, wacrm (`GET /api/v1/me`, key + scopes), Firebase, MSG91 (balance API) and Fast2SMS (wallet API, also shows the balance). AiSensy has no public key-check API, so it shows "configured"
   - database connections against `max_connections`, and file storage used against your plan limit (set **File storage limit** in Alerts → Settings; Supabase Pro = 102400 MB)
   - the Razorpay webhook: when it was last seen, with a warning if online payments came in without a webhook or if signatures are being rejected
   - hospital custom domains: HTTPS works, and for Cloudflare domains the certificate status and expiry (needs `CF_API_TOKEN` and `CF_ZONE_ID` on the ops function too)
@@ -141,6 +141,27 @@ The site itself: `/healthz` returns `ok` (Docker health check).
 
 - "Last run … looks stopped": the scheduler is off, or `ops` isn't deployed. Check `select public.ops_call('{"health":true}')` and look at the Edge Function logs.
 - Push "not set up": either the Firebase web config is missing in Platform settings → Integrations, or Push is switched off in Alerts → Settings.
+
+### Sign-in verification (OTP)
+
+- **Team:** Platform settings → **Security**. Hospitals: their **Settings → Security**, or control panel → Hospital → **Security**. Booking code on / off is in the same places.
+- **Delivery:**
+  - Team codes go to `platform_outbox` (kind `otp`), and the panel asks `ops` to send them at once (`{ "deliver_otp": … }`).
+  - Hospital codes go to the hospital's own `notification_outbox` (event `login_otp`) and are flushed right away.
+  - Both are retried by the every-minute tick.
+- **Deploy:**
+  - Run `supabase/upgrade-2026-10.sql`, then `npx supabase functions deploy ops notify`.
+  - `ops` refuses everything except `deliver_otp` to a team member who hasn't entered this session's code.
+- **Locked out** (codes not arriving)? Switch it off in the SQL editor. As the database owner the safety check doesn't apply:
+
+  ```sql
+  -- the team's own switch
+  update public.platform_settings set data = jsonb_set(data, '{loginOtp,enabled}', 'false') where key = 'security';
+  -- one hospital
+  update public.app_settings set data = jsonb_set(data, '{security,otp,login,enabled}', 'false')
+   where key = 'app' and tenant_id = '<hospital id>';
+  ```
+- **Audit:** switching is recorded as `settings:security` / `hospital:otp` in the provider log, and as normal settings changes in the hospital's audit log.
 
 ## 7.6 Retention
 

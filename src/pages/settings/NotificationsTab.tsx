@@ -168,7 +168,7 @@ function OpenwaFields({ cfg, set, secrets }: { cfg: AppSettings['notifications']
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Gateway URL" hint="Paste the base URL or the full send-text URL — the session ID is filled in for you">
         <Input value={cfg.openwaUrl} onChange={(e) => onUrl(e.target.value)} onBlur={(e) => tidy(e.target.value)} placeholder="https://wacrm.digitalcomrade.in" className="font-mono text-xs" /></Field>
-      <Field label="Session ID" hint="WA CRM → Sessions → the linked WhatsApp number">
+      <Field label="Session ID" hint="OpenWA dashboard → Sessions → the linked WhatsApp number">
         <Input value={cfg.openwaSession} onChange={(e) => set((s) => { s.openwaSession = e.target.value.trim() })} placeholder="9b11cfeb-b5a2-…" className="font-mono text-xs" /></Field>
     </div>
     <SecretInput name="openwa_api_key" secrets={secrets} />
@@ -179,7 +179,7 @@ function OpenwaFields({ cfg, set, secrets }: { cfg: AppSettings['notifications']
       <p className="mt-0.5 font-mono text-[11px] leading-relaxed text-brand-800">POST {(cfg.openwaUrl || 'https://…').replace(/\/$/, '')}/api/sessions/{cfg.openwaSession || '<session>'}/messages/send-text<br />X-API-Key: ••••  ·  {'{'} "chatId": "{example || '91…@c.us'}", "text": "…" {'}'}</p>
       <p className="mt-1.5">Messages go out from your linked WhatsApp number as normal chats — <b>no Meta template approval</b>, so the WhatsApp text in each template below is sent as-is. Keep the phone online and the session <b>ready</b>; <i>Send test</i> checks this first. Use an API key with the <b>operator</b> role scoped to this session.</p>
     </div>
-    <Help href={`${(cfg.openwaUrl || 'https://github.com/rmyndharis/OpenWA').replace(/\/$/, '')}`}>Open WA CRM</Help>
+    <Help href={`${(cfg.openwaUrl || 'https://github.com/rmyndharis/OpenWA').replace(/\/$/, '')}`}>Open the OpenWA dashboard</Help>
   </>
 }
 
@@ -313,7 +313,7 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {def.tokens.map((k) => <button key={k} type="button" onClick={() => set((x) => { x.waText = (x.waText ?? '') + `{${k}}` })} className="rounded-md bg-emerald-50 px-1.5 py-0.5 font-mono text-[11px] text-emerald-800 ring-1 ring-emerald-100 hover:bg-emerald-100">{`{${k}}`}</button>)}
             </div>
-            <p className="mt-1 text-xs text-slate-400">WhatsApp formatting works: <code>*bold*</code>, <code>_italic_</code>, emoji and line breaks. Sent as-is by WA CRM / OpenWA, Twilio and webhook; Meta / Interakt use it only when no approved template name is set.</p>
+            <p className="mt-1 text-xs text-slate-400">WhatsApp formatting works: <code>*bold*</code>, <code>_italic_</code>, emoji and line breaks. Sent as-is by OpenWA, Twilio and webhook; Meta / Interakt use it only when no approved template name is set.</p>
           </div>
         )}
         {(def.channels.includes('email') || def.channels.includes('push')) && <Field label={def.channels.includes('push') ? (def.channels.includes('email') ? 'Email subject / push title' : 'Push title') : 'Email subject'}><Input value={t.subject} onChange={(e) => set((x) => { x.subject = e.target.value })} /></Field>}
@@ -537,7 +537,7 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
             <SecretInput name="meta_app_secret" secrets={secrets} />
           </>}
           {w.provider === 'openwa' && <>
-            <p>In <b>WA CRM → Sessions → {w.openwaSession ? <code className="text-xs">{w.openwaSession.slice(0, 8)}…</code> : 'your session'} → Webhooks</b>, add the URL, subscribe to <b>message.received</b> and set a <b>secret</b>. Paste the same secret below — unsigned requests are rejected, because the sender’s number is the patient’s identity.</p>
+            <p>In <b>OpenWA dashboard → Sessions → {w.openwaSession ? <code className="text-xs">{w.openwaSession.slice(0, 8)}…</code> : 'your session'} → Webhooks</b>, add the URL, subscribe to <b>message.received</b> and set a <b>secret</b>. Paste the same secret below — unsigned requests are rejected, because the sender’s number is the patient’s identity.</p>
             <SecretInput name="openwa_webhook_secret" secrets={secrets} />
           </>}
           {w.provider === 'wacrm' && <WacrmReplies secrets={secrets} hook={hook} />}

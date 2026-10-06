@@ -13,7 +13,7 @@ import { usageMonth } from '../../supabase/functions/_shared/platform'
 export type { PlatformMessaging, PlatformTemplate, TenantMessaging }
 export type PlatformChannel = 'sms' | 'whatsapp' | 'email'
 export const PLATFORM_CHANNELS: PlatformChannel[] = ['sms', 'whatsapp', 'email']
-export const PROVIDER_LABEL: Record<string, string> = { msg91: 'MSG91', fast2sms: 'Fast2SMS', aisensy: 'AiSensy', meta: 'Meta Cloud API', openwa: 'WA CRM / OpenWA', resend: 'Resend', sendgrid: 'SendGrid' }
+export const PROVIDER_LABEL: Record<string, string> = { msg91: 'MSG91', fast2sms: 'Fast2SMS', aisensy: 'AiSensy', meta: 'Meta Cloud API', openwa: 'OpenWA', resend: 'Resend', sendgrid: 'SendGrid' }
 
 export interface PlatformInfo {
   /** null = unknown (the notify function could not be reached) */

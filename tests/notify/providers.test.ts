@@ -151,7 +151,7 @@ describe('webhook + retry policy', () => {
   })
 })
 
-describe('WhatsApp — WA CRM / OpenWA gateway', () => {
+describe('WhatsApp — OpenWA gateway', () => {
   const KEY = 'owa_k1_test'
   const SESSION = '9b11cfeb-b5a2-4636-8415-d29cf3555089'
   const wa = (extra: Record<string, unknown> = {}) => ctx({ whatsapp: { enabled: true, provider: 'openwa', openwaUrl: 'https://wacrm.example.in/', openwaSession: SESSION, ...extra } }, { openwa_api_key: KEY })

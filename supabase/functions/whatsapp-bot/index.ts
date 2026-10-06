@@ -204,7 +204,7 @@ Deno.serve(async (req) => {
   let body: any = {}
   try { body = JSON.parse(raw || '{}') } catch { return json({ error: 'invalid JSON' }, 400) }
 
-  // ---- OpenWA / WA CRM (self-hosted WhatsApp Web gateway) — see ../_shared/openwa.ts
+  // ---- OpenWA (self-hosted WhatsApp Web gateway) — see ../_shared/openwa.ts
   const owaSig = req.headers.get('x-openwa-signature')
   if (owaSig !== null || (typeof body.event === 'string' && body.data && body.sessionId)) {
     const cfg = setup.ctx.n.whatsapp ?? {}

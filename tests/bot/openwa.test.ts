@@ -1,4 +1,4 @@
-/** Incoming OpenWA / WA CRM webhook: signature, filtering and sender extraction (supabase/functions/_shared/openwa.ts). */
+/** Incoming OpenWA webhook: signature, filtering and sender extraction (supabase/functions/_shared/openwa.ts). */
 import { describe, expect, test } from 'vitest'
 import { openwaSignature, parseOpenwa } from '../../supabase/functions/_shared/openwa'
 
