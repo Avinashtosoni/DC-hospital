@@ -5,7 +5,8 @@ import { endImpersonation, IMPERSONATION_BLOCKED } from '../auth/impersonation'
 import { cleanTerm } from './query'
 import type { AuthAdapter, DataAdapter, NewRow, Row } from './adapter'
 import { isLicenseError, licenseStaffMessage } from '../billing/license'
-import { ConfirmEmailError } from './errors'
+import { ConfirmEmailError, OtpRequiredError } from './errors'
+import { carryLoginOtp, currentSessionId, loginOtpStatus } from '../auth/loginOtp'
 
 const client = () => {
   if (!supabase) throw new Error('Supabase is not configured')
@@ -122,6 +123,12 @@ export function friendlyDbError(error: { message: string; code?: string; details
 
 let warnedTruncated = false
 
+/** sign-in OTP on and this session has not entered its code → nothing of the hospital is readable yet; say so */
+async function otpGate() {
+  const s = await loginOtpStatus()
+  if (s?.required && !s.passed) throw new OtpRequiredError(s)
+}
+
 async function fetchProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await client().from('profiles').select('*').eq('id', userId).maybeSingle()
   if (error) throw new Error(error.message)
@@ -132,11 +139,14 @@ export const supabaseAuth: AuthAdapter = {
   async getCurrent() {
     const { data } = await client().auth.getSession()
     const uid = data.session?.user.id
-    return uid ? fetchProfile(uid) : null
+    if (!uid) return null
+    await otpGate()
+    return fetchProfile(uid)
   },
   async signIn(email, password) {
     const { data, error } = await client().auth.signInWithPassword({ email, password })
     if (error) throw new Error(error.message)
+    await otpGate()
     const p = await fetchProfile(data.user.id)
     if (!p) throw new Error('No profile found. Did you run supabase/master.sql?')
     return p
@@ -146,6 +156,7 @@ export const supabaseAuth: AuthAdapter = {
     const { data, error } = await client().auth.signUp({ email, password, options: { data: { full_name, phone, ...(invite_token ? { invite_token } : {}), ...(tenancyEnabled() && siteTenant() ? { tenant_id: siteTenant()!.id } : {}) } } })
     if (error) throw new Error(error.message)
     if (!data.session) throw new ConfirmEmailError(email)
+    await otpGate()
     const p = await fetchProfile(data.user!.id)
     if (!p) throw new Error('Profile was not created. Check the handle_new_user trigger.')
     return p
@@ -161,8 +172,10 @@ export const supabaseAuth: AuthAdapter = {
     const email = data.user?.email
     if (!email) throw new Error('Not signed in')
     // re-authenticate first so a borrowed, unlocked session can't silently change the password
+    const before = await currentSessionId()
     const check = await client().auth.signInWithPassword({ email, password: current })
     if (check.error) throw new Error('Your current password is incorrect')
+    await carryLoginOtp(before)   // that started a new session: it keeps this device's verified sign-in code
     const { error } = await client().auth.updateUser({ password: next })
     if (error) throw new Error(error.message)
   },

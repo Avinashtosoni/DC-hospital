@@ -34,7 +34,7 @@ const remote = {
   },
   async save(data: AppSettings): Promise<SettingsRow> {
     const { data: row, error } = await sb().from('app_settings').upsert({ key: 'app', data }, { onConflict: 'tenant_id,key' }).select('data, updated_at, updated_by_name').single()
-    if (error) throw new Error(error.message)
+    if (error) throw new Error(error.message.replace(/^OTP_SETUP:\s*/, ''))   // sign-in OTP: verify your own code first
     return row as SettingsRow
   },
   async secrets(): Promise<SecretStatus[]> {

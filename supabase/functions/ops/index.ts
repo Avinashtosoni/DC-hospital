@@ -10,6 +10,10 @@
 //   { "test": { "channel": "email", "to": "…" } }      send a test on the shared account — control-panel admin; push → their own browsers
 //   { "check": "razorpay" | "sms" | "whatsapp" | "email" | "push" }   check one account now (Platform settings → Integrations) — admin
 //   { "sources": ["PLATFORM_…"] }                  for each key: saved in the panel / set as an Edge secret (never the value) — admin
+//   { "deliver_otp": "<login_otps id>" }            send the caller's own sign-in code now (request_login_otp queued it) — team member
+//
+// With "Sign-in OTP for the team" on (Platform settings → Security), a team member who has not entered this session's code
+// can only ask for deliver_otp; everything else answers 403 until login_otp_status() says passed.
 //
 // Shared-account keys come from the control panel (platform_env(): settings + Vault) with the PLATFORM_* Edge secrets as
 // fallback. Nothing secret is ever returned. See ../_shared/ops.ts and scripts/sql/cp_notify.sql.
@@ -26,7 +30,7 @@ const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
 
-type Who = { kind: 'service' } | { kind: 'team'; id: string; role: string } | null
+type Who = { kind: 'service' } | { kind: 'team'; id: string; role: string; otpPassed: boolean } | null
 async function who(req: Request): Promise<Who> {
   const jwt = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
   if (!jwt) return null
@@ -34,7 +38,18 @@ async function who(req: Request): Promise<Who> {
   const { data: { user } } = await admin.auth.getUser(jwt)
   if (!user) return null
   const { data } = await admin.from('provider_users').select('role, active').eq('user_id', user.id).maybeSingle()
-  return data?.active ? { kind: 'team', id: user.id, role: data.role } : null
+  if (!data?.active) return null
+  return { kind: 'team', id: user.id, role: data.role, otpPassed: await otpPassed(jwt) }
+}
+
+/** has this session (the caller's JWT) passed the team sign-in OTP? Older databases without the function: yes. */
+async function otpPassed(jwt: string): Promise<boolean> {
+  const anon = Deno.env.get('SUPABASE_ANON_KEY')
+  if (!anon) return true
+  const asUser = createClient(SUPABASE_URL, anon, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}` } } })
+  const { data, error } = await asUser.rpc('login_otp_status')
+  if (error) return /login_otp_status|PGRST202|42883/.test(`${error.message} ${(error as any).code ?? ""}`)   // missing function = older database
+  return (data as any)?.passed !== false
 }
 
 async function settings() {
@@ -57,15 +72,21 @@ async function ctx() {
   return { env, siteUrl: s.siteUrl, c: platformSendCtx(env, { templates: s.templates, siteUrl: s.siteUrl, devices }) }
 }
 
-const EVENT: Record<string, string> = { alert: 'platform_alert', broadcast: 'platform_broadcast', test: 'test' }
+const EVENT: Record<string, string> = { alert: 'platform_alert', broadcast: 'platform_broadcast', test: 'test', otp: 'platform_otp' }
 
 async function flush() {
   const { data: rows, error } = await admin.rpc('claim_platform_outbox', { p_limit: 25 })
   if (error) return { error: error.message }
-  if (!rows?.length) return { processed: 0, sent: 0, failed: 0 }
+  return deliverRows((rows ?? []) as any[])
+}
+
+/** deliver claimed ("sending") platform_outbox rows and record the outcome (retry later / give up) */
+async function deliverRows(rows: any[]) {
+  if (!rows.length) return { processed: 0, sent: 0, failed: 0, errors: [] as string[] }
   const { c, siteUrl } = await ctx()
   let sent = 0, failed = 0
-  for (const row of rows as any[]) {
+  const errors: string[] = []
+  for (const row of rows) {
     const link = row.kind === 'alert' ? panelLink(siteUrl, row.vars?.link) : String(row.vars?.link ?? '')
     const body = row.kind === 'alert' && link && row.channel !== 'push' ? `${row.body}\n\nOpen: ${link}` : row.body
     const m: Msg = { id: row.id, event: EVENT[row.kind] ?? row.kind, channel: row.channel as Channel, recipient: row.recipient, subject: row.subject, body,
@@ -74,6 +95,7 @@ async function flush() {
       ? { ok: false, error: `The shared ${row.channel} account is not configured` }
       : row.channel === 'push' && !c.n.push?.enabled ? { ok: false, error: 'Firebase service-account JSON is not configured' } : await deliver(m, c)
     r.ok ? sent++ : failed++
+    if (!r.ok && r.error) errors.push(r.error)
     const giveUp = !r.ok && (row.attempts >= 3 || isPermanent(r.error))
     await admin.from('platform_outbox').update({
       status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending', error: r.error ?? null, provider_ref: (r as any).ref ?? null,
@@ -81,7 +103,7 @@ async function flush() {
       ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
     }).eq('id', row.id)
   }
-  return { processed: rows.length, sent, failed }
+  return { processed: rows.length, sent, failed, errors }
 }
 
 Deno.serve(async (req) => {
@@ -91,6 +113,20 @@ Deno.serve(async (req) => {
   if (body.ping) return json({ ok: true, message: 'ops function is deployed and reachable' })
 
   const w = await who(req)
+
+  // a team member's own sign-in code: deliver it now rather than at the next scheduled flush
+  if (body.deliver_otp) {
+    if (w?.kind !== 'team') return json({ ok: false, message: 'Please sign in again' }, 403)
+    const { data: rows, error } = await admin.from('platform_outbox')
+      .update({ status: 'sending', attempts: 1, next_attempt_at: new Date().toISOString() })
+      .eq('kind', 'otp').eq('ref_id', String(body.deliver_otp)).eq('user_id', w.id).eq('status', 'pending').select('*')
+    if (error) return json({ ok: false, message: error.message }, 500)
+    if (!rows?.length) return json({ ok: true, message: 'Already on its way' })
+    const r = await deliverRows(rows as any[])
+    return json({ ok: r.sent > 0, message: r.sent > 0 ? 'Code sent' : r.errors[0] ?? 'Could not send the code' })
+  }
+  if (w?.kind === 'team' && !w.otpPassed) return json({ ok: false, error: 'Enter your sign-in code first', message: 'Enter your sign-in code first' }, 403)
+
   if (body.flush) {
     if (w?.kind !== 'service') return json({ error: 'Not allowed' }, 403)
     return json(await flush())

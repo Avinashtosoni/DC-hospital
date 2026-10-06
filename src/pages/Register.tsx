@@ -9,7 +9,7 @@ import { useSiteSettings } from '../site/cms/content'
 import { useAuth } from '../auth/AuthProvider'
 import { Button } from '../components/ui'
 import { FormError, IconInput, PasswordInput, PasswordStrength, friendlyAuthError } from '../components/auth/AuthFields'
-import { ConfirmEmailError } from '../data/errors'
+import { ConfirmEmailError, OtpRequiredError } from '../data/errors'
 import { validMobile } from '../auth/passwordReset'
 import { AuthShell } from './Login'
 import { ConfirmField } from './PasswordReset'
@@ -74,6 +74,7 @@ export default function Register() {
       nav('/', { replace: true })
     } catch (err) {
       if (err instanceof ConfirmEmailError) setConfirmFor(err.email)
+      else if (err instanceof OtpRequiredError) nav('/login', { replace: true })   // account made; the sign-in code screen is there
       else setError(t(friendlyAuthError((err as Error).message)))
     } finally { setLoading(false) }
   }

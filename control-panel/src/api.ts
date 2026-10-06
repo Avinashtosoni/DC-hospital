@@ -123,7 +123,7 @@ export function friendly(e: unknown): string {
   if (/JWT|not authenticated|refresh token/i.test(m)) return 'Your session has expired — please sign in again.'
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Could not reach the server. Check your connection and try again.'
   if (/REAUTH_REQUIRED/.test(m)) return 'Please confirm your password again — this action needs a fresh sign-in.'
-  return m.replace(/^(error:\s*)/i, '')
+  return m.replace(/^(error:\s*)/i, '').replace(/^OTP_SETUP:\s*/, '')
 }
 
 async function rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T> {

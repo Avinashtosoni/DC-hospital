@@ -10,6 +10,7 @@ import type { MessagingSetup, PlatformTemplateIds } from '../../types'
 export const TEMPLATE_EVENTS: { id: string; label: string; hint: string; tokens: string[] }[] = [
   { id: 'platform_alert', label: 'Team alert', hint: 'Alerts to your own team (WhatsApp / SMS)', tokens: ['title', 'body', 'link'] },
   { id: 'platform_broadcast', label: 'Broadcast', hint: 'Broadcasts to hospital owners and staff', tokens: ['name', 'hospital', 'title', 'link'] },
+  { id: 'platform_otp', label: 'Team sign-in code', hint: 'Control-panel sign-in OTP (Platform settings → Security)', tokens: ['code', 'name'] },
   ...EVENTS.map((e) => ({ id: e.id, label: e.label, hint: e.hint, tokens: e.tokens })),
 ]
 

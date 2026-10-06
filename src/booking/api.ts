@@ -27,7 +27,9 @@ export interface Availability {
   holidays: Holiday[]
 }
 export interface BookingInput {
-  token: string
+  /** from verify_booking_otp; null when the hospital switched the booking code off (then `phone` is needed) */
+  token: string | null
+  phone?: string | null
   doctorId: string
   date: string
   time: string
@@ -79,24 +81,34 @@ export const bookingWindow = (cfg: Cfg, from = new Date()) =>
   Array.from({ length: Math.max(1, Math.min(90, cfg.booking.advanceDays)) + 1 }, (_, i) => format(addDays(from, i), 'yyyy-MM-dd'))
 
 // ------------------------------------------------------------------ one-time code
-export type OtpChannel = 'whatsapp' | 'sms'
+export type OtpChannel = 'whatsapp' | 'sms' | 'email'
 export interface OtpResult { sent: boolean; expires_in: number; channels: OtpChannel[] }
+/** Settings → Security → "Verify the mobile number when booking online": is a code needed, and over which channels */
+export interface OtpConfig { required: boolean; channels: OtpChannel[] }
 
 // ------------------------------------------------------------------ Supabase implementation
 const remote = {
   doctors: () => rpc<PublicDoctor[]>('public_doctors'),
   availability: (doctorId: string | null, from: string, to: string) => rpc<Availability>('public_availability', { p_doctor: doctorId, p_from: from, p_to: to }),
   otpChannels: async () => (await rpc<OtpChannel[] | null>('booking_otp_channels')) ?? [],
-  requestOtp: async (phone: string, channel?: OtpChannel): Promise<OtpResult> => {
-    const r = await rpc<OtpResult & { queued?: number; ref?: string }>('request_booking_otp', { p_phone: phone, p_channel: channel ?? null })
-    if (r.queued) flushNotificationsSoon(0, [r.ref])   // deliver the SMS / WhatsApp right away
-    else throw new BookingError('We could not send a code right now — no SMS or WhatsApp service is connected. Please call the hospital to book.')
+  otpConfig: async (): Promise<OtpConfig> => {
+    const { data, error } = await supabase!.rpc('booking_otp_config')
+    if (error) return { required: true, channels: await remote.otpChannels() }   // older database: always a code
+    const c = data as { required?: boolean; channels?: OtpChannel[] | null }
+    return { required: c.required !== false, channels: c.channels ?? [] }
+  },
+  requestOtp: async (phone: string, channel?: OtpChannel, email?: string | null): Promise<OtpResult> => {
+    const r = await rpc<OtpResult & { queued?: number; ref?: string }>('request_booking_otp',
+      { p_phone: phone, p_channel: channel ?? null, ...(email ? { p_email: email.trim() } : {}) })
+    if (r.queued) flushNotificationsSoon(0, [r.ref])   // deliver the code right away
+    else throw new BookingError('We could not send a code right now — no SMS, WhatsApp or e-mail service is connected. Please call the hospital to book.')
     return { ...r, channels: r.channels ?? [] }
   },
   verifyOtp: (phone: string, code: string) => rpc<{ ok: boolean; token?: string; error?: string }>('verify_booking_otp', { p_phone: phone, p_code: code }),
   book: (i: BookingInput) => rpc<BookingReceipt>('public_book_appointment', {
     p_token: i.token, p_doctor: i.doctorId, p_date: i.date, p_time: i.time, p_name: i.name, p_gender: i.gender,
     p_dob: i.dob || null, p_email: i.email || null, p_reason: i.reason || null,
+    ...(i.token ? {} : { p_phone: i.phone ?? null }),   // no code: the hospital switched it off
   }),
 }
 
@@ -105,7 +117,9 @@ export const bookingApi = {
   availability: (doctorId: string | null, from: string, to: string) => remote.availability(doctorId, from, to),
   /** channels that can deliver the booking code, WhatsApp first */
   otpChannels: () => remote.otpChannels(),
-  requestOtp: (phone: string, _cfg?: Cfg, channel?: OtpChannel) => remote.requestOtp(phone, channel),
+  /** is a code needed at all (Settings → Security), and which channels */
+  otpConfig: () => remote.otpConfig(),
+  requestOtp: (phone: string, _cfg?: Cfg, channel?: OtpChannel, email?: string | null) => remote.requestOtp(phone, channel, email),
   verifyOtp: (phone: string, code: string) => remote.verifyOtp(phone, code),
   book: async (input: BookingInput, _cfg?: Cfg) => {
     const r = await remote.book(input)

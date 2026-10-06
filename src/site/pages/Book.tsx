@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { format, parseISO } from 'date-fns'
 import {
-  ArrowLeft, ArrowRight, BadgeCheck, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronRight, Clock, IndianRupee, Loader2, Lock, MapPin,
+  ArrowLeft, ArrowRight, BadgeCheck, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronRight, Clock, IndianRupee, Loader2, Lock, Mail, MapPin,
   MessageCircle, Moon, Navigation, Phone, Printer, RefreshCw, Search, ShieldCheck, Smartphone, Sparkles, Stethoscope, Sun, Sunrise, UserRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -171,7 +171,7 @@ function Wizard({ onDone }: { onDone: (r: BookingReceipt) => void }) {
                 <VerifyStep f={f} token={token} setToken={setToken} onBack={() => go('details')}
                   onBook={async (tk) => {
                     try {
-                      const r = await bookingApi.book({ token: tk, doctorId: doc.db.id, date, time, name: f.name, gender: f.gender || 'other', dob: f.dob || null, email: f.email || null, reason: f.reason || null }, settings)
+                      const r = await bookingApi.book({ token: tk, phone: phone10(f.phone), doctorId: doc.db.id, date, time, name: f.name, gender: f.gender || 'other', dob: f.dob || null, email: f.email || null, reason: f.reason || null }, settings)
                       setToken(null)
                       refreshAvail()
                       toast.success(t('Appointment confirmed'))
@@ -454,7 +454,7 @@ function DetailsStep({ f, setF, onBack, onNext }: { f: Details; setF: (f: Detail
 // ------------------------------------------------------------------ 5. verify (OTP) + book
 function VerifyStep({ f, token, setToken, onBack, onBook }: {
   f: Details; token: { phone: string; token: string } | null; setToken: (t: { phone: string; token: string } | null) => void
-  onBack: () => void; onBook: (token: string) => Promise<void>
+  onBack: () => void; onBook: (token: string | null) => Promise<void>
 }) {
   const { t } = useT()
   const { settings } = useSite()
@@ -465,7 +465,12 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   // channels that can deliver the code (null = still loading); the preferred one is listed first
   const [channels, setChannels] = useState<OtpChannel[] | null>(null)
   const preferred: OtpChannel = settings.booking.otpPreferred ?? 'whatsapp'
-  const ordered = (channels ?? []).slice().sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : 0))
+  const email = f.email?.trim() || ''
+  // e-mail needs the address from the previous step
+  const ordered = (channels ?? []).filter((c) => c !== 'email' || email).sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : 0))
+  /** the hospital switched the booking code off (Settings → Security): confirm straight away */
+  const [noCode, setNoCode] = useState(false)
+  const dest = (c: OtpChannel | null | undefined) => c === 'email' ? email : prettyPhone(phone)
   const [busy, setBusy] = useState<'send' | 'verify' | 'book' | null>(null)
   const [err, setErr] = useState('')
   const [now, setNow] = useState(Date.now())
@@ -476,10 +481,10 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   const send = async (channel?: OtpChannel) => {
     setBusy('send'); setErr('')
     try {
-      const r = await bookingApi.requestOtp(phone, settings, channel)
+      const r = await bookingApi.requestOtp(phone, settings, channel, channel === 'email' ? email : null)
       const used = r.channels[0] ?? channel ?? null
       setSent({ at: Date.now(), channel: used }); setCode('')
-      toast.success(used === 'whatsapp' ? t('Code sent on WhatsApp to {phone}', { phone: prettyPhone(phone) }) : t('Code sent to {phone}', { phone: prettyPhone(phone) }))
+      toast.success(used === 'whatsapp' ? t('Code sent on WhatsApp to {phone}', { phone: prettyPhone(phone) }) : t('Code sent to {phone}', { phone: dest(used) }))
       setTimeout(() => inputRef.current?.focus(), 50)
     } catch (e) { setErr((e as Error).message) } finally { setBusy(null) }
   }
@@ -488,9 +493,11 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   useEffect(() => {
     if (verified || sentOnce.current) return
     sentOnce.current = true
-    bookingApi.otpChannels().catch(() => [] as OtpChannel[]).then((list) => {
-      setChannels(list)
-      if (list.length <= 1) send(list[0])
+    bookingApi.otpConfig().catch(() => ({ required: true, channels: [] as OtpChannel[] })).then((cfg) => {
+      if (!cfg.required) { setNoCode(true); setChannels([]); return }
+      const usable = cfg.channels.filter((c) => c !== 'email' || email)
+      setChannels(cfg.channels)
+      if (usable.length <= 1) send(usable[0] ?? cfg.channels[0])
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const other = sent?.channel ? ordered.find((c) => c !== sent.channel) : undefined
@@ -507,6 +514,16 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
     } catch (e) { setErr((e as Error).message) } finally { setBusy(null) }
   }
   const bookNow = async () => { if (!verified) return; setBusy('book'); try { await onBook(verified) } finally { setBusy(null) } }
+  const bookWithoutCode = async () => { setBusy('book'); try { await onBook(null) } finally { setBusy(null) } }
+
+  if (noCode && !verified) return (
+    <div>
+      <StepTitle title={t('Confirm your booking')} onBack={onBack} />
+      <p className="flex items-center gap-2 rounded-2xl bg-peri-50 px-4 py-3 text-sm text-peri-900"><Smartphone className="h-5 w-5 shrink-0 text-peri-600" />{t('Booking for {phone}', { phone: prettyPhone(phone) })} · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></p>
+      <p className="mt-3 text-xs text-slate-500">{t('Your booking confirmation will also be sent on WhatsApp / SMS to this number.')}</p>
+      <NextBar onClick={bookWithoutCode} loading={busy === 'book'} label={busy === 'book' ? t('Confirming…') : t('Confirm booking')} />
+    </div>
+  )
 
   if (verified) return (
     <div>
@@ -522,18 +539,18 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
       <StepTitle title={t('Verify your mobile')} sub={<>{t('Where should we send your 6-digit code for')} <b className="text-peri-900">{prettyPhone(phone)}</b>? · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
       <div className="grid gap-3 sm:grid-cols-2" role="group" aria-label={t('Send the code by')}>
         {ordered.map((c, i) => {
-          const wa = c === 'whatsapp'
+          const wa = c === 'whatsapp', mail = c === 'email'
           return (
             <button key={c} type="button" disabled={!!busy} onClick={() => send(c)}
               className={cn('group flex items-center gap-4 rounded-2xl border-2 p-4 text-left transition disabled:opacity-60',
                 i === 0 ? (wa ? 'border-emerald-500 bg-emerald-50/70 hover:bg-emerald-50' : 'border-peri-600 bg-peri-50 hover:bg-peri-100/70') : 'border-peri-200 bg-white hover:border-peri-400')}>
               <span className={cn('grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-white', wa ? 'bg-[#25D366]' : 'bg-peri-700')}>
-                {busy === 'send' ? <Loader2 className="h-6 w-6 animate-spin" /> : wa ? <MessageCircle className="h-6 w-6" /> : <Smartphone className="h-6 w-6" />}
+                {busy === 'send' ? <Loader2 className="h-6 w-6 animate-spin" /> : wa ? <MessageCircle className="h-6 w-6" /> : mail ? <Mail className="h-6 w-6" /> : <Smartphone className="h-6 w-6" />}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2 font-display text-base font-bold text-peri-900">{wa ? t('Get code on WhatsApp') : t('Get code by SMS')}
+                <span className="flex items-center gap-2 font-display text-base font-bold text-peri-900">{wa ? t('Get code on WhatsApp') : mail ? t('Get code by e-mail') : t('Get code by SMS')}
                   {i === 0 && <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700 ring-1 ring-emerald-200">{t('Recommended')}</span>}</span>
-                <span className="mt-0.5 block text-xs text-slate-500">{wa ? t('Instant, free — arrives as a WhatsApp chat') : t('Text message to your mobile')}</span>
+                <span className="mt-0.5 block text-xs text-slate-500">{wa ? t('Instant, free — arrives as a WhatsApp chat') : mail ? email : t('Text message to your mobile')}</span>
               </span>
               <ChevronRight className="h-5 w-5 shrink-0 text-peri-400 transition group-hover:translate-x-0.5" />
             </button>
@@ -548,7 +565,7 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
 
   return (
     <div>
-      <StepTitle title={t('Verify your mobile')} sub={channels === null && !sent ? t('Sending code…') : <>{sent?.channel === 'whatsapp' ? t('Enter the 6-digit code sent on WhatsApp to') : t('Enter the 6-digit code sent to')} <b className="text-peri-900">{prettyPhone(phone)}</b> · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
+      <StepTitle title={t('Verify your mobile')} sub={channels === null && !sent ? t('Sending code…') : <>{sent?.channel === 'whatsapp' ? t('Enter the 6-digit code sent on WhatsApp to') : t('Enter the 6-digit code sent to')} <b className="text-peri-900">{dest(sent?.channel)}</b> · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
       {sent?.channel === 'whatsapp' && (
         <p className="mb-4 flex items-center gap-2 rounded-2xl bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800"><MessageCircle className="h-4 w-4 shrink-0" />{t('Open WhatsApp — the code is in a chat from {hospital}.', { hospital: settings.brand?.shortName || settings.name })}</p>
       )}
@@ -566,7 +583,7 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
             : wait > 0 ? <span>{t('Resend code in {s}s', { s: wait })}</span>
               : <>
                 <button type="button" onClick={() => send(sent?.channel ?? undefined)} className="font-semibold text-peri-800 underline">{sent ? t('Resend code') : t('Send code')}</button>
-                {other && <><span className="text-slate-300">·</span><button type="button" onClick={() => send(other)} className="font-semibold text-peri-800 underline">{other === 'sms' ? t('Send by SMS instead') : t('Send on WhatsApp instead')}</button></>}
+                {other && <><span className="text-slate-300">·</span><button type="button" onClick={() => send(other)} className="font-semibold text-peri-800 underline">{other === 'sms' ? t('Send by SMS instead') : other === 'email' ? t('Send by e-mail instead') : t('Send on WhatsApp instead')}</button></>}
               </>}
           <span className="text-slate-300">·</span><span>{t('Code valid for 10 minutes')}</span>
         </div>

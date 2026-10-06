@@ -6,6 +6,7 @@ import { cn, titleCase } from '../../lib/utils'
 import { ROLES, ROLE_LABEL } from '../../types'
 import { Section, Segmented, Toggle, type TabCtx } from './shared'
 import { GoLiveChecklist } from './GoLive'
+import { OtpSection } from './OtpSection'
 
 const IDLE = [0, 15, 30, 60, 120] as const
 const ACT: Record<Action, string> = { read: 'R', create: 'C', update: 'U', delete: 'D' }
@@ -21,6 +22,8 @@ export function SecurityTab({ ctx }: { ctx: TabCtx }) {
           options={IDLE.map((m) => ({ value: m, label: m === 0 ? 'Never' : m < 60 ? `${m} min` : `${m / 60} hour${m > 60 ? 's' : ''}` }))} />
         <p className="mt-2 text-xs text-slate-400">Counts mouse, keyboard and touch activity. Applies to every role, including patients.</p>
       </Section>
+
+      <OtpSection ctx={ctx} />
 
       <Section title="Sign-in & patient portal" icon={<LogIn className="h-4 w-4" />}>
         <div className="space-y-3">

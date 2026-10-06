@@ -11,6 +11,8 @@ import { FormError, IconInput, PasswordInput, friendlyAuthError } from '../compo
 import { cn } from '../lib/utils'
 import { useSiteSettings } from '../site/cms/content'
 import { LanguageSwitch, useT } from '../i18n'
+import { OtpStep } from '../components/auth/OtpStep'
+import { OtpRequiredError } from '../data/errors'
 
 const LAST_EMAIL = 'dch:last-email'
 
@@ -78,7 +80,7 @@ export function AuthShell({ children, wide }: { children: React.ReactNode; wide?
 }
 
 export default function Login() {
-  const { user, signIn } = useAuth()
+  const { user, signIn, otp, requestOtp, verifyOtp, signOut } = useAuth()
   const nav = useNavigate()
   const loc = useLocation() as { state?: { from?: string; email?: string } }
   const [params] = useSearchParams()
@@ -96,6 +98,19 @@ export default function Login() {
   const next = typeof loc.state?.from === 'string' && /^\/(?![/\\])/.test(loc.state.from) && !loc.state.from.includes('\\') ? loc.state.from : '/'
   if (user) return <Navigate to={next} replace />
 
+  // password accepted; sign-in OTP is on for this account and this session has not entered its code yet
+  if (otp) {
+    return (
+      <AuthShell>
+        <OtpStep status={otp} onRequest={(c) => requestOtp(c)} onCancel={() => { void signOut() }}
+          onVerify={async (code) => {
+            const u = await verifyOtp(code)
+            if (u) { toast.success(t('Welcome back, {name}!', { name: u.full_name.replace(/^Dr\.?\s+/i, '').split(' ')[0] })); nav(next, { replace: true }) }
+          }} />
+      </AuthShell>
+    )
+  }
+
   const doLogin = async (e: string, p: string) => {
     setError('')
     try {
@@ -104,6 +119,10 @@ export default function Login() {
       toast.success(t('Welcome back, {name}!', { name: u.full_name.replace(/^Dr\.?\s+/i, '').split(' ')[0] }))
       nav(next, { replace: true })
     } catch (err) {
+      if (err instanceof OtpRequiredError) {   // the code screen takes over
+        if (remember) localStorage.setItem(LAST_EMAIL, e.trim())
+        setPassword(''); return
+      }
       setError(t(friendlyAuthError((err as Error).message)))
       setPassword('')
     }
