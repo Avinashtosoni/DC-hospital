@@ -6,6 +6,7 @@ import { Button, Field, Input, Select, Skeleton, Textarea } from '../../../../sr
 import { cp, friendly } from '../../api'
 import type { CpHospitalDetail, HospitalProfile } from '../../types'
 import { ErrorBox, isAdmin, Section, useMe } from '../../ui'
+import { hospitalUrl } from '../../../../src/tenancy/urls'
 
 const EMPTY: HospitalProfile = { name: '', tagline: '', address: '', phone: '', appointmentsPhone: '', whatsapp: '', email: '', logoUrl: '', legalName: '', gstin: '', pan: '', billingAddress: '' }
 
@@ -82,7 +83,7 @@ function OwnerSection({ h, canInvite }: { h: CpHospitalDetail; canInvite: boolea
   const invite = useMutation({
     mutationFn: () => cp.resendOwnerInvite(h.id),
     onSuccess: (r) => {
-      const link = r.link ?? `${location.origin}${r.path}`
+      const link = r.link ?? hospitalUrl(h, '/register')
       void navigator.clipboard?.writeText(link).catch(() => undefined)
       toast.success(r.queued ? `Invitation e-mailed to ${r.email}` : 'Sign-up link copied', {
         description: r.queued ? 'The link is also copied — you can send it on WhatsApp.' : `E-mail is off or the platform address isn’t set (Settings → Sign-ups). Send this to ${r.email}: ${link}`,
@@ -109,7 +110,7 @@ function OwnerSection({ h, canInvite }: { h: CpHospitalDetail; canInvite: boolea
         <div className="flex flex-wrap items-center gap-3">
           <p className="flex-1 text-sm text-slate-600">The first account created with the owner’s e-mail becomes the owner. Change the e-mail in Settings → Details.</p>
           {canInvite && <Button variant="outline" icon={<Mail className="h-4 w-4" />} loading={invite.isPending} onClick={() => invite.mutate()}>Resend sign-up link</Button>}
-          <Button variant="ghost" icon={<Copy className="h-4 w-4" />} onClick={() => { void navigator.clipboard?.writeText(`${location.origin}/register?hospital=${h.slug}`); toast.success('Link copied') }}>Copy link</Button>
+          <Button variant="ghost" icon={<Copy className="h-4 w-4" />} onClick={() => { void navigator.clipboard?.writeText(hospitalUrl(h, '/register')); toast.success('Link copied') }}>Copy link</Button>
         </div>
       ) : !isAdmin(me.role) ? (
         <p className="text-sm text-slate-600">Only admins can hand the hospital over to another owner.</p>

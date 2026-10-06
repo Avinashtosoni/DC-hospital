@@ -6,6 +6,7 @@ import { signupInfo, signupProblem, trialSignup, type SignupForm, type SignupInf
 import { LEGAL_VERSION } from './legal'
 import { siteHref as platformHref } from './site/ui'
 import { PLANS } from './plans'
+import { hospitalUrl } from '../tenancy/urls'
 
 const EMPTY: SignupForm = { organisation: '', name: '', email: '', phone: '', city: '', plan: '', website: '' }
 const firstName = (n: string) => n.trim().replace(/^(dr|mr|mrs|ms|shri|smt)\.?\s+/i, '').split(/\s+/)[0]
@@ -112,7 +113,8 @@ function Done({ r, name }: { r: SignupResult; name: string }) {
       <p className="mt-2 text-sm text-slate-600">We’ve received your request. Once it’s approved — usually within one working day — we’ll e-mail <b>{r.email}</b> with the link to create your owner account.</p>
     </div>
   )
-  const register = `/register?hospital=${encodeURIComponent(r.slug)}&email=${encodeURIComponent(r.email)}`
+  const register = hospitalUrl({ slug: r.slug }, `/register?email=${encodeURIComponent(r.email)}`)
+  const home = hospitalUrl({ slug: r.slug })
   return (
     <div className="py-4" role="status">
       <CheckCircle2 className="h-12 w-12 text-emerald-500" />
@@ -123,7 +125,7 @@ function Done({ r, name }: { r: SignupResult; name: string }) {
         <li className="flex gap-3"><Step n={2} /><span><b>Follow the setup checklist</b> on the dashboard: hospital details, doctors, then invite your team.</span></li>
       </ol>
       <a href={register} className="btn-peri mt-6 w-full">Create owner account<ArrowRight className="h-4 w-4" /></a>
-      <p className="mt-4 text-xs text-slate-500">Bookmark your hospital’s address: <a className="font-mono text-peri-700 underline" href={`/?hospital=${encodeURIComponent(r.slug)}`}>{location.host}/?hospital={r.slug}</a> — you can connect your own domain later in Settings.</p>
+      <p className="mt-4 text-xs text-slate-500">Bookmark your hospital’s address: <a className="font-mono text-peri-700 underline" href={home}>{home.replace(/^https?:\/\//, '').replace(/\/$/, '')}</a> — you can connect your own domain later in Settings.</p>
     </div>
   )
 }

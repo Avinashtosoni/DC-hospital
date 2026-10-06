@@ -11,7 +11,11 @@ export async function loginOtpStatus(): Promise<OtpStatus | null> {
   return (data ?? null) as OtpStatus | null
 }
 
-export interface OtpSent { sent: boolean; ref: string; scope: 'hospital' | 'team'; channel: OtpChannelId; to: string; expires_in: number }
+export interface OtpSent {
+  sent: boolean; ref: string; scope: 'hospital' | 'team'; channel: OtpChannelId; to: string; expires_in: number
+  /** demo hospital with "codes on screen" (demo.sql): nothing is sent, the code comes back here */
+  demo_code?: string
+}
 export async function requestLoginOtp(channel: OtpChannelId | null): Promise<OtpSent> {
   const { data, error } = await client().rpc('request_login_otp', { p_channel: channel })
   if (error) throw new Error(error.message)

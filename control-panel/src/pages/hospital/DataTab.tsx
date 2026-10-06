@@ -7,6 +7,7 @@ import { cp, friendly } from '../../api'
 import { mapRows, parseCsv, TEMPLATE, type ImportKind } from '../../csv'
 import type { BrowseKind, CpHospitalDetail, ImportResult } from '../../types'
 import { date, dateTime, ErrorBox, inr, isAdmin, Section, useMe } from '../../ui'
+import { hospitalUrl } from '../../../../src/tenancy/urls'
 
 const LABEL: Record<string, string> = {
   patients: 'Patients', doctors: 'Doctors', staff: 'Staff records', departments: 'Departments', appointments: 'Appointments', prescriptions: 'Prescriptions',
@@ -15,7 +16,9 @@ const LABEL: Record<string, string> = {
   holidays: 'Holidays', audit_log: 'Activity log entries',
 }
 /** the hospital app, opened as this hospital (the panel's sign-in is shared on the same address) */
-export const openAsAdmin = (h: CpHospitalDetail, path = '/') => `${location.origin}${path}${path.includes('?') ? '&' : '?'}hospital=${encodeURIComponent(h.slug)}`
+/** the hospital app on the platform's own address (its subdomain, else ?hospital=) — where a team member signs in;
+ *  not the custom domain, whose sign-in is separate */
+export const openAsAdmin = (h: CpHospitalDetail, path = '/') => hospitalUrl({ slug: h.slug, domain: null }, path)
 
 /** Phase C: what is in the hospital, read-only lists, export (in the hospital app) and CSV import of patients / doctors. */
 export function DataTab({ h }: { h: CpHospitalDetail }) {

@@ -7,6 +7,7 @@ import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Modal, Select, 
 import { PLANS } from '../../../src/platform/plans'
 import { cp, friendly } from '../api'
 import type { BillingAction, CpHospitalDetail, ModuleMap } from '../types'
+import { hospitalHost } from '../../../src/tenancy/urls'
 import { appUrl, canBill, date, dateTime, ErrorBox, inr, isAdmin, LicenseBadge, licenseLine, paise, planLabel, ROLE_LABEL, ROLE_TONE, Section, useMe } from '../ui'
 import { ModuleGrid } from './HospitalsPage'
 import { AuditList } from './AuditPage'
@@ -46,6 +47,7 @@ export function HospitalPage() {
                 <h1 className="font-display text-2xl font-bold tracking-tight text-brand-950">{h.name}</h1>
                 <LicenseBadge status={h.license.status} />
                 {h.is_primary && <Badge tone="violet">Original install</Badge>}
+                {h.is_demo && <Link to="/settings?tab=demo" title="Public demo — reset every night. Settings: Platform settings → Demo hospital"><Badge tone="amber">Demo · resets nightly</Badge></Link>}
                 {h.closing_at && <Badge tone="red" dot>Closing</Badge>}
               </div>
               <p className="mt-1 text-sm text-slate-500">{planLabel(h.plan)} · {licenseLine(h.license)} · prefix {h.code} · short name {h.slug}</p>
@@ -107,7 +109,7 @@ function OverviewTab({ h }: { h: CpHospitalDetail }) {
         </div>
       </Section>
       <Section title="Website addresses" subtitle="Add, verify and remove addresses in the hospital app → Settings → Domain (automatic SSL).">
-        {!h.domains.length ? <p className="text-sm text-slate-500">No custom address yet — it opens at <code className="rounded bg-slate-100 px-1">?hospital={h.slug}</code>.</p> : (
+        {!h.domains.length ? <p className="text-sm text-slate-500">No custom address yet — it opens at <code className="rounded bg-slate-100 px-1">{hospitalHost({ slug: h.slug })}</code>.</p> : (
           <ul className="space-y-2">
             {h.domains.map((d) => (
               <li key={d.domain} className="flex items-center gap-3 rounded-lg border border-slate-100 px-3 py-2 text-sm">

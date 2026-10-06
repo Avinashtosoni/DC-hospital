@@ -461,6 +461,7 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   const phone = phone10(f.phone)
   const verified = token && token.phone === phone ? token.token : null
   const [code, setCode] = useState('')
+  const [demoCode, setDemoCode] = useState<string | null>(null)
   const [sent, setSent] = useState<{ at: number; channel: OtpChannel | null } | null>(null)
   // channels that can deliver the code (null = still loading); the preferred one is listed first
   const [channels, setChannels] = useState<OtpChannel[] | null>(null)
@@ -483,8 +484,9 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
     try {
       const r = await bookingApi.requestOtp(phone, settings, channel, channel === 'email' ? email : null)
       const used = r.channels[0] ?? channel ?? null
-      setSent({ at: Date.now(), channel: used }); setCode('')
-      toast.success(used === 'whatsapp' ? t('Code sent on WhatsApp to {phone}', { phone: prettyPhone(phone) }) : t('Code sent to {phone}', { phone: dest(used) }))
+      setSent({ at: Date.now(), channel: used }); setCode(r.demo_code ?? ''); setDemoCode(r.demo_code ?? null)
+      if (r.demo_code) toast.info(t('Demo hospital: nothing is sent — your code is {code}', { code: r.demo_code }))
+      else toast.success(used === 'whatsapp' ? t('Code sent on WhatsApp to {phone}', { phone: prettyPhone(phone) }) : t('Code sent to {phone}', { phone: dest(used) }))
       setTimeout(() => inputRef.current?.focus(), 50)
     } catch (e) { setErr((e as Error).message) } finally { setBusy(null) }
   }
@@ -566,7 +568,11 @@ function VerifyStep({ f, token, setToken, onBack, onBook }: {
   return (
     <div>
       <StepTitle title={t('Verify your mobile')} sub={channels === null && !sent ? t('Sending code…') : <>{sent?.channel === 'whatsapp' ? t('Enter the 6-digit code sent on WhatsApp to') : t('Enter the 6-digit code sent to')} <b className="text-peri-900">{dest(sent?.channel)}</b> · <button type="button" onClick={onBack} className="font-semibold text-peri-700 underline">{t('change')}</button></>} onBack={onBack} />
-      {sent?.channel === 'whatsapp' && (
+      {demoCode && (
+        <p className="mb-4 flex items-center gap-2 rounded-2xl bg-amber-50 px-4 py-2.5 text-sm text-amber-900 ring-1 ring-amber-200"><ShieldCheck className="h-4 w-4 shrink-0" />
+          <span>{t('Demo hospital — nothing is sent. Your code is')} <b className="font-mono tracking-widest">{demoCode}</b> {t('(already filled in).')}</span></p>
+      )}
+      {sent?.channel === 'whatsapp' && !demoCode && (
         <p className="mb-4 flex items-center gap-2 rounded-2xl bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800"><MessageCircle className="h-4 w-4 shrink-0" />{t('Open WhatsApp — the code is in a chat from {hospital}.', { hospital: settings.brand?.shortName || settings.name })}</p>
       )}
       <form onSubmit={(e) => { e.preventDefault(); verifyAndBook() }}>

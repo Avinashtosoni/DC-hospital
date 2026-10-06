@@ -11,18 +11,26 @@ import { RETENTION_KEYS, RETENTION_MIN, type BillingConfig, type RetentionKey } 
 import { dateTime, ErrorBox, Section } from '../ui'
 import { IntegrationsTab } from './settings/IntegrationsTab'
 import { SecurityTab } from './settings/SecurityTab'
+import { DemoTab } from './settings/DemoTab'
 
 type PlanId = keyof BillingConfig['plans']
 
-type SettingsTab = 'billing' | 'integrations' | 'security'
-const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [{ value: 'billing', label: 'Plans & billing' }, { value: 'integrations', label: 'Integrations' }, { value: 'security', label: 'Security' }]
+type SettingsTab = 'billing' | 'integrations' | 'security' | 'demo'
+const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [{ value: 'billing', label: 'Plans & billing' }, { value: 'integrations', label: 'Integrations' }, { value: 'security', label: 'Security' }, { value: 'demo', label: 'Demo hospital' }]
 
 /** Platform settings: prices and billing rules, and the platform's own accounts (Razorpay, SMS, WhatsApp, e-mail, push) */
 export function SettingsPage() {
   const [sp, setSp] = useSearchParams()
-  const tab: SettingsTab = sp.get('tab') === 'integrations' ? 'integrations' : sp.get('tab') === 'security' ? 'security' : 'billing'
+  const tab: SettingsTab = (['integrations', 'security', 'demo'] as const).find((x) => x === sp.get('tab')) ?? 'billing'
   const tabs = <div className="mb-5"><Tabs tabs={SETTINGS_TABS} value={tab} onChange={(v) => setSp(v === 'billing' ? {} : { tab: v }, { replace: true })} /></div>
   if (tab === 'billing') return <BillingSettings tabs={tabs} />
+  if (tab === 'demo') return (
+    <>
+      <PageHeader title="Platform settings" description="The public demo hospital: codes, messages, one-click sign-ins and the nightly reset." />
+      {tabs}
+      <DemoTab />
+    </>
+  )
   if (tab === 'security') return (
     <>
       <PageHeader title="Platform settings" description="Sign-in protection for your own team." />

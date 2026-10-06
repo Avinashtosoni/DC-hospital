@@ -5,7 +5,8 @@ declare global {
   interface Window {
     /** Runtime config injected by the Docker container (docker/40-runtime-env.sh → /env.js) */
     __ENV__?: Partial<Record<'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY' | 'REQUIRE_BACKEND' | 'TENANCY' | 'APP_ENV' | 'PLATFORM_NAME' | 'PLATFORM_DOMAIN'
-      | 'PLATFORM_LEGAL_NAME' | 'PLATFORM_ADDRESS' | 'PLATFORM_EMAIL' | 'PLATFORM_PHONE' | 'PLATFORM_GRIEVANCE_OFFICER' | 'PLATFORM_JURISDICTION' | 'SENTRY_DSN', string>>
+      | 'PLATFORM_LEGAL_NAME' | 'PLATFORM_ADDRESS' | 'PLATFORM_EMAIL' | 'PLATFORM_PHONE' | 'PLATFORM_GRIEVANCE_OFFICER' | 'PLATFORM_JURISDICTION' | 'SENTRY_DSN'
+      | 'TENANT_SUBDOMAINS', string>>
   }
 }
 

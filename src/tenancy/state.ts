@@ -23,6 +23,8 @@ export interface TenantInfo {
   plan?: string | null
   modules?: Record<string, 'provider' | 'hospital'> | null
   is_primary?: boolean
+  /** the public demo hospital (demo.sql): reset every night, one-click demo sign-ins */
+  is_demo?: boolean
 }
 
 /** what `my_context()` returns for the signed-in user */
@@ -109,6 +111,11 @@ export function slugHint(search = typeof location === 'undefined' ? '' : locatio
     return v || null
   }
   try { return s?.getItem(SLUG_KEY) ?? null } catch { return null }
+}
+
+/** forget the hospital picked with ?hospital= in this tab (the bare platform domain shows the product page again) */
+export function forgetSlugHint() {
+  try { storage()?.removeItem(SLUG_KEY) } catch { /* ignore */ }
 }
 
 /**

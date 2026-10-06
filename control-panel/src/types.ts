@@ -34,6 +34,8 @@ export interface CpHospital {
   code: string
   plan: string
   is_primary: boolean
+  /** the public demo hospital (reset every night) */
+  is_demo?: boolean
   notes: string | null
   created_at: string
   modules: ModuleMap
@@ -346,3 +348,16 @@ export interface LiveService {
 }
 export interface LiveHealth { last_run: string | null; settings: { enabled: boolean; siteUrl: string }; services: LiveService[]; failures: { at: string; service: string; label: string; status: HealthStatus; detail: string | null }[] }
 export interface PushConfig { apiKey: string; projectId: string; messagingSenderId: string; appId: string; vapidKey: string; devices: number }
+
+/** Platform settings → Demo hospital (cp_demo, scripts/sql/demo.sql) */
+export interface CpDemo {
+  hospital: { id: string; slug: string; name: string } | null
+  seed_installed: boolean
+  config: { otp: 'screen' | 'real'; messages: boolean; logins: boolean; nightly: boolean }
+  last_reset_at: string | null
+  last_reset_by: string | null
+  baseline: { at: string | null; by: string | null; settings: number; pages: number } | null
+  logins: { role: string; email: string; name: string }[]
+  password: string | null
+  scheduled: boolean
+}

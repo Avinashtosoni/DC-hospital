@@ -14,7 +14,7 @@ const RESEND_AFTER = 30
  */
 export function OtpStep({ status, onRequest, onVerify, onCancel, title = 'Verify it\'s you' }: {
   status: OtpStatus
-  onRequest: (channel: OtpChannelId) => Promise<{ to: string; channel: OtpChannelId }>
+  onRequest: (channel: OtpChannelId) => Promise<{ to: string; channel: OtpChannelId; demo_code?: string }>
   onVerify: (code: string) => Promise<unknown>
   onCancel: () => void
   title?: string
@@ -22,6 +22,7 @@ export function OtpStep({ status, onRequest, onVerify, onCancel, title = 'Verify
   const [channel, setChannel] = useState<OtpChannelId | null>(status.channels[0]?.channel ?? null)
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [code, setCode] = useState('')
+  const [demoCode, setDemoCode] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState('')
@@ -40,7 +41,7 @@ export function OtpStep({ status, onRequest, onVerify, onCancel, title = 'Verify
     try {
       const r = await onRequest(channel)
       setSentTo(`${LABEL[r.channel] ?? r.channel} ${r.to}`)
-      setWait(RESEND_AFTER); setCode('')
+      setWait(RESEND_AFTER); setCode(r.demo_code ?? ''); setDemoCode(r.demo_code ?? null)
       setTimeout(() => codeRef.current?.focus(), 50)
     } catch (e) {
       const m = (e as Error).message
@@ -62,7 +63,8 @@ export function OtpStep({ status, onRequest, onVerify, onCancel, title = 'Verify
       <span className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-50 text-brand-700 ring-1 ring-brand-100"><ShieldCheck className="h-6 w-6" /></span>
       <h2 className="mt-4 font-display text-3xl font-bold tracking-tight text-brand-950">{title}</h2>
       <p className="mt-1.5 text-sm text-slate-500">
-        {sentTo ? <>We sent a 6-digit code to <b className="font-semibold text-slate-700">{sentTo}</b>. It is valid for 10 minutes.</>
+        {sentTo && demoCode ? <>Demo hospital — nothing is sent. Your code is <b className="font-mono font-semibold tracking-widest text-slate-700">{demoCode}</b> (already filled in).</>
+          : sentTo ? <>We sent a 6-digit code to <b className="font-semibold text-slate-700">{sentTo}</b>. It is valid for 10 minutes.</>
           : 'Your account needs a one-time code for every new sign-in. Choose where to receive it.'}
       </p>
 

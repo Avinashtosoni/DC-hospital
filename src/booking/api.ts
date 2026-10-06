@@ -82,7 +82,11 @@ export const bookingWindow = (cfg: Cfg, from = new Date()) =>
 
 // ------------------------------------------------------------------ one-time code
 export type OtpChannel = 'whatsapp' | 'sms' | 'email'
-export interface OtpResult { sent: boolean; expires_in: number; channels: OtpChannel[] }
+export interface OtpResult {
+  sent: boolean; expires_in: number; channels: OtpChannel[]
+  /** demo hospital with "codes on screen" (demo.sql): nothing is sent, the code is shown */
+  demo_code?: string
+}
 /** Settings → Security → "Verify the mobile number when booking online": is a code needed, and over which channels */
 export interface OtpConfig { required: boolean; channels: OtpChannel[] }
 

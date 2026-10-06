@@ -18,6 +18,8 @@ services:
       - APP_ENV=${APP_ENV:-production}
       - PLATFORM_NAME=${PLATFORM_NAME:-Hospital Comrade}
       - PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-hospital.digitalcomrade.in}
+      # on = every hospital at <slug>.PLATFORM_DOMAIN (needs wildcard DNS + SSL first)
+      - TENANT_SUBDOMAINS=${TENANT_SUBDOMAINS:-}
       - PLATFORM_LEGAL_NAME=${PLATFORM_LEGAL_NAME:-}
       - PLATFORM_ADDRESS=${PLATFORM_ADDRESS:-}
       - PLATFORM_EMAIL=${PLATFORM_EMAIL:-}

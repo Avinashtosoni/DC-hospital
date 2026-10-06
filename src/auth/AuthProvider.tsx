@@ -4,7 +4,7 @@ import type { Profile } from '../types'
 import type { AuthAdapter, SignUpInput } from '../data/adapter'
 import { supabaseAuth } from '../data/supabaseAdapter'
 import { resolveSession, TenantAccessError } from '../tenancy/session'
-import { clearProviderChoice, type MyContext } from '../tenancy/state'
+import { clearProviderChoice, siteTenant, type MyContext } from '../tenancy/state'
 import { toast } from 'sonner'
 import { OtpRequiredError, type OtpChannelId, type OtpStatus } from '../data/errors'
 import { requestLoginOtp, verifyLoginOtp, type OtpSent } from './loginOtp'
@@ -97,7 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     verifyOtp: async (code) => { await verifyLoginOtp(code); const u = await load(() => auth.getCurrent()); qc.clear(); setSignedOut(false); return u },
     // the session is dropped locally even if the network call fails, so "Sign out" always works
     signOut: async () => { try { await auth.signOut() } finally { clearProviderChoice(); setSignedOut(true); setUser(null); setContext(null); setOtp(null); qc.clear() } },
-    changePassword: (c, n) => auth.changePassword(c, n),
+    // the demo hospital's shared accounts keep their published password (the platform team may still change theirs)
+    changePassword: (c, n) => siteTenant()?.is_demo && !context?.provider_role
+      ? Promise.reject(new Error('Passwords can’t be changed in the demo hospital — everyone uses the same demo accounts.'))
+      : auth.changePassword(c, n),
     signOutEverywhere: async () => { await auth.signOutEverywhere(); clearProviderChoice(); setSignedOut(true); setUser(null); setContext(null); setOtp(null); qc.clear() },
     uploadAvatar: (file) => { if (!user) throw new Error('Not signed in'); return auth.uploadAvatar(user.id, file) },
   }), [user, loading, refresh, signedOut, context, otp, load, qc])

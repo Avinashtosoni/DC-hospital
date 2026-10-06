@@ -14,6 +14,7 @@ import { initMonitoring } from './lib/monitoring'
 import { bootTenancy } from './tenancy/boot'
 import { startImpersonationFromUrl } from './auth/impersonation'
 import { TenantScreen } from './tenancy/TenantScreens'
+import { keepSlugInUrl, subdomainRedirect } from './tenancy/urls'
 import './index.css'
 
 // staging copies must never show up in search results
@@ -74,10 +75,16 @@ function ImpersonationError({ message }: { message: string }) {
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root')!)
+// subdomains on: an old ?hospital=city link on the platform domain moves to city.<platform domain> (before anything runs)
+const moveTo = subdomainRedirect()
+if (moveTo) location.replace(moveTo)
 // "sign in as user" hand-off from the control panel (#imp=…) first, then (multi-hospital mode) find this domain's
 // hospital — both no-ops normally
-;(backendMissing ? Promise.resolve([null, null] as const)
+else (backendMissing ? Promise.resolve([null, null] as const)
   : startImpersonationFromUrl().then(async (impError) => [impError, impError ? null : await bootTenancy()] as const)).then(([impError, boot]) => {
+  // a hospital opened on the bare platform domain keeps ?hospital= in the address bar (reload / share = same hospital)
+  const slug = boot?.ok && !boot.platform ? boot.tenant?.slug : null
+  if (slug) { keepSlugInUrl(slug); router.subscribe(() => keepSlugInUrl(slug)) }
   root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>

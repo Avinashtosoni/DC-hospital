@@ -11,6 +11,7 @@ import Register from './pages/Register'
 const ForgotPassword = lazy(() => import('./pages/PasswordReset').then((m) => ({ default: m.ForgotPassword })))
 const ResetPassword = lazy(() => import('./pages/PasswordReset').then((m) => ({ default: m.ResetPassword })))
 import { InviteStaff } from './pages/users/InviteStaff'
+import { DemoBar } from './demo/DemoBar'
 
 // Public website
 const SiteLayout = lazy(() => import('./site/SiteLayout'))
@@ -64,6 +65,8 @@ const PageLoader = () => <div className="grid h-64 place-items-center"><Spinner 
 
 export default function App() {
   return (
+    <>
+    <DemoBar />
     <Suspense fallback={<FullScreenLoader />}>
       <Routes>
         <Route path="/login" element={<Login />} />
@@ -106,5 +109,6 @@ export default function App() {
         </Route>
       </Routes>
     </Suspense>
+    </>
   )
 }

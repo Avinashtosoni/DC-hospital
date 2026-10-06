@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  ArrowLeft, ArrowRight, BedDouble, CalendarPlus, Clock, HeartPulse, LockKeyhole, Mail, Receipt, ShieldCheck, Users,
+  ArrowLeft, ArrowRight, BedDouble, CalendarPlus, Clock, FlaskConical, HeartPulse, LockKeyhole, Mail, Receipt, ShieldCheck, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../auth/AuthProvider'
@@ -13,6 +13,7 @@ import { useSiteSettings } from '../site/cms/content'
 import { LanguageSwitch, useT } from '../i18n'
 import { OtpStep } from '../components/auth/OtpStep'
 import { OtpRequiredError } from '../data/errors'
+import { DEMO_ROLE_LABEL, useDemoInfo } from '../demo/demo'
 
 const LAST_EMAIL = 'dch:last-email'
 
@@ -93,6 +94,7 @@ export default function Login() {
   const site = useSiteSettings()
   const portal = site.portal
   const { t } = useT()
+  const demo = useDemoInfo()
 
   // only same-app paths (never //evil.com or /\\evil.com)
   const next = typeof loc.state?.from === 'string' && /^\/(?![/\\])/.test(loc.state.from) && !loc.state.from.includes('\\') ? loc.state.from : '/'
@@ -171,6 +173,24 @@ export default function Login() {
         </Link>
       </div>
       <p className="mt-4 text-center text-xs text-slate-400">{t('Hospital staff? Ask the owner for an invitation link — it gives your account the right access.')}</p>
+
+      {demo.data?.logins.length ? (
+        <div className="mt-6 rounded-xl border border-dashed border-brand-200 bg-brand-50/60 p-4">
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-brand-900"><FlaskConical className="h-4 w-4" />{t('Demo hospital — sign in with one click')}</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {demo.data.logins.map((l) => (
+              <button key={l.email} type="button" disabled={busy} title={l.email}
+                onClick={async () => { setEmail(l.email); setPassword(demo.data!.password ?? ''); setLoading(true); await doLogin(l.email, demo.data!.password ?? ''); setLoading(false) }}
+                className="rounded-lg border border-brand-100 bg-white px-2 py-2 text-left shadow-sm transition hover:border-brand-300 hover:bg-brand-50 disabled:opacity-60">
+                <span className="block text-sm font-semibold text-brand-900">{t(DEMO_ROLE_LABEL[l.role] ?? l.role)}</span>
+                <span className="block truncate text-[11px] text-slate-500">{l.name}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-slate-500">{t('Password for every demo account:')} <code className="rounded bg-white px-1 font-semibold text-brand-900">{demo.data.password}</code>
+            {demo.data.nightly ? ` · ${t('Everything is reset every night at {time}.', { time: demo.data.resets_at })}` : ''}</p>
+        </div>
+      ) : null}
 
     </AuthShell>
   )

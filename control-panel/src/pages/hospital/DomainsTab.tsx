@@ -6,6 +6,7 @@ import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Select, Skeleto
 import { cp, friendly } from '../../api'
 import type { CpHospitalDetail } from '../../types'
 import { dateTime, ErrorBox, Section } from '../../ui'
+import { hospitalHost } from '../../../../src/tenancy/urls'
 
 interface DomainRow { domain: string; is_primary: boolean; method: 'cloudflare' | 'manual'; status: string | null; ssl_status: string | null; dns_target: string | null; last_error: string | null; checked_at: string | null; verification?: { txt?: { name?: string; value?: string; type?: string } } | null }
 interface DomainsResp { cloudflare: boolean; target: string | null; platform: string; canManage: boolean; domains: DomainRow[] }
@@ -40,7 +41,7 @@ export function DomainsTab({ h }: { h: CpHospitalDetail }) {
         </form>
       </Section>
       <Section title="Addresses">
-        {!r.domains.length ? <EmptyState icon={<Globe className="h-6 w-6" />} title="No custom address" description={`It opens at ${location.origin}/?hospital=${h.slug}`} /> : (
+        {!r.domains.length ? <EmptyState icon={<Globe className="h-6 w-6" />} title="No custom address" description={`It opens at ${hospitalHost({ slug: h.slug })}`} /> : (
           <ul className="space-y-3">
             {r.domains.map((d) => (
               <li key={d.domain} className="rounded-xl border border-slate-100 p-3 text-sm">

@@ -9,9 +9,10 @@ import type {
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
   SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
   MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
-  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp,
+  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp, CpDemo,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
+import { hospitalUrl } from '../../src/tenancy/urls'
 import { carryLoginOtp, currentSessionId, requestLoginOtp, verifyLoginOtp, type OtpSent } from '../../src/auth/loginOtp'
 
 export interface CpApi {
@@ -85,6 +86,11 @@ export interface CpApi {
   /** re-checks the admin's password, starts the session (impersonate Edge Function) and returns the address to open */
   impersonate(userId: string, reason: string, password: string): Promise<{ url: string; expires_at: string; email: string }>
   impersonations(): Promise<ImpersonationRow[]>
+  // the public demo hospital (demo.sql)
+  demo(): Promise<CpDemo>
+  saveDemo(p: Record<string, unknown>): Promise<CpDemo>
+  resetDemo(): Promise<CpDemo>
+  saveDemoBaseline(): Promise<CpDemo>
   // messaging & alerts, broadcasts, live health (cp_notify.sql + the ops Edge Function)
   messagingSetup(): Promise<MessagingSetup>
   /** API keys need the admin's password again (the database wants a sign-in from the last 10 minutes) */
@@ -260,9 +266,13 @@ const db: CpApi = {
     const r = await invoke<{ id: string; token_hash: string; email: string; full_name: string; role: string; slug: string; hospital: string; expires_at: string }>(
       'impersonate', { user_id: userId, reason })
     const hand = encodeImpersonation({ id: r.id, token_hash: r.token_hash, email: r.email, full_name: r.full_name, role: r.role, hospital: r.hospital, expires_at: r.expires_at })
-    return { url: `${location.origin}/?hospital=${encodeURIComponent(r.slug)}#imp=${hand}`, expires_at: r.expires_at, email: r.email }
+    return { url: hospitalUrl({ slug: r.slug }, `/#imp=${hand}`), expires_at: r.expires_at, email: r.email }
   },
   impersonations: () => rpc('cp_impersonations', { p_limit: 100 }),
+  demo: () => rpc('cp_demo'),
+  saveDemo: (p) => rpc('cp_save_demo', { p }),
+  resetDemo: () => rpc('cp_demo_reset'),
+  saveDemoBaseline: () => rpc('cp_demo_save_baseline'),
   messagingSetup: () => rpc('cp_messaging_setup'),
   async saveMessagingSetup(settings, secrets, password) {
     if (Object.keys(secrets).length) {

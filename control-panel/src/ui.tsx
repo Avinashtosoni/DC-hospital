@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from 'react'
 import { Badge, Card, type Tone } from '../../src/components/ui'
 import { PLAN_LABEL } from '../../src/platform/plans'
 import type { CpMe, ProviderRole } from './types'
+import { hospitalUrl } from '../../src/tenancy/urls'
 
 export const MeContext = createContext<{ me: CpMe; signOut: () => void } | null>(null)
 export function useMe() {
@@ -80,8 +81,7 @@ export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => v
   )
 }
 
-/** the hospital app's address for a hospital (custom domain, else ?hospital=) */
+/** the hospital app's address for a hospital (custom domain, else its subdomain / ?hospital=) */
 export function appUrl(h: { slug: string; domain: string | null }) {
-  if (h.domain) return `https://${h.domain}/`
-  return `${location.origin}/?hospital=${encodeURIComponent(h.slug)}`
+  return hospitalUrl(h, '/')
 }

@@ -18,7 +18,8 @@ PDOMAIN="$(esc "${PLATFORM_DOMAIN:-hospital.digitalcomrade.in}")"
 
 # optional: company details for the legal pages, error reporting (empty = app defaults / off)
 EXTRA=""
-for k in PLATFORM_LEGAL_NAME PLATFORM_ADDRESS PLATFORM_EMAIL PLATFORM_PHONE PLATFORM_GRIEVANCE_OFFICER PLATFORM_JURISDICTION SENTRY_DSN; do
+# TENANT_SUBDOMAINS=on: every hospital at <slug>.PLATFORM_DOMAIN (needs wildcard DNS + SSL — docs/MULTI_TENANCY.md)
+for k in PLATFORM_LEGAL_NAME PLATFORM_ADDRESS PLATFORM_EMAIL PLATFORM_PHONE PLATFORM_GRIEVANCE_OFFICER PLATFORM_JURISDICTION SENTRY_DSN TENANT_SUBDOMAINS; do
   eval "v=\${$k:-}"
   if [ -n "$v" ]; then EXTRA="${EXTRA}, \"${k}\": \"$(esc "$v")\""; fi
 done

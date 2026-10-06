@@ -1,5 +1,6 @@
 import { platformDomain, supabase, tenancyMode } from '../lib/supabase'
-import { enableTenancy, setSiteTenant, slugHint, type TenantInfo } from './state'
+import { enableTenancy, forgetSlugHint, setSiteTenant, slugHint, type TenantInfo } from './state'
+import { hostSlug } from './urls'
 
 export type BootResult =
   | { ok: true; tenant: TenantInfo | null; platform?: false }
@@ -13,14 +14,21 @@ export type BootResult =
  */
 /**
  * Is this the platform's own domain (PLATFORM_DOMAIN, with or without www.) with no hospital chosen?
- * `?hospital=<slug>` still opens a hospital there; `?platform` forces the
- * product page on any host (previews).
+ * - `?hospital=<slug>` opens a hospital there (with TENANT_SUBDOMAINS=on main.tsx sends it to <slug>.domain first);
+ * - the bare `/` is always the product page — a slug remembered in this tab from an earlier link no longer
+ *   turns it into a hospital (that was why `/` showed the product page in one tab and a hospital in another);
+ * - other paths (`/login` …) of a hospital opened in this tab keep working on reload;
+ * - `?platform` forces the product page on any host (previews).
  */
-export function isPlatformLanding(host: string, search = typeof location === 'undefined' ? '' : location.search): boolean {
+export function isPlatformLanding(host: string, search = typeof location === 'undefined' ? '' : location.search,
+  path = typeof location === 'undefined' ? '/' : location.pathname): boolean {
   if (new URLSearchParams(search).has('platform')) return true
-  if (slugHint(search)) return false
-  const h = host.toLowerCase().replace(/^www\./, '')
-  return !!platformDomain && h === platformDomain
+  const h = host.toLowerCase().split(':')[0].replace(/^www\./, '')
+  if (!platformDomain || h !== platformDomain) return false
+  const q = new URLSearchParams(search).get('hospital')
+  if (q !== null && q.trim()) { slugHint(search); return false }
+  if (q !== null || path === '/' || path === '') { forgetSlugHint(); return true }
+  return !slugHint(search)
 }
 
 export async function bootTenancy(host = location.hostname): Promise<BootResult> {
@@ -30,7 +38,8 @@ export async function bootTenancy(host = location.hostname): Promise<BootResult>
   if (tenancyMode !== 'multi') { enableTenancy(false); return { ok: true, tenant: null } }
   enableTenancy(true)
   try {
-    const { data, error } = await supabase.rpc('resolve_tenant', { p_host: host, p_slug: slugHint() })
+    // city.hospital.digitalcomrade.in → city (a custom domain is matched by resolve_tenant itself)
+    const { data, error } = await supabase.rpc('resolve_tenant', { p_host: host, p_slug: hostSlug(host) ?? slugHint() })
     if (error) throw error
     const t = (Array.isArray(data) ? data[0] : data) as TenantInfo | undefined
     if (!t) return { ok: false, reason: 'not_found' }

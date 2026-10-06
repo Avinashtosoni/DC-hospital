@@ -6,6 +6,7 @@ import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Modal, Select, 
 import { cp, friendly } from '../../api'
 import type { CpHospitalDetail, HospitalUser, HospitalUserRole, UserAction } from '../../types'
 import { dateTime, ErrorBox, isAdmin, Section, useMe } from '../../ui'
+import { hospitalUrl } from '../../../../src/tenancy/urls'
 
 const ROLES: { value: HospitalUserRole; label: string; tone: Tone }[] = [
   { value: 'owner', label: 'Owner', tone: 'violet' }, { value: 'doctor', label: 'Doctor', tone: 'blue' },
@@ -13,8 +14,7 @@ const ROLES: { value: HospitalUserRole; label: string; tone: Tone }[] = [
   { value: 'staff', label: 'Staff', tone: 'slate' }, { value: 'patient', label: 'Patient', tone: 'pink' },
 ]
 const roleOf = (r: string) => ROLES.find((x) => x.value === r) ?? { value: r as HospitalUserRole, label: r, tone: 'slate' as Tone }
-const siteBase = (h: CpHospitalDetail) => (h.domain ? `https://${h.domain}` : location.origin)
-const withHospital = (h: CpHospitalDetail, path: string) => `${siteBase(h)}${path}${h.domain ? '' : `${path.includes('?') ? '&' : '?'}hospital=${encodeURIComponent(h.slug)}`}`
+const withHospital = (h: CpHospitalDetail, path: string) => hospitalUrl(h, path)
 
 /** Phase B: the hospital's accounts. Same rules as the hospital's own Users page (a hospital always keeps an owner). */
 export function UsersTab({ h }: { h: CpHospitalDetail }) {

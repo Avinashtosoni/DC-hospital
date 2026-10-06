@@ -10,6 +10,7 @@ import { LOCKABLE_MODULES, MODULE_LABEL } from '../../../src/tenancy/moduleList'
 import { cp, friendly } from '../api'
 import type { CpHospital, ModuleMap, NewHospital } from '../types'
 import { ErrorBox, isAdmin, LicenseBadge, licenseLine, paise, planLabel, STATUS, useMe } from '../ui'
+import { hospitalHost } from '../../../src/tenancy/urls'
 
 /** the filtered list as a spreadsheet (opens in Excel; ₹ amounts as plain numbers) */
 function downloadCsv(rows: CpHospital[]) {
@@ -74,7 +75,7 @@ export function HospitalsPage() {
                     <tr key={h.id} className="hover:bg-brand-50/40">
                       <td className="px-4 py-3">
                         <Link to={`/hospitals/${h.id}`} className="font-medium text-brand-900 hover:underline">{h.name}</Link>
-                        <p className="text-xs text-slate-500">{h.domain ?? `?hospital=${h.slug}`}{h.is_primary && ' · original install'}</p>
+                        <p className="text-xs text-slate-500">{h.domain ?? hospitalHost({ slug: h.slug })}{h.is_primary && ' · original install'}{h.is_demo && ' · demo (reset nightly)'}</p>
                       </td>
                       <td className="px-4 py-3 text-slate-700">{planLabel(h.plan)}<p className="text-xs text-slate-500">{h.price ? `₹${h.price.toLocaleString('en-IN')}/mo` : 'custom price'}</p></td>
                       <td className="px-4 py-3"><LicenseBadge status={h.license.status} /><p className="mt-1 text-xs text-slate-500">{licenseLine(h.license)}</p></td>
@@ -111,7 +112,7 @@ function NewHospitalModal({ open, onClose }: { open: boolean; onClose: () => voi
     mutationFn: () => cp.createHospital({ ...f, trial_days: f.trial_days || trialDefault || 14 }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['cp-hospitals'] }); qc.invalidateQueries({ queryKey: ['cp-overview'] })
-      toast.success(`${f.name} added`, { description: `The owner signs up with ${r.owner_email} on ${r.domain ?? `?hospital=${r.slug}`} and becomes its owner.` })
+      toast.success(`${f.name} added`, { description: `The owner signs up with ${r.owner_email} on ${r.domain ?? hospitalHost({ slug: r.slug })} and becomes its owner.` })
       setF(blank()); setTouched({ slug: false, code: false }); onClose()
       nav(`/hospitals/${r.id}`)
     },
@@ -128,7 +129,7 @@ function NewHospitalModal({ open, onClose }: { open: boolean; onClose: () => voi
             setF((x) => ({ ...x, name, slug: touched.slug ? x.slug : slugify(name), code: touched.code ? x.code : codeFrom(name) }))
           }} />
         </Field>
-        <Field label="Short name" required hint="Used in ?hospital= links and internally. a-z, 0-9, -">
+        <Field label="Short name" required hint="Its address: <short name>.platform domain (until a custom domain is connected). a-z, 0-9, -">
           <Input id="nh-slug" value={f.slug} onChange={(e) => { setTouched((t) => ({ ...t, slug: true })); set('slug', e.target.value.toLowerCase()) }} />
         </Field>
         <Field label="Record prefix" required hint="Patient numbers look like CCC-100001">
