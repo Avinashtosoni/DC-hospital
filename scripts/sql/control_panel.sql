@@ -19,12 +19,20 @@ begin
 end $$;
 
 -- who is signed in to the panel (null = not a platform team member)
-create or replace function public.cp_me()
-returns jsonb language sql stable security definer set search_path = public as $$
-  select jsonb_build_object('user_id', u.user_id, 'role', u.role, 'email', a.email, 'full_name', coalesce(p.full_name, split_part(a.email, '@', 1)))
+-- otp: the sign-in code state (otp_verify.sql) — while a code is required and not entered, every other cp_* refuses
+drop function if exists public.cp_me() cascade;
+create function public.cp_me()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare r jsonb;
+begin
+  select jsonb_build_object('user_id', u.user_id, 'role', u.role, 'email', a.email, 'full_name', coalesce(p.full_name, split_part(a.email, '@', 1))) into r
     from public.provider_users u join auth.users a on a.id = u.user_id left join public.profiles p on p.id = u.user_id
-   where u.user_id = auth.uid() and u.active
-$$;
+   where u.user_id = auth.uid() and u.active;
+  if r is not null and to_regprocedure('public.login_otp_status()') is not null then
+    r := r || jsonb_build_object('otp', public.login_otp_status());
+  end if;
+  return r;
+end $$;
 
 -- ------------------------------------------------------------------ hospitals
 create or replace function public.cp_hospitals(p_id uuid default null)

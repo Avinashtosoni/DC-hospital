@@ -6,7 +6,7 @@ export type Channel = 'sms' | 'whatsapp' | 'email' | 'push'
 export const CHANNELS: Channel[] = ['sms', 'whatsapp', 'email', 'push']
 export const CHANNEL_LABEL: Record<Channel, string> = { sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', push: 'Push (FCM)' }
 export type NotifyEvent =
-  | 'otp' | 'password_otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
+  | 'otp' | 'password_otp' | 'login_otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
   | 'invoice_created' | 'payment_received' | 'lab_report_ready' | 'feedback_request' | 'staff_invite'
   | 'account_created' | 'account_updated' | 'account_deleted' | 'password_changed' | 'notice_published'
 
@@ -28,8 +28,9 @@ export interface EventTemplate {
 }
 
 export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: Channel[]; tokens: string[] }[] = [
-  { id: 'otp', label: 'Booking OTP', hint: 'One-time code when a patient books online', channels: ['sms', 'whatsapp'], tokens: ['code', 'hospital'] },
+  { id: 'otp', label: 'Booking OTP', hint: 'One-time code when a patient books online (channels: Settings → Security)', channels: ['sms', 'whatsapp', 'email'], tokens: ['code', 'hospital'] },
   { id: 'password_otp', label: 'Password reset OTP', hint: '"Forgot password → Use mobile" on the sign-in page', channels: ['sms', 'whatsapp'], tokens: ['code', 'hospital'] },
+  { id: 'login_otp', label: 'Sign-in OTP', hint: 'Code after the password, when Settings → Security asks for one (channels picked there)', channels: ['sms', 'whatsapp', 'email'], tokens: ['code', 'name', 'hospital'] },
   { id: 'appointment_booked', label: 'Appointment booked', hint: 'Online, portal and desk bookings', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'date', 'time', 'ref', 'hospital', 'hospital_phone', 'address'] },
   { id: 'appointment_reminder', label: 'Appointment reminder', hint: 'Day before the visit (queued daily)', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'date', 'time', 'ref', 'hospital', 'hospital_phone', 'address'] },
   { id: 'appointment_rescheduled', label: 'Appointment rescheduled', hint: 'Date or time changed', channels: ['sms', 'whatsapp', 'email'], tokens: ['name', 'doctor', 'date', 'time', 'ref', 'hospital', 'hospital_phone'] },
@@ -55,6 +56,8 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
     '🔐 *{code}* is your {hospital} verification code.\n\nIt is valid for 10 minutes. Do not share it with anyone — our staff will never ask for it.'),
   password_otp: T('{code} is your {hospital} password reset code. It is valid for 10 minutes. If you did not ask for it, ignore this message.', 'Your password reset code', '', 'code',
     '🔑 *{code}* is your {hospital} password reset code.\n\nIt is valid for 10 minutes. Didn\'t ask for it? Ignore this message — your password stays the same.'),
+  login_otp: T('{code} is your {hospital} sign-in code. It is valid for 10 minutes. Do not share it with anyone.', 'Your sign-in code', '', 'code',
+    '🔐 *{code}* is your {hospital} sign-in code.\n\nIt is valid for 10 minutes. Didn\'t just sign in? Change your password — someone knows it.'),
   appointment_booked: T('Hi {name}, your appointment with {doctor} is confirmed for {date} at {time}. Ref {ref}. Please arrive 15 min early. {hospital} {hospital_phone}', 'Appointment confirmed — {date} at {time}', '', 'name,doctor,date,time,ref',
     '✅ *Appointment confirmed*\n\nHi {name},\n🩺 {doctor}\n🗓 {date} at {time}\n🔖 Ref: *{ref}*\n\nPlease arrive 15 minutes early with a photo ID. Pay at the reception.\n📍 {address}\n📞 {hospital_phone}\n\n— {hospital}'),
   appointment_reminder: T('Reminder: {name}, you have an appointment with {doctor} tomorrow, {date} at {time}. Ref {ref}. {hospital} {hospital_phone}', 'Reminder: your appointment tomorrow at {time}', '', 'name,doctor,date,time',
@@ -163,9 +166,24 @@ export interface AppSettings {
   modules: { hidden: string[] }
   announcement: { enabled: boolean; text: string; tone: 'info' | 'warning' | 'success' | 'danger'; audience: 'everyone' | 'staff' | 'patients'; link: string }
   locale: { dateFormat: 'dd MMM yyyy' | 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd' | 'd MMMM yyyy'; timeFormat: '12h' | '24h'; weekStartsOn: 0 | 1 }
-  security: { idleTimeoutMinutes: number }
+  security: { idleTimeoutMinutes: number; otp?: OtpSettings }
   notifications: NotificationSettings
 }
+
+/** OTP verification (Settings → Security; scripts/sql/otp_verify.sql). Channels in order of preference. */
+export type OtpChannel = 'whatsapp' | 'sms' | 'email'
+export const OTP_CHANNELS: OtpChannel[] = ['whatsapp', 'sms', 'email']
+export interface OtpSettings {
+  /** a code after the password — per session; 'staff' = everyone except patients */
+  login: { enabled: boolean; channels: OtpChannel[]; roles: 'staff' | 'all' }
+  /** a code before an online booking (/book); channels null = the Notifications events decide (older settings) */
+  booking: { enabled: boolean; channels: OtpChannel[] | null }
+}
+export const DEFAULT_OTP: OtpSettings = { login: { enabled: false, channels: ['whatsapp', 'sms', 'email'], roles: 'staff' }, booking: { enabled: true, channels: null } }
+export const otpOf = (s: { otp?: Partial<OtpSettings> } | undefined): OtpSettings => ({
+  login: { ...DEFAULT_OTP.login, ...(s?.otp?.login ?? {}) },
+  booking: { ...DEFAULT_OTP.booking, ...(s?.otp?.booking ?? {}) },
+})
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   appearance: { theme: 'periwinkle', customColor: '#5c5c99', sidebar: 'dark', size: 'default', radius: 'default' },
@@ -183,6 +201,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     events: {
       otp: { sms: true, whatsapp: true },
       password_otp: { sms: true, whatsapp: true },
+      login_otp: { sms: true, whatsapp: true, email: true },
       appointment_booked: { sms: true, whatsapp: true, email: true },
       appointment_reminder: { sms: true, whatsapp: true, email: false },
       appointment_rescheduled: { sms: true, whatsapp: true, email: true },

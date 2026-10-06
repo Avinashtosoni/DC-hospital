@@ -220,11 +220,13 @@ const controlOpsSql = readFileSync(resolve(root, 'scripts/sql/control_panel_ops.
 const platformCmsSql = readFileSync(resolve(root, 'scripts/sql/platform_cms.sql'), 'utf8')
 // control panel → messaging & alerts, broadcasts, live health checks
 const cpNotifySql = readFileSync(resolve(root, 'scripts/sql/cp_notify.sql'), 'utf8')
+// OTP on sign-in (hospital + control-panel team) — enforced through current_tenant() / provider_role()
+const otpSql = readFileSync(resolve(root, 'scripts/sql/otp_verify.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
 // default wording for the messaging events added in section 18 — merged into a saved Settings row (saved values win)
-const NEW_EVENTS: NotifyEvent[] = ['account_created', 'account_updated', 'account_deleted', 'password_changed', 'notice_published']
+const NEW_EVENTS: NotifyEvent[] = ['account_created', 'account_updated', 'account_deleted', 'password_changed', 'notice_published', 'login_otp']
 const nd = DEFAULT_APP_SETTINGS.notifications
 const notifyDefaults = JSON.stringify({
   events: Object.fromEntries(NEW_EVENTS.map((e) => [e, nd.events[e]])),
@@ -302,6 +304,8 @@ ${controlOpsSql}
 ${platformCmsSql}
 
 ${cpNotifySql}
+
+${otpSql}
 commit;
 
 -- Done ✔  —  Sign in at your app with owner@dchospital.com / ${DEMO_PASSWORD}
@@ -381,6 +385,8 @@ ${platformCmsSql}
 
 ${cpNotifySql}
 
+${otpSql}
+
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
@@ -413,7 +419,7 @@ let nextUpgrade = upgrade
 const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
 for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
-  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql], ['control-ops', 'control_panel_ops.sql', controlOpsSql], ['platform-cms', 'platform_cms.sql', platformCmsSql], ['cp-notify', 'cp_notify.sql', cpNotifySql],
+  ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql], ['control-ops', 'control_panel_ops.sql', controlOpsSql], ['platform-cms', 'platform_cms.sql', platformCmsSql], ['cp-notify', 'cp_notify.sql', cpNotifySql], ['otp-verify', 'otp_verify.sql', otpSql],
   ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
   const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`
   const re = new RegExp(`-- >>> ${name}[\\s\\S]*?-- <<< ${name}`)

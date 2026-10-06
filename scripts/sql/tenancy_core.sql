@@ -109,10 +109,17 @@ returns uuid language sql stable security definer set search_path = public as $$
 $$;
 
 -- 'admin' | 'support' | 'finance' | null — the signed-in user's provider role
+-- null until a team member has entered their sign-in code, when Platform settings → Security asks for one (otp_verify.sql)
 create or replace function public.provider_role()
-returns text language sql stable security definer set search_path = public as $$
-  select role from public.provider_users where user_id = auth.uid() and active
-$$;
+returns text language plpgsql stable security definer set search_path = public as $$
+declare r text;
+begin
+  select role into r from public.provider_users where user_id = auth.uid() and active;
+  if r is not null and to_regprocedure('public.login_otp_passed(text,uuid)') is not null and not public.login_otp_passed('team', null) then
+    return null;
+  end if;
+  return r;
+end $$;
 
 -- may the signed-in provider manage this hospital?
 create or replace function public.provider_can(p_tenant uuid)
@@ -148,6 +155,10 @@ begin
       return case when public.provider_can(h::uuid) then h::uuid end;   -- no hospital picked → sees nothing
     end if;
     select tenant_id into v from public.profiles where id = uid;
+    -- sign-in OTP (Settings → Security): nothing of the hospital is visible until this session entered its code
+    if v is not null and to_regprocedure('public.login_otp_passed(text,uuid)') is not null and not public.login_otp_passed('hospital', v) then
+      return null;
+    end if;
     return v;                                                            -- a header never moves a hospital user
   end if;
 
