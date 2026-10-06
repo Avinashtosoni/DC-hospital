@@ -248,10 +248,11 @@ create policy provider_audit_select on public.provider_audit for select to authe
 -- A mapped domain always wins; only hosts without a mapping (preview / staging / localhost) may name a
 -- hospital by slug (?hospital=city), so a hospital's own domain can never be made to show another one.
 drop function if exists public.resolve_tenant(text);
+drop function if exists public.resolve_tenant(text, text);   -- the columns grew (is_demo)
 create or replace function public.resolve_tenant(p_host text, p_slug text default null)
-returns table (id uuid, slug text, name text, status text, modules jsonb, is_primary boolean)
+returns table (id uuid, slug text, name text, status text, modules jsonb, is_primary boolean, is_demo boolean)
 language sql stable security definer set search_path = public as $$
-  select t.id, t.slug, t.name, public.tenant_license(t.id), t.modules, t.is_primary   -- effective status (licence, phase 4)
+  select t.id, t.slug, t.name, public.tenant_license(t.id), t.modules, t.is_primary, t.is_demo   -- effective status (licence, phase 4)
     from public.tenants t
    where t.id = coalesce(
            (select d.tenant_id from public.tenant_domains d where d.domain = lower(split_part(trim(coalesce(p_host, '')), ':', 1))),

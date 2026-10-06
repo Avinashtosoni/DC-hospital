@@ -45,7 +45,7 @@ begin
   perform public.cp_require();
   select coalesce(jsonb_agg(h order by h ->> 'is_primary' desc, h ->> 'name'), '[]'::jsonb) into r from (
     select jsonb_build_object(
-      'id', t.id, 'slug', t.slug, 'name', t.name, 'code', t.code, 'plan', t.plan, 'is_primary', t.is_primary, 'notes', t.notes,
+      'id', t.id, 'slug', t.slug, 'name', t.name, 'code', t.code, 'plan', t.plan, 'is_primary', t.is_primary, 'is_demo', t.is_demo, 'notes', t.notes,
       'closing_at', t.closing_at, 'purge_after', t.purge_after, 'close_reason', t.close_reason,
       'created_at', t.created_at, 'modules', t.modules, 'license', public.tenant_license_dates(t.id), 'wallet_paise', t.wallet_paise,
       'price', coalesce((t.billing ->> 'price')::numeric, (cfg -> 'plans' -> t.plan ->> 'price')::numeric), 'billing', t.billing,

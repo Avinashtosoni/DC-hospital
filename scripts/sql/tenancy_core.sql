@@ -21,6 +21,8 @@ create table if not exists public.tenants (
 alter table public.tenants add column if not exists closing_at timestamptz;
 alter table public.tenants add column if not exists purge_after timestamptz;
 alter table public.tenants add column if not exists close_reason text;
+-- the public demo hospital (demo.sql): at most one; reset every night
+alter table public.tenants add column if not exists is_demo boolean not null default false;
 create unique index if not exists tenants_one_primary on public.tenants (is_primary) where is_primary;
 
 -- the hospital every existing row belongs to (fixed id so upgrades and seeds agree)

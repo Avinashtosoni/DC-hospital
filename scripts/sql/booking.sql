@@ -199,6 +199,11 @@ begin
 
   -- the code never goes back to the browser — only by SMS / WhatsApp (queued = 0 → the site says "please call")
   -- `ref` lets the browser ask the notify function to deliver exactly this message right away
+  -- …except in the demo hospital when the team chose "show codes on screen" (demo.sql): nothing is sent there
+  if public.demo_otp_screen(public.current_tenant()) then
+    return jsonb_build_object('sent', true, 'expires_in', 600, 'queued', greatest(v_queued, 1), 'ref', v_id,
+      'channels', to_jsonb(v_use), 'demo_code', v_code);
+  end if;
   return jsonb_build_object('sent', v_queued > 0, 'expires_in', 600, 'queued', v_queued, 'ref', v_id,
     'channels', case when v_queued > 0 then to_jsonb(v_use) else '[]'::jsonb end);
 end $$;

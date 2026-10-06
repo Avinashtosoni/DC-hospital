@@ -616,6 +616,8 @@ begin
     execute $c$ select cron.schedule('dch-billing-reminders', '0 4 * * *', 'select public.queue_billing_reminders()') $c$;  -- 09:30 IST
     -- retention (phase 7): delivery log, audit logs, OTPs, enquiries… per Platform settings → Retention (was dch-outbox-cleanup)
     execute $c$ select cron.schedule('dch-retention', '30 21 * * *', 'select public.run_retention()') $c$;  -- 03:00 IST
+    -- the public demo hospital back to its demo data (demo.sql; does nothing without a demo hospital)
+    execute $c$ select cron.schedule('dch-demo-reset', '30 21 * * *', 'select public.demo_reset_nightly()') $c$;  -- 03:00 IST
   elsif exists (select 1 from pg_extension where extname = 'pg_cron') then
     for j in execute $q$ select jobid from cron.job where jobname like 'dch-%' $q$ loop
       execute 'select cron.unschedule($1)' using j.jobid;

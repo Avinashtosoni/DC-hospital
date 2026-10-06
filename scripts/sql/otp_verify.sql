@@ -112,6 +112,7 @@ declare
   v_email text;
   out     jsonb := '[]'::jsonb;
   acc     jsonb;
+  v_demo  boolean := false;
 begin
   select lower(email) into v_email from auth.users where id = p_user;
   if p_scope = 'team' then
@@ -123,6 +124,8 @@ begin
     cfg := public.otp_config(p_tenant) -> 'login';
     select phone into v_phone from public.profiles where id = p_user;
     select data -> 'notifications' into n from public.app_settings where key = 'app' and tenant_id = p_tenant;
+    -- demo hospital with codes shown on screen: no channel has to be connected (demo.sql)
+    v_demo := to_regprocedure('public.demo_otp_screen(uuid)') is not null and public.demo_otp_screen(p_tenant);
   end if;
   v_phone := right(regexp_replace(coalesce(v_phone, ''), '\D', '', 'g'), 10);
   select coalesce(array_agg(x), '{}') into allowed from jsonb_array_elements_text(
@@ -136,7 +139,7 @@ begin
         and not exists (select 1 from public.platform_health_state h where h.service = 'provider:' || ch and h.status in ('ok', 'warn')
                           and h.last_checked_at > now() - interval '7 days');
     else
-      continue when coalesce((n -> ch ->> 'enabled')::boolean, false) is not true;
+      continue when coalesce((n -> ch ->> 'enabled')::boolean, false) is not true and not v_demo;
     end if;
     out := out || jsonb_build_array(jsonb_build_object('channel', ch, 'to', v_to, 'masked', public.mask_destination(ch, v_to)));
   end loop;
@@ -268,6 +271,9 @@ begin
            case when pick ->> 'channel' = 'email' then pick ->> 'to' else null end, null,
            jsonb_build_object('code', v_code, 'otp', v_code, 'name', coalesce(v_name, '')), 'login_otps', v_id, null);
     perform set_config('app.tenant_id', '', true);
+  end if;
+  if s.scope = 'hospital' and public.demo_otp_screen(s.tenant) then   -- demo hospital: the code is shown, not sent
+    return jsonb_build_object('sent', true, 'ref', v_id, 'scope', s.scope, 'channel', pick ->> 'channel', 'to', pick ->> 'masked', 'expires_in', 600, 'demo_code', v_code);
   end if;
   return jsonb_build_object('sent', n > 0, 'ref', v_id, 'scope', s.scope, 'channel', pick ->> 'channel', 'to', pick ->> 'masked', 'expires_in', 600);
 end $$;
