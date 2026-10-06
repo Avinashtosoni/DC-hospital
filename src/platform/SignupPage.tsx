@@ -5,7 +5,7 @@ import { cn } from '../lib/utils'
 import { signupInfo, signupProblem, trialSignup, type SignupForm, type SignupInfo, type SignupResult } from './api'
 import { LEGAL_VERSION } from './legal'
 import { siteHref as platformHref } from './site/ui'
-import { PLANS } from './plans'
+import { usePlans } from './planStore'
 import { hospitalUrl } from '../tenancy/urls'
 
 const EMPTY: SignupForm = { organisation: '', name: '', email: '', phone: '', city: '', plan: '', website: '' }
@@ -13,6 +13,7 @@ const firstName = (n: string) => n.trim().replace(/^(dr|mr|mrs|ms|shri|smt)\.?\s
 
 /** /signup on the platform domain — start a free trial without talking to sales (phase 8.2) */
 export default function SignupPage() {
+  const { plans } = usePlans()
   const [info, setInfo] = useState<SignupInfo | null>(null)
   const [loadError, setLoadError] = useState('')
   const [f, setF] = useState<SignupForm>(EMPTY)
@@ -81,7 +82,7 @@ export default function SignupPage() {
                 <Field label="City"><input className="input" value={f.city} onChange={set('city')} autoComplete="address-level2" maxLength={80} /></Field>
                 <Field label="Plan to try">
                   <select className="input" value={f.plan} onChange={set('plan')}>
-                    {info.plans.map((id) => { const p = PLANS.find((x) => x.id === id); return <option key={id} value={id}>{p?.name ?? id}{p?.price ? ` — ₹${p.price.toLocaleString('en-IN')}${p.suffix ?? ''}/month` : ''}</option> })}
+                    {info.plans.map((id) => { const p = plans.find((x) => x.id === id); return <option key={id} value={id}>{p?.name ?? id}{p?.price ? ` — ₹${p.price.toLocaleString('en-IN')}${p.suffix ?? ''}/month` : ''}</option> })}
                   </select>
                 </Field>
                 {/* honeypot: people never see it, bots fill it */}

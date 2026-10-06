@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import { Badge, Card, type Tone } from '../../src/components/ui'
-import { PLAN_LABEL } from '../../src/platform/plans'
+import { planLabel as livePlanLabel, usePlans } from '../../src/platform/planStore'
 import type { CpMe, ProviderRole } from './types'
 import { hospitalUrl } from '../../src/tenancy/urls'
 
@@ -24,7 +24,15 @@ export function LicenseBadge({ status }: { status: string }) {
   const s = STATUS[status] ?? { label: status, tone: 'slate' as Tone }
   return <Badge tone={s.tone} dot>{s.label}</Badge>
 }
-export const planLabel = (p: string | null | undefined) => (p ? PLAN_LABEL[p as keyof typeof PLAN_LABEL] ?? p : '—')
+/** a plan's name — live from Plans & billing */
+export const planLabel = (p: string | null | undefined) => livePlanLabel(p)
+/** <option>s for every plan (archived ones marked), optionally with the monthly price */
+export function PlanOptions({ withPrice, hideArchived }: { withPrice?: boolean; hideArchived?: boolean }) {
+  const { plans } = usePlans()
+  return <>{plans.filter((p) => !hideArchived || !p.archived).map((p) => (
+    <option key={p.id} value={p.id}>{p.name}{withPrice ? (p.price != null ? ` — ₹${p.price.toLocaleString('en-IN')}${p.suffix ?? ''}/mo` : ' — custom price') : ''}{p.archived ? ' (archived)' : ''}</option>
+  ))}</>
+}
 export const ROLE_LABEL: Record<ProviderRole, string> = { admin: 'Admin', support: 'Support', finance: 'Finance' }
 export const ROLE_TONE: Record<ProviderRole, Tone> = { admin: 'violet', support: 'blue', finance: 'teal' }
 

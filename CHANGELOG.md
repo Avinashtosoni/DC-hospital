@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased: Plans & billing page
+
+- **Control panel → Plans & billing** (`/plans`, admin): add, edit, duplicate, hide/show, mark most popular, reorder,
+  archive/restore and delete plans; a live website-card preview while editing; hospitals, paying, trial and MRR per plan.
+  A plan that hospitals use can only be archived (they keep it; new hospitals can't choose it). Tabs for Billing rules
+  (GST, trial, grace, yearly price, extra-message rates, wallet limits), Invoices (seller / GSTIN / SAC) and History.
+- **Price changes** on a plan in use ask: new price for everyone from their next renewal, or keep today's price for
+  existing hospitals (saved as their own agreed price). Owners can be told by in-app bell + e-mail (template `SUB-008`),
+  and their Billing page shows the change for 30 days.
+- **Plans live in the database** (`scripts/sql/plans.sql`, `platform_plans()`): the product site's pricing, contact form,
+  sign-up, the hospital Billing page, invoices and every control-panel plan picker use them. The built-in Clinic /
+  Hospital / Enterprise / Custom plans are the defaults. Platform settings no longer has a Billing tab.
+- Run `supabase/upgrade-2026-10.sql` again to get it.
+
+
 ## Unreleased: notification template library, in-app bell and server monitor
 
 - **Template library** (`src/notify/`, `scripts/sql/notify_catalog.sql`): every message has an ID (`AUTH-001`, `APT-002`,

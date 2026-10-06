@@ -232,6 +232,10 @@ const catalogJson = JSON.stringify(Object.fromEntries(CATALOG.map((e) => [e.id, 
 if (catalogJson.includes('$catalog$')) throw new Error('notification catalog contains $catalog$')
 const notifySql = readFileSync(resolve(root, 'scripts/sql/notify_catalog.sql'), 'utf8').replace('@@NOTIFY_CATALOG@@', () => catalogJson)
 if (notifySql.includes('@@NOTIFY_CATALOG@@')) throw new Error('notification catalog placeholder missing')
+// the plans catalogue (Control Panel → Plans & billing) — after the notification library (it tells owners about changes)
+const plansSql = readFileSync(resolve(root, 'scripts/sql/plans.sql'), 'utf8').replace('@@PLAN_DEFAULTS@@', () => JSON.stringify(BILLING_DEFAULTS.plans))
+if (plansSql.includes('@@PLAN_DEFAULTS@@')) throw new Error('plan defaults placeholder missing')
+if (JSON.stringify(BILLING_DEFAULTS.plans).includes('$json$')) throw new Error('plan defaults contain $json$')
 const demoSql = readFileSync(resolve(root, 'scripts/sql/demo.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
@@ -320,6 +324,8 @@ ${otpSql}
 
 ${notifySql}
 
+${plansSql}
+
 ${demoSql}
 commit;
 
@@ -404,6 +410,8 @@ ${otpSql}
 
 ${notifySql}
 
+${plansSql}
+
 ${demoSql}
 
 -- =====================================================================================================
@@ -440,6 +448,7 @@ for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCor
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
   ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql], ['control-ops', 'control_panel_ops.sql', controlOpsSql], ['platform-cms', 'platform_cms.sql', platformCmsSql], ['cp-notify', 'cp_notify.sql', cpNotifySql], ['otp-verify', 'otp_verify.sql', otpSql],
   ['notify-catalog', 'notify_catalog.sql', notifySql],
+  ['plans', 'plans.sql', plansSql],
   ['demo', 'demo.sql', demoSql],
   ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
   const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`

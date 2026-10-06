@@ -44,7 +44,7 @@ describe('licence banner', () => {
 
 describe('billing defaults', () => {
   test('prices and included messages come from the plans; ₹ formatting', () => {
-    expect(BILLING_DEFAULTS.plans.clinic).toEqual({ price: 999, included: PLANS.find((p) => p.id === 'clinic')!.included })
+    expect(BILLING_DEFAULTS.plans.clinic).toMatchObject({ name: 'Clinic', price: 999, included: PLANS.find((p) => p.id === 'clinic')!.included, public: true, archived: false })
     expect(BILLING_DEFAULTS.plans.custom.price).toBeNull()
     expect(rupees(117882)).toBe('₹1,178.82')
     expect(rupees(99900)).toBe('₹999')

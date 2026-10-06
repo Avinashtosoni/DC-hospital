@@ -698,7 +698,7 @@ begin
     perform public.raise_platform_alert_safe('tenant_status', new.name || ' restored', 'Status changed from suspended to ' || new.status || '.', '/hospitals/' || new.id);
   end if;
   if new.plan is distinct from old.plan then
-    perform public.notify_owner_platform(new.id, 'plan_changed', jsonb_build_object('plan', initcap(new.plan), 'old_plan', initcap(old.plan),
+    perform public.notify_owner_platform(new.id, 'plan_changed', jsonb_build_object('plan', public.plan_name(new.plan), 'old_plan', public.plan_name(old.plan),
       'link', public.notify_tenant_url(new.id, '/settings?tab=billing')), 'tenants', new.id);
   end if;
   if new.trial_ends_at is not null and old.trial_ends_at is not null and new.trial_ends_at > old.trial_ends_at + interval '1 hour' then
@@ -722,7 +722,7 @@ begin
     if new.status is not distinct from old.status then return new; end if;
   end if;
   v_what := case when new.kind = 'wallet' then 'a message wallet top-up'
-                 else 'the ' || initcap(coalesce(new.plan, 'current')) || ' plan' || coalesce(' (' || new.months || case when new.months = 1 then ' month)' else ' months)' end, '') end;
+                 else 'the ' || coalesce(public.plan_name(new.plan), 'current') || ' plan' || coalesce(' (' || new.months || case when new.months = 1 then ' month)' else ' months)' end, '') end;
   if new.status = 'paid' then
     select paid_until into v_until from public.tenants where id = new.tenant_id;
     perform public.notify_owner_platform(new.tenant_id, 'subscription_payment_success', jsonb_build_object(

@@ -20,7 +20,8 @@ export interface BillingSummary {
   /** this month's messages on Hospital Comrade's shared accounts */
   usage: Partial<Record<Channel, number>>
   /** phase 6 — the plan picker: every plan's monthly price (null = priced individually) and allowance */
-  plans?: Record<string, { price: number | null; included: Partial<Record<Channel, number>> }>
+  /** every plan (name, price, features, public / archived …) — the Control Panel's Plans & billing page */
+  plans?: Record<string, Partial<import('../platform/plans').Plan>>
   /** a price agreed with the team — the owner can't switch plans themselves */
   custom_price?: boolean
   /** printed on new invoices (paid invoices keep their own copy) */

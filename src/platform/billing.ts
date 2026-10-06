@@ -20,7 +20,8 @@ export interface BillingConfig {
   maxTopup: number
   /** price per message beyond the plan's included messages, in paise */
   ratesPaise: { sms: number; whatsapp: number; email: number }
-  plans: Record<Plan['id'], { price: number | null; included: Plan['included'] }>
+  /** every plan by id (the Control Panel's Plans & billing page edits them) */
+  plans: Record<string, Omit<Plan, 'id'>>
   /** printed on Hospital Comrade's tax invoices */
   seller: { name: string; gstin: string; address: string; state: string; email: string; sac?: string }
 }
@@ -34,7 +35,10 @@ export const BILLING_DEFAULTS: BillingConfig = {
   minTopup: 500,
   maxTopup: 100000,
   ratesPaise: { sms: 30, whatsapp: 40, email: 2 },
-  plans: Object.fromEntries(PLANS.map((p) => [p.id, { price: p.price, included: p.included }])) as BillingConfig['plans'],
+  plans: Object.fromEntries(PLANS.map((p, i) => {
+    const { id, ...rest } = p
+    return [id, { ...rest, suffix: rest.suffix ?? '', highlight: !!rest.highlight, signup: !!rest.signup, public: true, archived: false, order: i }]
+  })),
   seller: { name: 'Digital Comrade', gstin: '', address: '', state: 'Bihar', email: '', sac: '998315' },
 }
 

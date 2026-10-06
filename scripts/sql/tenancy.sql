@@ -430,12 +430,15 @@ create table if not exists public.platform_leads (
   phone         text not null check (phone ~ '^\+?[0-9]{10,13}$'),
   email         text check (email is null or char_length(email) <= 150),
   city          text check (city is null or char_length(city) <= 80),
-  plan          text check (plan is null or plan in ('clinic', 'hospital', 'enterprise', 'custom', 'unsure')),
+  plan          text check (plan is null or plan ~ '^[a-z][a-z0-9-]{1,31}$'),   -- any plan id (plans are edited in the Control Panel) or 'unsure'
   message       text check (message is null or char_length(message) <= 2000),
   source        text check (source is null or char_length(source) <= 255),
   status        text not null default 'new' check (status in ('new', 'contacted', 'won', 'lost')),
   notes         text
 );
+-- plans became editable: the fixed list of ids is replaced by the id format (existing databases)
+alter table public.platform_leads drop constraint if exists platform_leads_plan_check;
+alter table public.platform_leads add constraint platform_leads_plan_check check (plan is null or plan ~ '^[a-z][a-z0-9-]{1,31}$');
 create index if not exists platform_leads_created_idx on public.platform_leads (created_at desc);
 alter table public.platform_leads enable row level security;
 revoke all on public.platform_leads from anon, authenticated;
@@ -465,7 +468,7 @@ begin
   end if;
   insert into public.platform_leads (name, organisation, phone, email, city, plan, message, source)
   values (left(trim(p_name), 100), left(trim(p_organisation), 150), v_phone, left(v_email, 150), nullif(left(trim(coalesce(p_city, '')), 80), ''),
-          case when p_plan in ('clinic', 'hospital', 'enterprise', 'custom', 'unsure') then p_plan end,
+          case when p_plan = 'unsure' or coalesce(public.billing_config() -> 'plans' ? p_plan, false) then p_plan end,
           nullif(left(trim(coalesce(p_message, '')), 2000), ''), left(p_source, 255));
 end $$;
 revoke all on function public.submit_platform_lead(text, text, text, text, text, text, text, text) from public;

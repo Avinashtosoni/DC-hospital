@@ -5,11 +5,10 @@ import { Building2, Download, Plus, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Skeleton, Textarea } from '../../../src/components/ui'
 import { cn } from '../../../src/lib/utils'
-import { PLANS } from '../../../src/platform/plans'
 import { LOCKABLE_MODULES, MODULE_LABEL } from '../../../src/tenancy/moduleList'
 import { cp, friendly } from '../api'
 import type { CpHospital, ModuleMap, NewHospital } from '../types'
-import { ErrorBox, isAdmin, LicenseBadge, licenseLine, paise, planLabel, STATUS, useMe } from '../ui'
+import { ErrorBox, isAdmin, LicenseBadge, licenseLine, paise, planLabel, PlanOptions, STATUS, useMe } from '../ui'
 import { hospitalHost } from '../../../src/tenancy/urls'
 
 /** the filtered list as a spreadsheet (opens in Excel; ₹ amounts as plain numbers) */
@@ -56,7 +55,7 @@ export function HospitalsPage() {
         </Select>
         <Select value={plan} onChange={(e) => setPlan(e.target.value)} className="sm:w-44" aria-label="Filter by plan">
           <option value="">All plans</option>
-          {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <PlanOptions />
         </Select>
       </div>
       {q.error && <ErrorBox error={q.error} onRetry={() => q.refetch()} />}
@@ -143,7 +142,7 @@ function NewHospitalModal({ open, onClose }: { open: boolean; onClose: () => voi
         </Field>
         <Field label="Plan">
           <Select id="nh-plan" value={f.plan} onChange={(e) => set('plan', e.target.value)}>
-            {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}{p.price ? ` — ₹${(settings.data?.billing.plans[p.id]?.price ?? p.price).toLocaleString('en-IN')}/mo` : ' — custom price'}</option>)}
+            <PlanOptions withPrice hideArchived />
           </Select>
         </Field>
         <Field label="Start with">

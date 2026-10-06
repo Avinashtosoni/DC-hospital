@@ -19,6 +19,18 @@ returns jsonb language sql stable security definer set search_path = public as $
   select coalesce((select data from public.platform_settings where key = 'billing'), '{}'::jsonb)
 $$;
 
+-- a plan's display name ("Hospital"), for messages and invoices; unknown ids are tidied up ("multi-branch" → "Multi Branch")
+create or replace function public.plan_name(p_id text)
+returns text language sql stable security definer set search_path = public as $$
+  select coalesce(nullif(trim(public.billing_config() -> 'plans' -> p_id ->> 'name'), ''), initcap(replace(coalesce(p_id, ''), '-', ' ')))
+$$;
+-- may a hospital pick this plan itself (it exists and is not archived)
+create or replace function public.plan_offered(p_id text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce(public.billing_config() -> 'plans' ? p_id, false)
+     and not coalesce((public.billing_config() -> 'plans' -> p_id ->> 'archived')::boolean, false)
+$$;
+
 -- ------------------------------------------------------------------ tables
 create sequence if not exists public.billing_invoice_seq;
 
@@ -212,6 +224,7 @@ begin
     v_plan := coalesce(nullif(p_plan, ''), t.plan);
     if v_plan <> t.plan then
       if not (cfg -> 'plans' ? v_plan) then raise exception 'Unknown plan %', v_plan; end if;
+      if public.provider_role() is null and not public.plan_offered(v_plan) then raise exception 'The % plan is no longer offered.', public.plan_name(v_plan); end if;
       if (t.billing ->> 'price') is not null then
         raise exception 'Your price was agreed with Hospital Comrade — ask them to change your plan.';
       end if;
@@ -298,7 +311,8 @@ begin
     'buyer', jsonb_build_object('legalName', coalesce(t.billing ->> 'legalName', t.name), 'gstin', coalesce(t.billing ->> 'gstin', ''), 'address', coalesce(t.billing ->> 'address', '')),
     -- phase 6: plan picker + invoices
     'custom_price', (t.billing ->> 'price') is not null,
-    'plans', coalesce((select jsonb_object_agg(e.key, jsonb_build_object('price', e.value -> 'price', 'included', e.value -> 'included')) from jsonb_each(cfg -> 'plans') e), '{}'::jsonb),
+    -- every plan as the Control Panel keeps it (name, price, features, public / archived, the last change notice …)
+    'plans', coalesce(cfg -> 'plans', '{}'::jsonb),
     'seller', coalesce(cfg -> 'seller', '{}'::jsonb),
     'usage', coalesce((select jsonb_object_agg(channel, sent) from public.message_usage where tenant_id = t.id and month = v_month and source = 'platform'), '{}'::jsonb));
 end $$;
@@ -320,6 +334,7 @@ begin
   select * into t from public.tenants where id = public.current_tenant() for update;
   if not found or t.is_primary then raise exception 'No plan to change here.'; end if;
   if not (cfg -> 'plans' ? coalesce(p_plan, '')) then raise exception 'Unknown plan %', p_plan; end if;
+  if not public.plan_offered(p_plan) then raise exception 'The % plan is no longer offered.', public.plan_name(p_plan); end if;
   if (cfg -> 'plans' -> p_plan ->> 'price') is null then raise exception 'That plan is priced individually — Hospital Comrade will get in touch.'; end if;
   if (t.billing ->> 'price') is not null then raise exception 'Your price was agreed with Hospital Comrade — ask them to change your plan.'; end if;
   if public.tenant_license(t.id) <> 'trial' or coalesce(t.paid_until > now(), false) then

@@ -20,7 +20,8 @@ import { platformName } from '../../lib/supabase'
 import { cn, downloadCsv } from '../../lib/utils'
 import { legalUrl } from '../../platform/legal'
 import { BILLING_DEFAULTS, rupees } from '../../platform/billing'
-import { PLAN_LABEL, PLANS } from '../../platform/plans'
+import { planList, type Plan } from '../../platform/plans'
+import { planLabel, usePlans } from '../../platform/planStore'
 import { Section, Segmented } from '../settings/shared'
 
 const STATUS: Record<string, { label: string; tone: 'green' | 'blue' | 'amber' | 'red' | 'slate' }> = {
@@ -32,7 +33,9 @@ const CHANNELS: { id: Channel; label: string; icon: typeof Mail }[] = [
 ]
 const TOPUPS = [500, 1000, 2500, 5000]
 const date = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—')
-const planName = (id: string) => PLAN_LABEL[id as keyof typeof PLAN_LABEL] ?? id
+const planName = (id: string) => planLabel(id)
+/** the hospital's view of the plans: everything offered + the one it is on (even if hidden / archived) */
+const plansFor = (s: BillingSummary): Plan[] => planList(s.plans).filter((p) => p.id === s.plan || (p.public !== false && !p.archived))
 
 function Row({ label, value, strong }: { label: ReactNode; value: ReactNode; strong?: boolean }) {
   return <div className={cn('flex items-center justify-between gap-4 py-1 text-sm', strong ? 'border-t border-slate-100 pt-2 font-semibold text-brand-950' : 'text-slate-600')}><span>{label}</span><span className="tabular-nums">{value}</span></div>
@@ -65,14 +68,23 @@ function PlanCard({ s, canPay, online, target, setTarget }: { s: BillingSummary;
   const pay = usePay(online)
   const st = STATUS[s.license.status] ?? STATUS.active
   const l = s.license
-  const plan = PLANS.find((p) => p.id === s.plan)
+  const plan = planList(s.plans).find((p) => p.id === s.plan)
+  // the plan's last change, for 30 days — a hospital on its own agreed price doesn't hear about list-price changes
+  const noticeText = plan?.notice ? (s.custom_price ? plan.notice.others : plan.notice.text) ?? '' : ''
+  const notice = plan?.notice && noticeText.trim() && Date.now() - Date.parse(plan.notice.at) < 30 * 86_400_000 ? plan.notice : null
   return (
     <Section title="Your plan" icon={<ShieldCheck className="h-4 w-4" />} description={`${platformName} subscription for this hospital.`}
       action={<Badge tone={st.tone} dot>{st.label}</Badge>}>
+      {notice && (
+        <div role="status" className="mb-4 rounded-xl bg-brand-50 px-4 py-3 text-sm text-brand-900 ring-1 ring-brand-200">
+          <p className="font-semibold">The {plan!.name} plan was updated on {date(notice.at)}</p>
+          <p className="mt-0.5 text-brand-800">{noticeText}</p>
+        </div>
+      )}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-3">
           <div>
-            <p className="font-display text-2xl font-bold text-brand-950">{planName(s.plan)}</p>
+            <p className="font-display text-2xl font-bold text-brand-950">{plan?.name ?? planName(s.plan)}{plan?.archived && <Badge tone="slate" className="ml-2 align-middle">No longer offered</Badge>}</p>
             <p className="text-sm text-slate-600">{s.price != null ? <>{rupees(s.price * 100)} / month <span className="text-slate-400">+ {s.gst_percent}% GST</span></> : 'Priced individually'}</p>
           </div>
           <dl className="grid grid-cols-2 gap-3 text-sm">
@@ -137,10 +149,9 @@ function PlanPicker({ s, canPay, isOwner, target, onChoose }: { s: BillingSummar
         : inTrial ? 'Try any plan during the free trial — switching is instant and free. You choose what to pay for when you renew.'
         : 'Pick a plan for your next renewal. It switches when the payment arrives; the new period starts after the current one.'}>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {PLANS.map((p) => {
-          const cfg = s.plans?.[p.id]
-          const price = cfg ? cfg.price : p.price
-          const inc = cfg?.included ?? p.included
+        {plansFor(s).map((p) => {
+          const price = p.price
+          const inc = p.included
           const current = p.id === s.plan
           const chosen = p.id === target && !current
           return (
@@ -150,7 +161,7 @@ function PlanPicker({ s, canPay, isOwner, target, onChoose }: { s: BillingSummar
               {p.highlight && !current && <span className="absolute -top-2.5 left-4 rounded-full bg-brand-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-900">Popular</span>}
               <p className="font-display text-lg font-bold text-brand-950">{p.name}</p>
               <p className="text-xs text-slate-500">{p.tagline}</p>
-              <p className="mt-2 text-xl font-bold tabular-nums text-brand-950">{price != null ? <>{rupees(price * 100)}<span className="text-xs font-normal text-slate-500"> / month{p.id === 'enterprise' ? '+' : ''}</span></> : <span className="text-base">Custom pricing</span>}</p>
+              <p className="mt-2 text-xl font-bold tabular-nums text-brand-950">{price != null ? <>{rupees(price * 100)}<span className="text-xs font-normal text-slate-500">{p.suffix} / month</span></> : <span className="text-base">Custom pricing</span>}</p>
               <ul className="mt-3 flex-1 space-y-1 text-xs text-slate-600">
                 <li className="flex gap-1.5"><Check className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />{(inc.whatsapp ?? 0) + (inc.sms ?? 0) + (inc.email ?? 0) === 0 ? 'Messages as agreed'
                   : `${(inc.whatsapp ?? 0).toLocaleString('en-IN')} WhatsApp · ${(inc.sms ?? 0).toLocaleString('en-IN')} SMS · ${(inc.email ?? 0).toLocaleString('en-IN')} e-mails / month`}</li>
@@ -159,6 +170,7 @@ function PlanPicker({ s, canPay, isOwner, target, onChoose }: { s: BillingSummar
               <div className="mt-4">
                 {current ? <p className="text-center text-xs font-medium text-brand-700">Your plan</p>
                   : price == null ? <a className="block rounded-lg px-3 py-1.5 text-center text-sm font-medium text-brand-900 ring-1 ring-brand-200 hover:ring-brand-400" href={contact ? `mailto:${contact}?subject=${encodeURIComponent(`${p.name} plan`)}` : undefined}>Talk to us</a>
+                  : p.archived ? <p className="text-center text-xs text-slate-500">No longer offered</p>
                   : !canPay || s.custom_price ? null
                   : inTrial && isOwner ? <Button size="sm" variant="outline" className="w-full" loading={sw.isPending && sw.variables === p.id} onClick={() => sw.mutate(p.id)}>Switch now</Button>
                   : <Button size="sm" variant={chosen ? 'primary' : 'outline'} className="w-full" onClick={() => onChoose(p.id)}>{chosen ? 'Selected for renewal' : `Renew on ${p.name}`}</Button>}
@@ -375,6 +387,7 @@ function History2({ s, payments, ledger }: { s: BillingSummary; payments: Paymen
 // ------------------------------------------------------------------ Hospital Comrade team
 function ProviderTools({ s, admin }: { s: BillingSummary; admin: boolean }) {
   const after = useAfterChange()
+  const allPlans = planList(s.plans)
   const run = useMutation({
     mutationFn: (v: { action: ProviderBillingAction; args?: Record<string, unknown>; done: string }) => billingApi.provider(v.action, v.args),
     onSuccess: async (_d, v) => { await after(); toast.success(v.done) },
@@ -394,7 +407,7 @@ function ProviderTools({ s, admin }: { s: BillingSummary; admin: boolean }) {
             <Field label="For"><Select value={man.kind} onChange={(e) => setMan({ ...man, kind: e.target.value })}><option value="plan">Plan renewal</option><option value="wallet">Wallet top-up</option></Select></Field>
             {man.kind === 'plan' ? <Field label="Months"><Select value={man.months} onChange={(e) => setMan({ ...man, months: e.target.value })}><option value="1">1 month</option><option value="12">12 months</option></Select></Field>
               : <Field label="Amount ₹ (before GST)"><Input type="number" value={man.amount} onChange={(e) => setMan({ ...man, amount: e.target.value })} /></Field>}
-            {man.kind === 'plan' && <Field label="Plan" hint="Switches when recorded"><Select value={man.plan} onChange={(e) => setMan({ ...man, plan: e.target.value })}>{PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field>}
+            {man.kind === 'plan' && <Field label="Plan" hint="Switches when recorded"><Select value={man.plan} onChange={(e) => setMan({ ...man, plan: e.target.value })}>{allPlans.map((p) => <option key={p.id} value={p.id}>{p.name}{p.archived ? ' (archived)' : ''}</option>)}</Select></Field>}
             <Field label="Method"><Select value={man.method} onChange={(e) => setMan({ ...man, method: e.target.value })}>{['bank', 'upi', 'cash', 'cheque'].map((m) => <option key={m} value={m}>{m.toUpperCase()}</option>)}</Select></Field>
             <Field label="Reference / UTR"><Input value={man.reference} onChange={(e) => setMan({ ...man, reference: e.target.value })} /></Field>
           </div>
@@ -423,7 +436,7 @@ function ProviderTools({ s, admin }: { s: BillingSummary; admin: boolean }) {
             <div className="space-y-3">
               <p className="text-sm font-semibold text-brand-950">Plan & price</p>
               <div className="flex flex-wrap items-end gap-2">
-                <Field label="Plan"><Select value={plan.plan} onChange={(e) => setPlan({ ...plan, plan: e.target.value })}>{PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field>
+                <Field label="Plan"><Select value={plan.plan} onChange={(e) => setPlan({ ...plan, plan: e.target.value })}>{allPlans.map((p) => <option key={p.id} value={p.id}>{p.name}{p.archived ? ' (archived)' : ''}</option>)}</Select></Field>
                 <Field label="Custom ₹ / month" hint="Empty = plan price"><Input type="number" value={plan.price} onChange={(e) => setPlan({ ...plan, price: e.target.value })} className="w-32" /></Field>
                 <Button size="sm" variant="outline" loading={run.isPending} onClick={() => run.mutate({ action: 'set_plan', args: { plan: plan.plan, price: plan.price === '' ? null : Number(plan.price) }, done: 'Plan updated' })}>Save</Button>
               </div>
@@ -436,6 +449,7 @@ function ProviderTools({ s, admin }: { s: BillingSummary; admin: boolean }) {
 }
 
 function BillingContent() {
+  usePlans()   // live plan names for labels, invoices and PDFs
   const { user, context } = useAuth()
   const canPay = useCanPay()
   const summary = useQuery({ queryKey: [...BILLING_QK, 'summary'], queryFn: billingApi.summary })

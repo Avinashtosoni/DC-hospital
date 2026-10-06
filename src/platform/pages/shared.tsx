@@ -2,7 +2,8 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowRight, Check, CheckCircle2, Globe, Loader2, MessageCircle } from 'lucide-react'
 import { platformName } from '../../lib/supabase'
 import { cn } from '../../lib/utils'
-import { PLANS, type Plan } from '../plans'
+import type { Plan } from '../plans'
+import { usePlans } from '../planStore'
 import { leadProblem, submitLead, type Lead } from '../api'
 import { A } from '../site/ui'
 
@@ -57,23 +58,30 @@ function PlanPrice({ p }: { p: Plan }) {
   )
 }
 
+/** the pricing cards — live from the Control Panel's Plans & billing page */
 export function PlanCards() {
+  const { offered } = usePlans()
   return (
-    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-      {PLANS.map((p) => (
-        <div key={p.id} className={cn('relative flex flex-col rounded-[1.75rem] border bg-white p-6 shadow-soft', p.highlight ? 'border-peri-700 ring-4 ring-[#CCCCFF]' : 'border-peri-200/80')}>
-          {p.highlight && <span className="absolute -top-3 left-6 rounded-full bg-peri-800 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-white">Most popular</span>}
-          <h3 className="font-display text-xl font-bold text-peri-900">{p.name}</h3>
-          <p className="mt-1 text-sm text-slate-500">{p.tagline}</p>
-          <PlanPrice p={p} />
-          <ul className="mt-6 flex-1 space-y-2.5 text-sm">
-            {p.features.map((f) => <li key={f} className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-peri-600" />{f}</li>)}
-          </ul>
-          <A to={p.id === 'clinic' || p.id === 'hospital' ? `/signup?plan=${p.id}` : `/contact?plan=${p.id}`} className={cn('mt-7 w-full', p.highlight ? 'btn-peri' : 'btn-ghost')}>
-            {p.id === 'clinic' || p.id === 'hospital' ? 'Start free trial' : p.cta}
-          </A>
-        </div>
-      ))}
+    <div className={cn('grid gap-5 md:grid-cols-2', offered.length >= 4 ? 'xl:grid-cols-4' : offered.length === 3 ? 'lg:grid-cols-3' : 'mx-auto max-w-4xl')}>
+      {offered.map((p) => <PlanCard key={p.id} p={p} />)}
+    </div>
+  )
+}
+
+/** one pricing card (also the live preview in the Control Panel) */
+export function PlanCard({ p, preview }: { p: Plan; preview?: boolean }) {
+  return (
+    <div className={cn('relative flex flex-col rounded-[1.75rem] border bg-white p-6 shadow-soft', p.highlight ? 'border-peri-700 ring-4 ring-[#CCCCFF]' : 'border-peri-200/80')}>
+      {p.highlight && <span className="absolute -top-3 left-6 rounded-full bg-peri-800 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-white">Most popular</span>}
+      <h3 className="font-display text-xl font-bold text-peri-900">{p.name}</h3>
+      <p className="mt-1 text-sm text-slate-500">{p.tagline}</p>
+      <PlanPrice p={p} />
+      <ul className="mt-6 flex-1 space-y-2.5 text-sm">
+        {p.features.map((f) => <li key={f} className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-peri-600" />{f}</li>)}
+      </ul>
+      {preview
+        ? <span className={cn('mt-7 w-full', p.highlight ? 'btn-peri' : 'btn-ghost')}>{p.cta}</span>
+        : <A to={p.signup && p.price !== null ? `/signup?plan=${p.id}` : `/contact?plan=${p.id}`} className={cn('mt-7 w-full', p.highlight ? 'btn-peri' : 'btn-ghost')}>{p.cta}</A>}
     </div>
   )
 }
@@ -81,7 +89,8 @@ export function PlanCards() {
 const EMPTY: Lead = { name: '', organisation: '', phone: '', email: '', city: '', plan: 'hospital', message: '' }
 
 export function ContactForm({ plan, title, thanks }: { plan?: string | null; title?: string; thanks?: string }) {
-  const [f, setF] = useState<Lead>({ ...EMPTY, plan: plan && [...PLANS.map((p) => p.id), 'unsure'].includes(plan as never) ? plan : EMPTY.plan })
+  const { offered, plans } = usePlans()
+  const [f, setF] = useState<Lead>({ ...EMPTY, plan: plan && (plan === 'unsure' || plans.some((p) => p.id === plan)) ? plan : EMPTY.plan })
   const [state, setState] = useState<'idle' | 'sending' | 'done'>('idle')
   const [error, setError] = useState('')
   const set = (k: keyof Lead) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }))
@@ -113,7 +122,8 @@ export function ContactForm({ plan, title, thanks }: { plan?: string | null; tit
           <Field label="City"><input className="input" value={f.city} onChange={set('city')} autoComplete="address-level2" maxLength={80} /></Field>
           <Field label="Plan you’re interested in">
             <select className="input" value={f.plan} onChange={set('plan')}>
-              {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}{p.price ? ` — ${inr(p.price)}${p.suffix ?? ''}/month` : ''}</option>)}
+              {offered.map((p) => <option key={p.id} value={p.id}>{p.name}{p.price ? ` — ${inr(p.price)}${p.suffix ?? ''}/month` : ''}</option>)}
+              {f.plan !== 'unsure' && !offered.some((p) => p.id === f.plan) && <option value={f.plan}>{plans.find((p) => p.id === f.plan)?.name ?? f.plan}</option>}
               <option value="unsure">Not sure yet</option>
             </select>
           </Field>

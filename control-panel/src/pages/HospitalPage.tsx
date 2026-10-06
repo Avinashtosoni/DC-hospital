@@ -4,11 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Ban, CalendarPlus, DoorClosed, ExternalLink, Globe, IndianRupee, LogIn, Play, Receipt, RotateCcw, Save, Trash2, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge, Button, ConfirmDialog, EmptyState, Field, Input, Modal, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
-import { PLANS } from '../../../src/platform/plans'
 import { cp, friendly } from '../api'
 import type { BillingAction, CpHospitalDetail, ModuleMap } from '../types'
 import { hospitalHost } from '../../../src/tenancy/urls'
-import { appUrl, canBill, date, dateTime, ErrorBox, inr, isAdmin, LicenseBadge, licenseLine, paise, planLabel, ROLE_LABEL, ROLE_TONE, Section, useMe } from '../ui'
+import { appUrl, canBill, date, dateTime, ErrorBox, inr, isAdmin, LicenseBadge, licenseLine, paise, planLabel, PlanOptions, ROLE_LABEL, ROLE_TONE, Section, useMe } from '../ui'
 import { ModuleGrid } from './HospitalsPage'
 import { AuditList } from './AuditPage'
 import { DetailsTab } from './hospital/DetailsTab'
@@ -201,7 +200,7 @@ function BillingTab({ h }: { h: CpHospitalDetail }) {
       {isAdmin(me.role) && (
         <div className="grid gap-6 lg:grid-cols-3">
           <Section title="Plan & price">
-            <Field label="Plan"><Select value={plan.plan} onChange={(e) => setPlan({ ...plan, plan: e.target.value })}>{PLANS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field>
+            <Field label="Plan"><Select value={plan.plan} onChange={(e) => setPlan({ ...plan, plan: e.target.value })}><PlanOptions withPrice /></Select></Field>
             <Field label="Special price (₹/month)" hint="Blank = the plan’s normal price" className="mt-3"><Input type="number" min={0} value={plan.price} onChange={(e) => setPlan({ ...plan, price: e.target.value })} /></Field>
             <Button className="mt-4" variant="outline" icon={<Save className="h-4 w-4" />} loading={busy('set_plan')}
               onClick={() => bill.mutate({ action: 'set_plan', args: { plan: plan.plan, price: plan.price === '' ? null : Number(plan.price) }, ok: 'Plan saved' })}>Save plan</Button>

@@ -56,7 +56,10 @@ declare c jsonb := public.signup_config(); b jsonb := public.billing_config();
 begin
   return jsonb_build_object('enabled', coalesce((c ->> 'enabled')::boolean, false), 'mode', c ->> 'mode',
     'trialDays', (c ->> 'trialDays')::int, 'plan', c ->> 'plan',
-    'plans', coalesce((select jsonb_agg(k order by (b -> 'plans' -> k ->> 'monthly')::numeric nulls last) from jsonb_object_keys(b -> 'plans') k), '[]'::jsonb));
+    -- plans a visitor can start a trial on: shown on the website, not archived, self sign-up on (Control Panel → Plans & billing)
+    'plans', coalesce((select jsonb_agg(e.key order by coalesce((e.value ->> 'order')::int, 999), e.key) from jsonb_each(b -> 'plans') e
+                        where coalesce((e.value ->> 'public')::boolean, true) and not coalesce((e.value ->> 'archived')::boolean, false)
+                          and coalesce((e.value ->> 'signup')::boolean, e.key in ('clinic', 'hospital'))), '[]'::jsonb));
 end $$;
 
 -- a free short name for the hospital, from its name: "City Care Clinic" → citycareclinic, citycareclinic-2, …
@@ -142,7 +145,7 @@ begin
   if v_mail !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]{2,}$' or char_length(v_mail) > 150 then raise exception 'Enter a valid e-mail — you will sign in with it.'; end if;
   if v_phone !~ '^[6-9][0-9]{9}$' then raise exception 'Enter a 10-digit Indian mobile number.'; end if;
   if v_terms = '' or char_length(v_terms) > 20 then raise exception 'Please accept the Terms of Service and the Data Processing Agreement.'; end if;
-  if not (b -> 'plans' ? v_plan) then v_plan := coalesce(c ->> 'plan', 'clinic'); end if;
+  if not (b -> 'plans' ? v_plan) or coalesce((b -> 'plans' -> v_plan ->> 'archived')::boolean, false) then v_plan := coalesce(c ->> 'plan', 'clinic'); end if;
 
   -- one account = one hospital
   if exists (select 1 from public.profiles where lower(email) = v_mail and tenant_id is not null and role <> 'patient')

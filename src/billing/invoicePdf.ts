@@ -4,7 +4,7 @@
  * Seller / buyer come from the payment row (snapshotted when it was paid); older rows fall back to today's values.
  */
 import { amountInWords } from '../components/InvoiceDocument'
-import { PLAN_LABEL } from '../platform/plans'
+import { planLabel } from '../platform/planStore'
 import { DEFAULT_SAC, gstRate, invoiceTax } from './invoice'
 import type { PaymentRow, Seller } from './types'
 
@@ -24,7 +24,7 @@ export interface InvoiceInput {
 
 export function invoiceDescription(p: PaymentRow, platformName: string) {
   if (p.kind === 'wallet') return `${platformName} messaging wallet — prepaid credit`
-  const plan = PLAN_LABEL[p.plan as keyof typeof PLAN_LABEL] ?? p.plan ?? ''
+  const plan = p.plan ? planLabel(p.plan) : ''
   return `${platformName} ${plan} plan — ${p.months === 12 ? '12 months' : `${p.months ?? 1} month`} subscription`
 }
 

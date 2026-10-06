@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Bell, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Globe, Inbox, LogOut, Megaphone, Menu, MessageSquare, Radio, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
+import { Activity, Bell, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Globe, Inbox, Layers, LogOut, Megaphone, Menu, MessageSquare, Radio, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
 import { Avatar, Badge, Spinner } from '../../src/components/ui'
 import { cn } from '../../src/lib/utils'
 import { ErrorBoundary } from '../../src/components/ErrorBoundary'
@@ -19,6 +19,7 @@ import { SignupsPage } from './pages/SignupsPage'
 import { PaymentsPage } from './pages/PaymentsPage'
 import { AuditPage } from './pages/AuditPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { PlansPage } from './pages/PlansPage'
 import { HealthPage } from './pages/HealthPage'
 import { IncidentsPage } from './pages/IncidentsPage'
 import { AnnouncementsPage } from './pages/AnnouncementsPage'
@@ -32,6 +33,7 @@ const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }
   { to: '/', label: 'Overview', icon: <Gauge className="h-4 w-4" />, roles: ['admin', 'support', 'finance'] },
   { to: '/hospitals', label: 'Hospitals', icon: <Building2 className="h-4 w-4" />, roles: ['admin', 'support', 'finance'] },
   { to: '/payments', label: 'Payments', icon: <CreditCard className="h-4 w-4" />, roles: ['admin', 'finance'] },
+  { to: '/plans', label: 'Plans & billing', icon: <Layers className="h-4 w-4" />, roles: ['admin'] },
   { to: '/signups', label: 'Sign-ups', icon: <UserPlus className="h-4 w-4" />, roles: ['admin'] },
   { to: '/leads', label: 'Leads', icon: <Inbox className="h-4 w-4" />, roles: ['admin'] },
   { to: '/health', label: 'System health', icon: <Activity className="h-4 w-4" />, roles: ['admin', 'support'] },
@@ -80,6 +82,7 @@ export function App() {
           <Route path="/team" element={<Only roles={['admin']}><TeamPage /></Only>} />
           <Route path="/audit" element={<Only roles={['admin']}><AuditPage /></Only>} />
           <Route path="/settings" element={<Only roles={['admin']}><SettingsPage /></Only>} />
+          <Route path="/plans" element={<Only roles={['admin']}><PlansPage /></Only>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Shell>

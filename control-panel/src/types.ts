@@ -7,6 +7,10 @@ import type { PlatformTemplate } from '../../src/notify'
 export type { PlatformTemplate }
 
 export type { ProviderRole, BillingConfig }
+/** Plans & billing page (scripts/sql/plans.sql) */
+export type PlanFields = Omit<import('../../src/platform/plans').Plan, 'id' | 'notice'>
+export interface PlanSaveResult { billing: BillingConfig; kept: number; notified: number }
+export interface PlanHistoryRow { id: string; at: string; user_name: string | null; action: string; target: string | null; detail: Record<string, unknown> | null }
 export type ModuleMap = Record<string, 'provider' | 'hospital'>
 
 export interface CpMe {

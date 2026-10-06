@@ -9,11 +9,11 @@ import { Ban, CalendarClock, Megaphone, Pencil, Plus, Send, Users } from 'lucide
 import { toast } from 'sonner'
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, Input, Modal, PageHeader, Select, Skeleton, Textarea, type Tone } from '../../../src/components/ui'
 import { cn } from '../../../src/lib/utils'
-import { PLANS } from '../../../src/platform/plans'
+import { usePlans } from '../../../src/platform/planStore'
 import { BILLING_DEFAULTS } from '../../../src/platform/billing'
 import { cp, friendly } from '../api'
 import type { Broadcast, BroadcastChannel, BroadcastPreview, BroadcastSave } from '../types'
-import { dateTime, ErrorBox, inr, STATUS } from '../ui'
+import { dateTime, ErrorBox, inr, planLabel, STATUS } from '../ui'
 
 export const CHANNELS: { id: BroadcastChannel; label: string; hint: string }[] = [
   { id: 'inapp', label: 'In-app banner', hint: 'Free · shows for 14 days' },
@@ -86,7 +86,7 @@ export function BroadcastsPage() {
 function audienceLine(a: Broadcast['audience']) {
   const who = a.roles.map((r) => ROLES.find(([id]) => id === r)?.[1] ?? r).join(', ')
   const where = a.hospitals?.length ? `${a.hospitals.length} chosen hospital${a.hospitals.length > 1 ? 's' : ''}`
-    : [a.plans.length ? a.plans.map((p) => PLANS.find((x) => x.id === p)?.name ?? p).join('/') : '', a.statuses.length ? a.statuses.map((s) => STATUS[s]?.label ?? s).join('/') : ''].filter(Boolean).join(' · ') || 'All hospitals'
+    : [a.plans.length ? a.plans.map((p) => planLabel(p)).join('/') : '', a.statuses.length ? a.statuses.map((s) => STATUS[s]?.label ?? s).join('/') : ''].filter(Boolean).join(' · ') || 'All hospitals'
   return `${where} → ${who}`
 }
 
@@ -118,6 +118,7 @@ function useDebounced<T>(v: T, ms = 400) {
 function BroadcastModal({ value, onClose, scheduledAt }: { value: BroadcastSave; onClose: () => void; scheduledAt: string | null }) {
   const qc = useQueryClient()
   const [f, setF] = useState(value)
+  const { plans } = usePlans()
   const [when, setWhen] = useState<'now' | 'later'>(scheduledAt ? 'later' : 'now')
   const [at, setAt] = useState(toLocal(scheduledAt))
   const [confirm, setConfirm] = useState(false)
@@ -189,7 +190,7 @@ function BroadcastModal({ value, onClose, scheduledAt }: { value: BroadcastSave;
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Plans" hint="None ticked = every plan">
-              <div className="flex flex-wrap gap-3 pt-1 text-sm">{PLANS.map((pl) => <label key={pl.id} className="inline-flex items-center gap-1.5"><input type="checkbox" className="accent-brand-700" checked={f.audience.plans.includes(pl.id)} onChange={() => setF({ ...f, audience: { ...f.audience, plans: toggle(f.audience.plans, pl.id) } })} />{pl.name}</label>)}</div>
+              <div className="flex flex-wrap gap-3 pt-1 text-sm">{plans.map((pl) => <label key={pl.id} className="inline-flex items-center gap-1.5"><input type="checkbox" className="accent-brand-700" checked={f.audience.plans.includes(pl.id)} onChange={() => setF({ ...f, audience: { ...f.audience, plans: toggle(f.audience.plans, pl.id) } })} />{pl.name}</label>)}</div>
             </Field>
             <Field label="Status" hint="None ticked = any status">
               <div className="flex flex-wrap gap-3 pt-1 text-sm">{Object.entries(STATUS).map(([s, v]) => <label key={s} className="inline-flex items-center gap-1.5"><input type="checkbox" className="accent-brand-700" checked={f.audience.statuses.includes(s)} onChange={() => setF({ ...f, audience: { ...f.audience, statuses: toggle(f.audience.statuses, s) } })} />{v.label}</label>)}</div>

@@ -7,7 +7,7 @@ import type {
   HospitalEdit, LeadStatus, MemberSave, NewHospital, CpHealth, CpIncident, IncidentSave, IncidentNotice, RetentionConfig,
   CpSignup, SignupSettings, LaunchReport, HospitalProfile, HospitalUsers, UserAction, HospitalData, BrowseKind, BrowsePage,
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
-  SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
+  SiteState, SitePageRow, SiteRevision, CpPost, PostSave, PlanFields, PlanSaveResult, PlanHistoryRow,
   MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
   DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp, CpDemo, CpTemplates, PlatformTemplate,
 } from './types'
@@ -33,6 +33,11 @@ export interface CpApi {
   audit(tenantId?: string): Promise<CpAudit[]>
   settings(): Promise<{ billing: BillingConfig }>
   saveBillingSettings(patch: Partial<BillingConfig>): Promise<BillingConfig>
+  /** Plans & billing: add / edit one plan; p_existing = what hospitals already on it pay after a price change */
+  savePlan(id: string, plan: Partial<PlanFields>, existing?: 'apply' | 'keep', notify?: boolean): Promise<PlanSaveResult>
+  deletePlan(id: string): Promise<{ billing: BillingConfig }>
+  reorderPlans(ids: string[]): Promise<{ billing: BillingConfig }>
+  planHistory(): Promise<PlanHistoryRow[]>
   // phase 7 — offboarding, health, incidents, retention
   closeHospital(id: string, reason: string, days: number): Promise<unknown>
   reopenHospital(id: string): Promise<unknown>
@@ -216,6 +221,10 @@ const db: CpApi = {
   audit: (tenantId) => rpc('cp_audit', { p_tenant: tenantId ?? null, p_limit: 500 }),
   settings: () => rpc('cp_settings'),
   saveBillingSettings: (patch) => rpc('cp_save_billing_settings', { p: patch }),
+  savePlan: (id, plan, existing = 'apply', notify = true) => rpc('cp_save_plan', { p_id: id, p: plan, p_existing: existing, p_notify: notify }),
+  deletePlan: (id) => rpc('cp_delete_plan', { p_id: id }),
+  reorderPlans: (ids) => rpc('cp_reorder_plans', { p_ids: ids }),
+  planHistory: () => rpc('cp_plan_history', { p_limit: 200 }),
   closeHospital: (id, reason, days) => rpc('cp_close_hospital', { p_id: id, p_reason: reason, p_days: days }),
   reopenHospital: (id) => rpc('cp_reopen_hospital', { p_id: id }),
   async purgeHospital(id, confirmSlug, password) {

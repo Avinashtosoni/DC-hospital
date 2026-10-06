@@ -2,7 +2,7 @@ import { ArrowRight, Building2, CheckCircle2, ClipboardList, Clock, Eye, Handsha
 import { safeUrl } from '../../lib/safeUrl'
 import { cn } from '../../lib/utils'
 import { iconFor } from '../../site/cms/icons'
-import { PLANS } from '../plans'
+import { usePlans } from '../planStore'
 import { A, CtaBand, FaqList, Hi, IconCard, PageHero, Section, SectionHead, StepsTimeline, useSeo } from '../site/ui'
 import type { PlatformSite } from '../site/types'
 import { ContactForm, PlanCards } from './shared'
@@ -79,7 +79,9 @@ export function FeaturesPage({ site }: P) {
 export function PricingPage({ site }: P) {
   const c = site.pricing
   useSeo(c.seo, 'Pricing')
-  const cols = PLANS.filter((p) => p.id !== 'custom')
+  const { plans } = usePlans()
+  // the comparison table's columns are the CMS rows' clinic / hospital / enterprise values — names and order come live
+  const cols = (['clinic', 'hospital', 'enterprise'] as const).map((id) => ({ id, name: plans.find((p) => p.id === id)?.name ?? id.replace(/^./, (c) => c.toUpperCase()) }))
   return (
     <>
       <PageHero h={c.heading} />
@@ -152,6 +154,7 @@ export function PricingPage({ site }: P) {
 }
 
 export function SolutionsPage({ site }: P) {
+  const { plans } = usePlans()
   const c = site.solutions
   useSeo(c.seo, 'Solutions')
   return (
@@ -160,7 +163,7 @@ export function SolutionsPage({ site }: P) {
       <div className="l-container grid gap-6 pb-8 md:grid-cols-2">
         {c.items.map((s) => {
           const Icon = iconFor(s.icon)
-          const plan = PLANS.find((p) => p.id === s.plan)
+          const plan = plans.find((p) => p.id === s.plan && !p.archived)
           const img = safeUrl(s.image, 'image')
           return (
             <article key={s.title} className="flex flex-col overflow-hidden rounded-[2rem] border border-peri-200/80 bg-white shadow-soft">
