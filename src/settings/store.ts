@@ -71,6 +71,12 @@ const remote = {
     if (error) return { ok: false, message: await fnError(error) }
     return data as SendResult
   },
+  /** wacrm: register our chatbot address as a message.received webhook (needs the webhooks:manage scope) and keep its secret */
+  async connectWacrm(): Promise<SendResult> {
+    const { data, error } = await sb().functions.invoke('whatsapp-bot', { body: { wacrm_connect: true } })
+    if (error) return { ok: false, message: await fnError(error) }
+    return data as SendResult
+  },
   async queueReminders(): Promise<number> {
     const { data, error } = await sb().rpc('queue_appointment_reminders')
     if (error) throw new Error(error.message)
@@ -108,10 +114,14 @@ export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretS
   }
   if (channel === 'whatsapp') {
     const w = n.whatsapp
+    if (w.provider === 'wacrm') {
+      if (!/^https:\/\/[^/\s]+/.test(w.wacrmUrl ?? '')) out.push('wacrm address is required (https://…)')
+      if (!has('wacrm_api_key')) out.push('wacrm API key is not saved')
+    }
     if (w.provider === 'openwa') {
-      if (!/^https?:\/\/[^/\s]+/.test(w.openwaUrl ?? '')) out.push('WA CRM / OpenWA URL is required (e.g. https://wacrm.example.in)')
+      if (!/^https?:\/\/[^/\s]+/.test(w.openwaUrl ?? '')) out.push('OpenWA gateway URL is required (e.g. https://wa.example.in)')
       if (!w.openwaSession) out.push('WhatsApp session ID is required')
-      if (!has('openwa_api_key')) out.push('WA CRM / OpenWA API key is not saved')
+      if (!has('openwa_api_key')) out.push('OpenWA API key is not saved')
       if (w.chatIdFormat && !w.chatIdFormat.includes('{phone}')) out.push('Chat ID format must contain {phone}')
     }
     if (w.provider === 'meta') { if (!w.phoneNumberId) out.push('Phone number ID is required'); if (!has('meta_access_token')) out.push('Meta access token is not saved') }
@@ -144,6 +154,7 @@ export const settingsStore = {
   flush: () => impl.flush(),
   ping: impl.ping,
   queueReminders: impl.queueReminders,
+  connectWacrm: impl.connectWacrm,
 }
 
 /**

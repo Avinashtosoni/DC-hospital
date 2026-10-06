@@ -26,7 +26,7 @@
 // those win over the PLATFORM_* Edge secrets of the same name.
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { isPermanent, openwaStatus, retryDelayMs, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
+import { isOtp, isPermanent, openwaStatus, retryDelayMs, wacrmStatus, type Channel, type Ctx, type Msg } from '../_shared/providers.ts'
 import { deliverRouted, platformCtx, platformDetails, platformStatus, sourceOf, usageMonth, walletOf, type Meter, type Source } from '../_shared/platform.ts'
 import { corsHeaders, groupByTenant, resolveCaller, type Caller } from '../_shared/tenant.ts'
 import { loadPlatformEnv } from '../_shared/ops.ts'
@@ -131,7 +131,7 @@ async function finish(row: any, r: { ok: boolean; error?: string; ref?: string; 
     // retry later with backoff (2, 4, 8 min after this attempt — not after the message was created)
     ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
     // never keep one-time codes around
-    ...((row.event === 'otp' || row.event === 'password_otp') && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
+    ...(isOtp(row.event) && (r.ok || giveUp) ? { body: '[code redacted]', vars: {} } : {}),
   }).eq('id', row.id)
   return r.ok || giveUp
 }
@@ -165,6 +165,12 @@ Deno.serve(async (req) => {
     if (channel === 'whatsapp' && c.n.whatsapp?.provider === 'openwa') {
       st = await openwaStatus(c)
       if (!st.ok) return json({ ok: false, message: st.error })
+    }
+    // wacrm: check the key and its messages:send scope first (GET /api/v1/me)
+    if (channel === 'whatsapp' && c.n.whatsapp?.provider === 'wacrm') {
+      const me = await wacrmStatus(c)
+      if (!me.ok) return json({ ok: false, message: me.error })
+      if (me.account) st = { ok: true, phone: me.account }
     }
     const r = await deliverRouted(m, setup.own, setup.platform, setup.meter)
     if (r.ok && st?.phone) r.ref = `${r.ref} · from ${st.phone}`

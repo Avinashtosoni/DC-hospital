@@ -18,7 +18,7 @@ export type Env = (name: string) => string | undefined
 export type Source = 'own' | 'platform'
 export type PlatformChannel = 'sms' | 'whatsapp' | 'email'
 export const PLATFORM_CHANNELS: PlatformChannel[] = ['sms', 'whatsapp', 'email']
-export const PLATFORM_PROVIDERS = { sms: ['msg91', 'fast2sms'], whatsapp: ['aisensy', 'meta', 'msg91', 'openwa'], email: ['resend', 'sendgrid'] } as const
+export const PLATFORM_PROVIDERS = { sms: ['msg91', 'fast2sms'], whatsapp: ['aisensy', 'meta', 'msg91', 'openwa', 'wacrm'], email: ['resend', 'sendgrid'] } as const
 
 export interface PlatformTemplate { waTemplate?: string; waParams?: string; smsTemplateId?: string }
 /** public.platform_settings → key 'messaging' */
@@ -48,6 +48,7 @@ export function platformAccounts(env: Env): Partial<Record<PlatformChannel, Acco
   if (wa === 'meta') out.whatsapp = { provider: wa, cfg: { language, phoneNumberId: v('PLATFORM_META_PHONE_NUMBER_ID') }, secrets: { meta_access_token: v('PLATFORM_META_ACCESS_TOKEN') } }
   if (wa === 'msg91') out.whatsapp = { provider: wa, cfg: { language, msg91Number: v('PLATFORM_MSG91_WA_NUMBER'), msg91Namespace: v('PLATFORM_MSG91_WA_NAMESPACE') }, secrets: { msg91_auth_key: v('PLATFORM_MSG91_AUTH_KEY') } }
   if (wa === 'openwa') out.whatsapp = { provider: wa, cfg: { openwaUrl: v('PLATFORM_OPENWA_URL'), openwaSession: v('PLATFORM_OPENWA_SESSION'), chatIdFormat: v('PLATFORM_OPENWA_CHAT_ID_FORMAT') }, secrets: { openwa_api_key: v('PLATFORM_OPENWA_API_KEY') } }
+  if (wa === 'wacrm') out.whatsapp = { provider: wa, cfg: { language, wacrmUrl: v('PLATFORM_WACRM_URL') }, secrets: { wacrm_api_key: v('PLATFORM_WACRM_API_KEY') } }
   const mail = v('PLATFORM_EMAIL_PROVIDER').toLowerCase()
   if (mail === 'resend' || mail === 'sendgrid') {
     out.email = { provider: mail, cfg: { fromEmail: v('PLATFORM_EMAIL_FROM') },
@@ -116,7 +117,7 @@ export const usageMonth = (now = Date.now()) => new Date(now + 5.5 * 3600_000).t
 /** OTPs always go out (patients must be able to book and sign in) and so do renewal reminders to the owner
  *  (an empty wallet must not hide "your plan ends") — they are still counted. */
 // platform / legal mail is never blocked by a plan's monthly limit or an empty wallet
-const EXEMPT_EVENTS = new Set(['otp', 'password_otp', 'billing_reminder', 'privacy_request', 'hospital_closing', 'incident_notice'])
+const EXEMPT_EVENTS = new Set(['otp', 'password_otp', 'login_otp', 'billing_reminder', 'privacy_request', 'hospital_closing', 'incident_notice'])
 export const exemptFromLimit = (event: string) => EXEMPT_EVENTS.has(event)
 
 /** null when allowed, otherwise the reason (matches isPermanent: "allowance"). */

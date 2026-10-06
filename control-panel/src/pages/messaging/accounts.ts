@@ -52,7 +52,11 @@ export const ACCOUNTS: AccountSpec[] = [
         { key: 'PLATFORM_MSG91_WA_NAMESPACE', label: 'Template namespace', placeholder: 'xxxxxxxx_xxxx_…' },
         { key: 'PLATFORM_MSG91_AUTH_KEY', label: 'MSG91 auth key (same as SMS)', secret: true },
       ] },
-      openwa: { label: 'WA CRM / OpenWA', help: 'Free text, no templates — fine for your own team, not for bulk marketing.', fields: [
+      wacrm: { label: 'wacrm (WhatsApp CRM)', help: 'Your wacrm workspace on the Meta Cloud API. Create a key in wacrm → Settings → API keys with the messages:send scope. Messages to patients use the approved template names under Messaging → Templates; free text only reaches people who wrote in the last 24 hours.', fields: [
+        { key: 'PLATFORM_WACRM_URL', label: 'wacrm address', placeholder: 'https://crm.example.in', hint: 'The address you open wacrm at' },
+        { key: 'PLATFORM_WACRM_API_KEY', label: 'API key', secret: true, placeholder: 'wacrm_live_…', hint: 'Shown once in wacrm — Check reads its scopes with GET /api/v1/me' },
+      ] },
+      openwa: { label: 'OpenWA gateway', help: 'Free text, no templates — fine for your own team, not for bulk marketing.', fields: [
         { key: 'PLATFORM_OPENWA_URL', label: 'OpenWA address', placeholder: 'https://wa.example.com' },
         { key: 'PLATFORM_OPENWA_SESSION', label: 'Session ID', placeholder: 'default' },
         { key: 'PLATFORM_OPENWA_CHAT_ID_FORMAT', label: 'Chat ID format (optional)', placeholder: '91{phone}@c.us' },

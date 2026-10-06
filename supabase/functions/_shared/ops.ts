@@ -12,6 +12,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { parseServiceAccount, accessToken } from './fcm.ts'
 import { openwaStatus, type Ctx } from './providers.ts'
+import { wacrmMe } from './wacrm.ts'
 import { platformAccounts, PLATFORM_CHANNELS, type Env, type PlatformTemplate } from './platform.ts'
 import { checkRazorpayKeys, razorpayFromPlatform, razorpayMode } from './razorpay.ts'
 
@@ -206,6 +207,11 @@ export async function checkProviders(o: CheckOpts): Promise<Check[]> {
       else if (j.return === true) out.push({ ...base, status: Number(j.wallet) < 50 ? 'warn' : 'ok', latency_ms: r.ms, detail: `fast2sms · key accepted · wallet ₹${j.wallet}${Number(j.wallet) < 50 ? ' (low)' : ''}` })
       else if (code === 414) out.push({ ...base, status: 'warn', latency_ms: r.ms, detail: 'fast2sms · this server’s IP is blocked in Fast2SMS → Dev API (allow it or clear the IP list)' })
       else out.push({ ...base, status: 'fail', latency_ms: r.ms, detail: `fast2sms rejected the key${j.message ? `: ${String(j.message).slice(0, 100)}` : ` (HTTP ${r.r.status})`}` })
+      continue
+    } else if (a.provider === 'wacrm') {
+      const st = await wacrmMe(String(a.cfg.wacrmUrl ?? ''), key, { fetch: f })
+      out.push({ ...base, status: st.ok ? 'ok' : st.scopes ? 'warn' : 'fail', latency_ms: st.latency_ms,
+        detail: st.ok ? `wacrm · key accepted${st.account ? ` · ${st.account}` : ''} · ${st.scopes!.join(', ')}` : st.error })
       continue
     } else if (a.provider === 'openwa') {
       const t0 = Date.now()

@@ -90,8 +90,9 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
   return (
     <div className="space-y-4">
       <Segmented size="sm" value={cfg.provider} onChange={(v) => set((s) => { s.provider = v })}
-        options={[{ value: 'openwa', label: 'WA CRM / OpenWA' }, { value: 'meta', label: 'Meta Cloud API' }, { value: 'aisensy', label: 'AiSensy' }, { value: 'msg91', label: 'MSG91' }, { value: 'interakt', label: 'Interakt' }, { value: 'twilio', label: 'Twilio' }, { value: 'webhook', label: 'Custom webhook' }]} />
+        options={[{ value: 'wacrm', label: 'wacrm (WhatsApp CRM)' }, { value: 'openwa', label: 'OpenWA gateway' }, { value: 'meta', label: 'Meta Cloud API' }, { value: 'aisensy', label: 'AiSensy' }, { value: 'msg91', label: 'MSG91' }, { value: 'interakt', label: 'Interakt' }, { value: 'twilio', label: 'Twilio' }, { value: 'webhook', label: 'Custom webhook' }]} />
       {cfg.provider === 'openwa' && <OpenwaFields cfg={cfg} set={set} secrets={secrets} />}
+      {cfg.provider === 'wacrm' && <WacrmFields cfg={cfg} set={set} secrets={secrets} />}
       {cfg.provider === 'meta' && <>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Phone number ID"><Input value={cfg.phoneNumberId} onChange={(e) => set((s) => { s.phoneNumberId = e.target.value.trim() })} placeholder="1234567890…" className="font-mono text-xs" /></Field>
@@ -123,7 +124,7 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
         <Field label="Webhook URL" hint="We POST JSON: { channel, to, event, message, subject, vars }"><Input value={cfg.webhookUrl} onChange={(e) => set((s) => { s.webhookUrl = e.target.value.trim() })} placeholder="https://…" /></Field>
         <SecretInput name="whatsapp_webhook_secret" secrets={secrets} />
       </>}
-      {(cfg.provider === 'meta' || cfg.provider === 'interakt' || cfg.provider === 'msg91') && (
+      {(cfg.provider === 'meta' || cfg.provider === 'interakt' || cfg.provider === 'msg91' || cfg.provider === 'wacrm') && (
         <Field label="Template language code" hint="Must match the language your templates were approved in"><Input value={cfg.language} onChange={(e) => set((s) => { s.language = e.target.value.trim() })} placeholder="en" className="w-32" /></Field>
       )}
       {cfg.provider !== 'openwa' && <p className="text-xs text-slate-500">WhatsApp only allows free text inside a 24-hour chat window. For appointment and billing messages, get a <b>utility template</b> approved and enter its name in <b>Message templates</b>. The OTP uses an <b>authentication</b> template.</p>}
@@ -135,7 +136,23 @@ function WhatsappForm({ ctx, secrets, cfg }: P<'whatsapp'>) {
   )
 }
 
-/** Self-hosted OpenWA gateway (e.g. WA CRM): a linked WhatsApp number sends plain text — no Meta templates needed. */
+/** wacrm (github.com/ArnasDon/wacrm): a WhatsApp CRM on the Meta Cloud API — public API v1 with an account API key. */
+function WacrmFields({ cfg, set, secrets }: { cfg: AppSettings['notifications']['whatsapp']; set: (fn: (s: AppSettings['notifications']['whatsapp']) => void) => void; secrets: SecretStatus[] | undefined }) {
+  const tidy = (v: string) => set((s) => { s.wacrmUrl = v.trim().replace(/\/+$/, '').replace(/\/api(\/v1)?$/, '') })
+  return <>
+    <Field label="wacrm address" hint="The address you open wacrm at — /api/v1 is added for you">
+      <Input value={cfg.wacrmUrl ?? ''} onChange={(e) => set((s) => { s.wacrmUrl = e.target.value.trim() })} onBlur={(e) => tidy(e.target.value)} placeholder="https://crm.example.in" className="font-mono text-xs" /></Field>
+    <SecretInput name="wacrm_api_key" secrets={secrets} />
+    <div className="rounded-lg bg-brand-50/70 px-3 py-2.5 text-xs text-brand-900 ring-1 ring-brand-100">
+      <p className="font-semibold">How it sends</p>
+      <p className="mt-0.5 font-mono text-[11px] leading-relaxed text-brand-800">POST {(cfg.wacrmUrl || 'https://…').replace(/\/$/, '')}/api/v1/messages<br />Authorization: Bearer wacrm_live_••••  ·  {'{'} "to": "+919876543210", "type": "template", "template": {'{'} "name", "language", "params" {'}'} {'}'}</p>
+      <p className="mt-1.5">Create the key in <b>wacrm → Settings → API keys</b> with the <b>messages:send</b> scope (add <b>contacts:read</b> and <b>webhooks:manage</b> for the chatbot). Messages use the approved template name and parameters you enter in <b>Message templates</b>; <i>Send test</i> checks the key with <code>GET /api/v1/me</code>, then sends a short free-text message — that only reaches a number that messaged you in the last 24 hours.</p>
+    </div>
+    <Help href="https://github.com/ArnasDon/wacrm/blob/main/docs/public-api.md">wacrm public API</Help>
+  </>
+}
+
+/** Self-hosted OpenWA gateway: a linked WhatsApp number sends plain text — no Meta templates needed. */
 function OpenwaFields({ cfg, set, secrets }: { cfg: AppSettings['notifications']['whatsapp']; set: (fn: (s: AppSettings['notifications']['whatsapp']) => void) => void; secrets: SecretStatus[] | undefined }) {
   // accept a pasted endpoint like https://host/api/sessions/<id>/messages/send-text and split it
   // keep what is typed; tidy it up when the field loses focus (or right away for a pasted full URL)
@@ -252,7 +269,7 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
               <span className="min-w-0 break-words">{result.message}{result.provider_ref && <span className="mt-0.5 block font-mono text-[10px] opacity-70">ref {result.provider_ref}</span>}</span>
             </div>
           )}
-          <p className="text-[11px] text-slate-400">{channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'meta' ? 'Meta sends its approved “hello_world” template for tests.' : channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'openwa' ? 'Checks that the WhatsApp session is connected, then sends a test chat.' : 'Credentials are stored server-side and are never shown again after saving.'}</p>
+          <p className="text-[11px] text-slate-400">{channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'meta' ? 'Meta sends its approved “hello_world” template for tests.' : channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'openwa' ? 'Checks that the WhatsApp session is connected, then sends a test chat.' : channel === 'whatsapp' && 'provider' in cfg && cfg.provider === 'wacrm' ? 'Checks the wacrm key and its scopes, then sends a test chat (only reaches numbers that wrote to you in the last 24 hours).' : 'Credentials are stored server-side and are never shown again after saving.'}</p>
         </div>
       </div>
     </Section>
@@ -468,6 +485,26 @@ export function NotificationsTab({ ctx }: { ctx: TabCtx }) {
 
 
 // ------------------------------------------------------------------ WhatsApp booking chatbot
+/** wacrm → chatbot: register the webhook through the API (webhooks:manage) or paste the secret of one added by hand */
+function WacrmReplies({ secrets, hook }: { secrets: SecretStatus[] | undefined; hook: string }) {
+  const qc = useQueryClient()
+  const connected = !!secrets?.some((s) => s.key === 'wacrm_webhook_secret')
+  const connect = useMutation({
+    mutationFn: () => settingsStore.connectWacrm(),
+    onSuccess: (r) => { if (r.ok) { toast.success(r.message); qc.invalidateQueries({ queryKey: SECRETS_QK }) } else toast.error(r.message) },
+    onError: (e: Error) => toast.error(e.message),
+  })
+  return <>
+    <p><b>Connect replies</b> adds this address as a <b>message.received</b> webhook in wacrm and keeps the signing secret here (the key needs the <b>webhooks:manage</b> and <b>contacts:read</b> scopes). Save the WhatsApp card first.</p>
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" icon={<Bot className="h-3.5 w-3.5" />} loading={connect.isPending} onClick={() => connect.mutate()}>{connected ? 'Reconnect replies' : 'Connect replies'}</Button>
+      {connected && <Badge tone="green" dot>Webhook secret saved</Badge>}
+    </div>
+    <p className="text-xs text-slate-500">Or add it by hand in wacrm → Settings → Webhooks: URL <code className="break-all">{hook}</code>, event <b>message.received</b> — then paste the <code>whsec_…</code> secret below. Every delivery is checked against <code>X-Wacrm-Signature</code>; unsigned or stale ones are rejected.</p>
+    <SecretInput name="wacrm_webhook_secret" secrets={secrets} />
+  </>
+}
+
 function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | undefined }) {
   const w = ctx.app.notifications.whatsapp
   const on = w.botEnabled
@@ -487,7 +524,7 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
         <div className="space-y-4 text-sm text-slate-600">
           <ol className="list-decimal space-y-2 pl-5">
             <li>Deploy once: <code className="rounded bg-slate-100 px-1 text-xs">supabase functions deploy whatsapp-bot --no-verify-jwt</code></li>
-            <li>Set the provider in the <b>WhatsApp</b> card above (WA CRM / OpenWA, Meta Cloud API or Twilio) and turn it on.</li>
+            <li>Set the provider in the <b>WhatsApp</b> card above (wacrm, OpenWA, Meta Cloud API or Twilio) and turn it on.</li>
             <li>Point your provider’s incoming-message webhook to:
               <div className="mt-1.5 flex items-center gap-2"><code className="min-w-0 flex-1 truncate rounded-lg bg-slate-100 px-2 py-1.5 text-xs">{hook}</code>
                 {supabaseUrl && <Button size="sm" variant="outline" icon={<Copy className="h-3.5 w-3.5" />} onClick={copy}>Copy</Button>}</div>
@@ -503,8 +540,9 @@ function ChatbotCard({ ctx, secrets }: { ctx: TabCtx; secrets: SecretStatus[] | 
             <p>In <b>WA CRM → Sessions → {w.openwaSession ? <code className="text-xs">{w.openwaSession.slice(0, 8)}…</code> : 'your session'} → Webhooks</b>, add the URL, subscribe to <b>message.received</b> and set a <b>secret</b>. Paste the same secret below — unsigned requests are rejected, because the sender’s number is the patient’s identity.</p>
             <SecretInput name="openwa_webhook_secret" secrets={secrets} />
           </>}
+          {w.provider === 'wacrm' && <WacrmReplies secrets={secrets} hook={hook} />}
           {w.provider === 'twilio' && <p>In Twilio → Messaging → WhatsApp sender → “When a message comes in”, paste the URL (HTTP POST). Requests are checked with your Twilio auth token.</p>}
-          {(w.provider === 'interakt' || w.provider === 'aisensy' || w.provider === 'msg91' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>WA CRM / OpenWA</b>, <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
+          {(w.provider === 'interakt' || w.provider === 'aisensy' || w.provider === 'msg91' || w.provider === 'webhook') && <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">The chatbot supports <b>wacrm</b>, <b>OpenWA</b>, <b>Meta Cloud API</b> and <b>Twilio</b> for incoming messages. Switch the WhatsApp provider to use it.</p>}
           <p className="text-xs text-slate-500">Bookings from the bot use the same slot rules as the website (holidays, leave, notice period) and are marked <b>source: WhatsApp</b>. The patient’s WhatsApp number is their verification, so no OTP is needed. Chats reset after 30 minutes of silence.</p>
         </div>
         <BotSimulator />

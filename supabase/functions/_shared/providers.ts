@@ -3,6 +3,7 @@
 // provider's public API docs), so a typo in a URL or payload is caught before it reaches production.
 // deno-lint-ignore-file no-explicit-any
 import { parseServiceAccount, sendPush } from './fcm.ts'
+import { wacrmMe, wacrmSend } from './wacrm.ts'
 
 export type Channel = 'sms' | 'whatsapp' | 'email' | 'push'
 export interface Msg { id?: string; event: string; channel: Channel; recipient: string; subject?: string | null; body: string; vars: Record<string, string> }
@@ -14,7 +15,7 @@ export interface Ctx {
 export interface Result { ok: boolean; ref?: string; error?: string }
 
 /** Errors that will not fix themselves on retry (bad config) → mark failed immediately. */
-export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the (API|auth) key|cannot send free-text|allowance .* is used up|wallet balance is too low|session was not found|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
+export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the (API|auth) key|cannot send free-text|allowance .* is used up|wallet balance is too low|session was not found|is missing the (required )?scope|template is malformed|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
 /** Wait before retry n (1-based): 2, 4, 8 … minutes. */
 export const retryDelayMs = (attempts: number) => 2 ** Math.max(1, attempts) * 60_000
 
@@ -138,6 +139,7 @@ async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
   const lang = cfg.language || 'en'
   switch (cfg.provider) {
     case 'openwa': return openwa(m, c)
+    case 'wacrm': return wacrm(m, c)
     case 'meta': {
       need(cfg.phoneNumberId, 'WhatsApp phone number ID'); need(c.secrets.meta_access_token, 'Meta access token')
       let payload: any
@@ -146,7 +148,7 @@ async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
         const values = params(tpl.waParams, m.vars)
         const components: any[] = values.length ? [{ type: 'body', parameters: values.map((text) => ({ type: 'text', text })) }] : []
         // authentication (OTP) templates also need the code on the copy-code button
-        if ((m.event === 'otp' || m.event === 'password_otp')) components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: m.vars.code }] })
+        if (isOtp(m.event)) components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: m.vars.code }] })
         payload = { type: 'template', template: { name: tpl.waTemplate, language: { code: lang }, components } }
       } else payload = { type: 'text', text: { body: m.body, preview_url: false } }
       const r = await fetch(`https://graph.facebook.com/v21.0/${cfg.phoneNumberId}/messages`, {
@@ -187,7 +189,25 @@ async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
   }
 }
 
-const isOtp = (event: string) => event === 'otp' || event === 'password_otp'
+export const OTP_EVENTS = ['otp', 'password_otp', 'login_otp', 'platform_otp'] as const
+export const isOtp = (event: string) => (OTP_EVENTS as readonly string[]).includes(event)
+
+/** wacrm (ArnasDon/wacrm, Meta Cloud API CRM): approved templates (the event's WhatsApp template + parameters) for
+ *  business-initiated messages; free text only for the test and chatbot replies (inside WhatsApp's 24-hour window). */
+async function wacrm(m: Msg, c: Ctx): Promise<Result> {
+  const cfg = c.n.whatsapp ?? {}
+  const tpl = c.n.templates?.[m.event] ?? {}
+  need(cfg.wacrmUrl, 'wacrm URL'); need(c.secrets.wacrm_api_key, 'wacrm API key')
+  const freeText = m.event === 'test' || m.event === 'bot'
+  if (!freeText && !tpl.waTemplate) throw new Error(`wacrm needs an approved template name for "${m.event}" (WhatsApp only allows free text inside the 24-hour window)`)
+  const ref = await wacrmSend(cfg.wacrmUrl, c.secrets.wacrm_api_key, freeText
+    ? { to: m.recipient, text: m.body }
+    : { to: m.recipient, template: { name: tpl.waTemplate, language: cfg.language || 'en', params: params(tpl.waParams, m.vars) } })
+  return { ok: true, ref }
+}
+
+/** wacrm: key valid + the scopes needed (default messages:send) — Send-test button and System health */
+export const wacrmStatus = (c: Ctx, need?: readonly string[]) => wacrmMe((c.n.whatsapp ?? {}).wacrmUrl, c.secrets.wacrm_api_key, { need })
 
 /** AiSensy: every message is an "API campaign" (Campaigns → Launch → API campaign) bound to one approved template.
  *  Put the campaign name in the event's WhatsApp template field. Free text (chatbot replies) is not possible. */

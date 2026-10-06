@@ -81,8 +81,9 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
 
 export type EmailProvider = 'resend' | 'sendgrid' | 'smtp'
 export type SmsProvider = 'msg91' | 'twilio' | 'fast2sms' | 'webhook'
-/** openwa = self-hosted OpenWA / WA CRM gateway (WhatsApp Web session, free text, no templates) */
-export type WhatsappProvider = 'openwa' | 'meta' | 'aisensy' | 'msg91' | 'twilio' | 'interakt' | 'webhook'
+/** openwa = self-hosted OpenWA gateway (WhatsApp Web session, free text, no templates);
+ *  wacrm = ArnasDon/wacrm, a WhatsApp CRM on the Meta Cloud API (approved templates, public API v1) */
+export type WhatsappProvider = 'wacrm' | 'openwa' | 'meta' | 'aisensy' | 'msg91' | 'twilio' | 'interakt' | 'webhook'
 
 /** own = the hospital's own provider account (below); platform = Hospital Comrade's shared account (phase 3) */
 export type MessagingSource = 'own' | 'platform'
@@ -91,8 +92,10 @@ export interface NotificationSettings {
   email: { enabled: boolean; source: MessagingSource; provider: EmailProvider; fromName: string; fromEmail: string; replyTo: string; smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string }
   sms: { enabled: boolean; source: MessagingSource; provider: SmsProvider; senderId: string; dltEntityId: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string }
   whatsapp: { enabled: boolean; source: MessagingSource; provider: WhatsappProvider; phoneNumberId: string; businessAccountId: string; language: string; twilioAccountSid: string; twilioFrom: string; webhookUrl: string
-    /** OpenWA / WA CRM: gateway origin (e.g. https://wacrm.example.in) and the WhatsApp session ID */
+    /** OpenWA gateway: origin (e.g. https://wa.example.in) and the WhatsApp session ID */
     openwaUrl: string; openwaSession: string
+    /** wacrm: the CRM's address (e.g. https://crm.example.in) — the API key is the secret wacrm_api_key */
+    wacrmUrl?: string
     /** How a mobile number becomes a chat ID. {phone} = 10-digit number. Default 91{phone}@c.us */
     chatIdFormat: string
     /** MSG91 WhatsApp: integrated number (with country code) and optional template namespace */
@@ -124,7 +127,9 @@ export const SECRET_FIELDS: Record<string, { label: string; placeholder: string 
   whatsapp_webhook_secret: { label: 'Webhook bearer token (optional)', placeholder: 'Sent as Authorization: Bearer …' },
   whatsapp_verify_token: { label: 'Chatbot webhook verify token', placeholder: 'Any long random text — paste the same in Meta → Webhooks' },
   meta_app_secret: { label: 'Meta app secret (signs incoming webhooks)', placeholder: 'App settings → Basic → App secret' },
-  openwa_api_key: { label: 'WA CRM / OpenWA API key', placeholder: 'owa_k1_…  (operator role is enough)' },
+  wacrm_api_key: { label: 'wacrm API key', placeholder: 'wacrm_live_…  (scopes: messages:send · chatbot: + contacts:read, webhooks:manage)' },
+  wacrm_webhook_secret: { label: 'wacrm webhook secret (signs incoming messages)', placeholder: 'whsec_…  — filled in by “Connect replies”, or paste it' },
+  openwa_api_key: { label: 'OpenWA API key', placeholder: 'owa_k1_…  (operator role is enough)' },
   openwa_webhook_secret: { label: 'OpenWA webhook secret (signs incoming messages)', placeholder: 'Same secret you set on the OpenWA webhook' },
   fcm_service_account: { label: 'Firebase service-account JSON', placeholder: 'Paste the whole JSON (Project settings → Service accounts → Generate new private key)' },
   service_role_key: { label: 'Supabase service-role key (for the scheduler)', placeholder: 'eyJhbGci…  (Project settings → API → service_role)' },
@@ -172,7 +177,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   notifications: {
     email: { enabled: false, source: 'own', provider: 'resend', fromName: 'DC Hospital', fromEmail: '', replyTo: '', smtpHost: '', smtpPort: 465, smtpSecure: true, smtpUser: '' },
     sms: { enabled: false, source: 'own', provider: 'msg91', senderId: '', dltEntityId: '', twilioAccountSid: '', twilioFrom: '', webhookUrl: '' },
-    whatsapp: { enabled: false, source: 'own', provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', chatIdFormat: '91{phone}@c.us', msg91Number: '', msg91Namespace: '', aisensyTestCampaign: '', botEnabled: false },
+    whatsapp: { enabled: false, source: 'own', provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', wacrmUrl: '', chatIdFormat: '91{phone}@c.us', msg91Number: '', msg91Namespace: '', aisensyTestCampaign: '', botEnabled: false },
     push: { enabled: false, apiKey: '', authDomain: '', projectId: '', messagingSenderId: '', appId: '', vapidKey: '' },
     rates: { sms: 0.25, whatsapp: 0.8, email: 0.05, push: 0 },
     events: {

@@ -6,8 +6,13 @@
 //   Meta Cloud API  GET  ?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…   (webhook verification)
 //                   POST JSON { entry: [{ changes: [{ value: { messages: [...] } }] }] }  — signed with X-Hub-Signature-256
 //   Twilio          POST form  From=whatsapp:+91…&Body=…                               — signed with X-Twilio-Signature
-//   OpenWA / WA CRM POST JSON { event: "message.received", sessionId, data: { id, from, body, fromMe } }
+//   OpenWA          POST JSON { event: "message.received", sessionId, data: { id, from, body, fromMe } }
 //                   — signed with X-OpenWA-Signature: sha256=<hmac of the raw body> (secret required)
+//   wacrm           POST JSON { id, event: "message.received", account_id, data: { contact_id, text, … } }
+//                   — signed with X-Wacrm-Signature: t=<unix>,v1=<hmac of `${t}.${body}`> (secret required, ±5 min);
+//                   the payload has no phone number, so it is read from GET /api/v1/contacts/{id} (contacts:read)
+//   { wacrm_connect: true } with the owner's token → registers this address as a wacrm message.received webhook
+//                   (POST /api/v1/webhooks, webhooks:manage) and keeps the returned secret as wacrm_webhook_secret
 // In-app simulator (Settings → Notifications → WhatsApp chatbot):
 //   POST JSON { simulate: { from: "98…", text: "hi" } } with a signed-in owner / receptionist token → { state, replies }
 //
@@ -22,7 +27,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import { botReply, type BotDeps, type BotState } from '../_shared/bot.ts'
 import { deliver, type Ctx } from '../_shared/providers.ts'
 import { parseOpenwa } from '../_shared/openwa.ts'
-import { corsHeaders, resolveCaller, webhookTenantRef, type TenantRow } from '../_shared/tenant.ts'
+import { parseWacrm, wacrmContactPhone, wacrmRegisterWebhook } from '../_shared/wacrm.ts'
+import { corsHeaders, resolveCaller, webhookTenantRef, webhookUrl, type TenantRow } from '../_shared/tenant.ts'
 
 const cors = corsHeaders('GET, POST, OPTIONS')
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -123,9 +129,35 @@ Deno.serve(async (req) => {
   const type = req.headers.get('content-type') ?? ''
 
   // ---- in-app simulator (staff only) — the hospital the signed-in user works in
-  let simulate: any = null
+  let simulate: any = null, connect = false
   if (req.method === 'POST' && !type.includes('application/x-www-form-urlencoded')) {
-    try { simulate = JSON.parse(raw || '{}').simulate ?? null } catch { /* handled below */ }
+    try { const j = JSON.parse(raw || '{}'); simulate = j.simulate ?? null; connect = j.wacrm_connect === true } catch { /* handled below */ }
+  }
+
+  // ---- wacrm: register our address as its message.received webhook (owner only)
+  if (connect) {
+    const who = await resolveCaller(req, { serviceKey: SERVICE_KEY, admin, userClient })
+    if (who.kind !== 'user' || !who.tenant || who.role !== 'owner') return json({ ok: false, message: 'Only the hospital owner can connect wacrm.' }, 403)
+    const tenant = await tenantById(who.tenant)
+    if (!tenant) return json({ ok: false, message: 'Hospital not found.' }, 404)
+    const setup = await loadSetup(tenant)
+    const cfg = setup.ctx.n.whatsapp ?? {}
+    if (cfg.provider !== 'wacrm') return json({ ok: false, message: 'Choose wacrm as the WhatsApp provider and save first.' })
+    const key = setup.ctx.secrets.wacrm_api_key
+    if (!cfg.wacrmUrl || !key) return json({ ok: false, message: 'Save the wacrm address and API key first.' })
+    try {
+      const hook = webhookUrl(SUPABASE_URL, tenant)
+      const r = await wacrmRegisterWebhook(cfg.wacrmUrl, key, hook)
+      const now = new Date().toISOString()
+      const { error } = await admin.from('app_secrets').upsert([
+        { tenant_id: tenant.id, key: 'wacrm_webhook_secret', value: r.secret, updated_at: now, updated_by_name: 'wacrm (Connect replies)' },
+        ...(r.id ? [{ tenant_id: tenant.id, key: 'wacrm_webhook_id', value: r.id, updated_at: now, updated_by_name: 'wacrm (Connect replies)' }] : []),
+      ], { onConflict: 'tenant_id,key' })
+      if (error) throw new Error(error.message)
+      await admin.from('audit_log').insert({ tenant_id: tenant.id, table_name: 'app_secrets', action: 'update', actor_id: who.id, actor_name: 'Owner', actor_role: 'owner',
+        summary: 'Credential wacrm_webhook_secret', changes: { wacrm_webhook_secret: { to: 'updated (hidden)' } } }).then(() => {}, () => {})
+      return json({ ok: true, message: `Connected — wacrm now sends incoming messages to ${hook}` })
+    } catch (e) { return json({ ok: false, message: (e as Error).message }) }
   }
   if (simulate) {
     const who = await resolveCaller(req, { serviceKey: SERVICE_KEY, admin, userClient })
@@ -186,6 +218,24 @@ Deno.serve(async (req) => {
       for (const reply of res.replies) await deliver({ event: 'bot', channel: 'whatsapp', recipient: m.phone, body: reply, vars: {} }, setup.ctx)
     } catch (e) { console.error('whatsapp-bot (openwa)', e) }
     return json({ ok: true })
+  }
+
+  // ---- wacrm (Meta Cloud API CRM) — see ../_shared/wacrm.ts
+  const wSig = req.headers.get('x-wacrm-signature')
+  if (wSig !== null || req.headers.get('x-wacrm-event') !== null) {
+    const cfg = setup.ctx.n.whatsapp ?? {}
+    const m = await parseWacrm(raw, wSig, { secret: setup.ctx.secrets.wacrm_webhook_secret })
+    if (m.kind === 'reject') return new Response(m.reason, { status: m.status })
+    if (m.kind === 'ignore' || !setup.bot || cfg.provider !== 'wacrm') return json({ ok: true })
+    if (m.key && seen.has(m.key)) return json({ ok: true, duplicate: true })
+    if (m.key) { seen.add(m.key); if (seen.size > 500) seen.delete(seen.values().next().value!) }
+    try {
+      const phone = await wacrmContactPhone(cfg.wacrmUrl, setup.ctx.secrets.wacrm_api_key ?? '', m.contactId)
+      if (!/^[6-9]\d{9}$/.test(phone)) return json({ ok: true, ignored: 'not an Indian mobile' })
+      const res = await converse(phone, m.text, setup)
+      for (const reply of res.replies) await deliver({ event: 'bot', channel: 'whatsapp', recipient: phone, body: reply, vars: {} }, setup.ctx)
+    } catch (e) { console.error('whatsapp-bot (wacrm)', e) }
+    return json({ ok: true })   // single best-effort delivery — always acknowledge
   }
 
   // ---- Meta Cloud API
