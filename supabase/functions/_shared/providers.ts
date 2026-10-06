@@ -9,6 +9,8 @@ export type Channel = 'sms' | 'whatsapp' | 'email' | 'push'
 export interface Msg { id?: string; event: string; channel: Channel; recipient: string; subject?: string | null; body: string; vars: Record<string, string> }
 export interface Ctx {
   n: any; secrets: Record<string, string>; hospital: string
+  /** the branded HTML email: logo, footer contact details, website (all optional) */
+  brand?: EmailBrand
   /** push: the person's registered devices, and a way to forget the ones Firebase says are gone */
   devices?: { tokens(profileId: string): Promise<string[]>; forget(tokens: string[]): Promise<void>; siteUrl?: string; icon?: string }
 }
@@ -284,13 +286,46 @@ async function msg91Whatsapp(m: Msg, c: Ctx): Promise<Result> {
 
 // ------------------------------------------------------------------ Email
 const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!))
-const html = (m: Msg, hospital: string) => `<!doctype html><html><body style="margin:0;background:#f5f5ff;font-family:Inter,Segoe UI,Arial,sans-serif">
+export interface EmailBrand { logoUrl?: string; phone?: string; address?: string; siteUrl?: string; footer?: string }
+const httpsOnly = (u?: string) => (u && /^https:\/\/[^\s"'<>]+$/.test(u) ? u : '')
+/** escaped text with line breaks, and web addresses as links */
+const richText = (s: string) => esc(s).replace(/https:\/\/[^\s<]+[^\s<.,;:!?)]/g, (u) => `<a href="${u}" style="color:#5c5c99;word-break:break-all">${u}</a>`).replace(/\n/g, '<br>')
+/**
+ * The branded HTML version of every email (the plain text goes alongside): hospital name / logo on the periwinkle
+ * header, the message, a button for the main link, a large code box for OTPs, and the contact details in the footer.
+ * Table layout + inline styles only, so it renders in Gmail, Outlook and phone mail apps.
+ */
+export function emailHtml(m: Msg, c: Pick<Ctx, 'hospital' | 'brand'>): string {
+  const b = c.brand ?? {}
+  const name = esc(c.hospital || 'Hospital')
+  const logo = httpsOnly(b.logoUrl)
+  const link = httpsOnly(m.vars?.link)
+  const code = isOtp(m.event) && /^\d{4,8}$/.test(m.vars?.code ?? '') ? m.vars.code : ''
+  const site = httpsOnly(b.siteUrl)
+  const preheader = esc((m.body || '').replace(/\s+/g, ' ').slice(0, 120))
+  const contact = [b.phone && `📞 ${esc(b.phone)}`, b.address && esc(b.address), site && `<a href="${site}" style="color:#5c5c99">${esc(site.replace(/^https:\/\//, '').replace(/\/$/, ''))}</a>`].filter(Boolean).join(' · ')
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(m.subject || c.hospital)}</title></head>
+<body style="margin:0;padding:0;background:#f0f0ff;font-family:Inter,'Segoe UI',Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">${preheader}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px"><tr><td align="center">
-<table role="presentation" width="100%" style="max-width:560px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e6e6f5">
-<tr><td style="background:#292966;color:#fff;padding:18px 24px;font-size:18px;font-weight:700">${esc(hospital)}</td></tr>
-<tr><td style="padding:24px;color:#1e293b;font-size:15px;line-height:1.6">${esc(m.body).replace(/\n/g, '<br>')}</td></tr>
-<tr><td style="padding:14px 24px;background:#f8f8ff;color:#64748b;font-size:12px">This message was sent by ${esc(hospital)}. Please do not reply with medical questions — call the hospital instead.</td></tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #ccccff">
+<tr><td style="background:#292966;padding:18px 24px">
+  <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    ${logo ? `<td style="padding-right:12px"><img src="${logo}" alt="" height="36" style="display:block;height:36px;max-width:120px;border-radius:8px;background:#fff;padding:3px"></td>` : ''}
+    <td style="color:#ffffff;font-size:18px;font-weight:700;line-height:1.3">${name}</td>
+  </tr></table>
+</td></tr>
+<tr><td style="height:4px;background:#a3a3cc;line-height:4px;font-size:0">&nbsp;</td></tr>
+${m.subject ? `<tr><td style="padding:24px 24px 0;color:#292966;font-size:20px;font-weight:700;line-height:1.35">${esc(m.subject)}</td></tr>` : ''}
+${code ? `<tr><td style="padding:20px 24px 0"><div style="background:#f0f0ff;border:1px dashed #a3a3cc;border-radius:12px;padding:14px;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#292966;font-family:'SFMono-Regular',Consolas,monospace">${code}</div></td></tr>` : ''}
+<tr><td style="padding:20px 24px;color:#1e293b;font-size:15px;line-height:1.65">${richText(m.body || '')}</td></tr>
+${link ? `<tr><td style="padding:0 24px 24px"><a href="${link}" style="display:inline-block;background:#5c5c99;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 22px;border-radius:10px">Open</a></td></tr>` : ''}
+<tr><td style="padding:16px 24px;background:#f8f8ff;border-top:1px solid #e6e6f5;color:#64748b;font-size:12px;line-height:1.6">
+  ${contact ? `<div style="margin-bottom:6px;color:#475569">${contact}</div>` : ''}
+  ${esc(b.footer || `This message was sent by ${c.hospital}. Please don't reply with medical questions — call the hospital instead.`)}
+</td></tr>
 </table></td></tr></table></body></html>`
+}
 
 async function email(m: Msg, c: Ctx): Promise<Result> {
   const cfg = c.n.email ?? {}
@@ -302,7 +337,7 @@ async function email(m: Msg, c: Ctx): Promise<Result> {
       need(c.secrets.resend_api_key, 'Resend API key')
       const r = await fetch('https://api.resend.com/emails', {
         method: 'POST', headers: { Authorization: `Bearer ${c.secrets.resend_api_key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: `${fromName} <${cfg.fromEmail}>`, to: [m.recipient], subject, text: m.body, html: html(m, c.hospital), ...(cfg.replyTo ? { reply_to: cfg.replyTo } : {}) }),
+        body: JSON.stringify({ from: `${fromName} <${cfg.fromEmail}>`, to: [m.recipient], subject, text: m.body, html: emailHtml(m, c), ...(cfg.replyTo ? { reply_to: cfg.replyTo } : {}) }),
       })
       if (!r.ok) throw new Error(await err(r))
       return { ok: true, ref: (await r.json()).id }
@@ -314,7 +349,7 @@ async function email(m: Msg, c: Ctx): Promise<Result> {
         body: JSON.stringify({
           personalizations: [{ to: [{ email: m.recipient }] }], from: { email: cfg.fromEmail, name: fromName }, subject,
           ...(cfg.replyTo ? { reply_to: { email: cfg.replyTo } } : {}),
-          content: [{ type: 'text/plain', value: m.body }, { type: 'text/html', value: html(m, c.hospital) }],
+          content: [{ type: 'text/plain', value: m.body }, { type: 'text/html', value: emailHtml(m, c) }],
         }),
       })
       if (!r.ok) throw new Error(await err(r))
@@ -327,7 +362,7 @@ async function email(m: Msg, c: Ctx): Promise<Result> {
       const { SMTPClient } = await import(/* @vite-ignore */ mod)
       const client = new SMTPClient({ connection: { hostname: cfg.smtpHost, port: Number(cfg.smtpPort) || 465, tls: cfg.smtpSecure !== false, auth: { username: cfg.smtpUser, password: c.secrets.smtp_password } } })
       try {
-        await client.send({ from: `${fromName} <${cfg.fromEmail}>`, to: m.recipient, subject, content: m.body, html: html(m, c.hospital), ...(cfg.replyTo ? { replyTo: cfg.replyTo } : {}) })
+        await client.send({ from: `${fromName} <${cfg.fromEmail}>`, to: m.recipient, subject, content: m.body, html: emailHtml(m, c), ...(cfg.replyTo ? { replyTo: cfg.replyTo } : {}) })
       } finally { await client.close() }
       return { ok: true, ref: 'smtp' }
     }

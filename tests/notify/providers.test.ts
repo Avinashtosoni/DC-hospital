@@ -5,7 +5,7 @@
  * Notifications → "Send test".)
  */
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { chatIdFor, deliver, isPermanent, openwaStatus, phoneFromChatId, retryDelayMs, type Ctx, type Msg } from '../../supabase/functions/_shared/providers'
+import { chatIdFor, deliver, emailHtml, isPermanent, openwaStatus, phoneFromChatId, retryDelayMs, type Ctx, type Msg } from '../../supabase/functions/_shared/providers'
 
 type Call = { url: string; init: RequestInit & { headers: Record<string, string> } }
 let calls: Call[] = []
@@ -283,5 +283,29 @@ describe('WhatsApp — AiSensy and MSG91 (Phase 3)', () => {
     mockFetch()
     const n = await deliver(confirm, ctx({ whatsapp: { enabled: true, provider: 'msg91' }, templates }, { msg91_auth_key: 'AK' }))
     expect(calls).toHaveLength(0); expect(isPermanent(n.error)).toBe(true)
+  })
+})
+
+describe('branded HTML email', () => {
+  const base = { id: 'x', channel: 'email' as const, recipient: 'a@b.in' }
+  test('header, escaped body with links, a button for the main link and the footer contact details', () => {
+    const h = emailHtml({ ...base, event: 'appointment_confirmed', subject: 'Appointment confirmed', body: 'Hi <Rohan>,\nsee https://city.example.in/portal.', vars: { link: 'https://city.example.in/portal' } },
+      { hospital: 'City & Co Hospital', brand: { logoUrl: 'https://city.example.in/logo.png', phone: '+91 98765 43210', address: 'Gaya, Bihar', siteUrl: 'https://city.example.in' } })
+    expect(h).toContain('City &amp; Co Hospital')
+    expect(h).toContain('Hi &lt;Rohan&gt;,<br>')
+    expect(h).toContain('<a href="https://city.example.in/portal" style="color:#5c5c99;word-break:break-all">https://city.example.in/portal</a>.')
+    expect(h).toContain('>Open</a>')
+    expect(h).toContain('src="https://city.example.in/logo.png"')
+    expect(h).toContain('+91 98765 43210')
+    expect(h).toContain('city.example.in</a>')
+    expect(h).not.toContain('letter-spacing:8px')
+  })
+  test('codes get a large box; unsafe links and logos are dropped', () => {
+    const h = emailHtml({ ...base, event: 'login_otp', subject: 'Your sign-in code', body: '482915 is your code', vars: { code: '482915', link: 'javascript:alert(1)' } },
+      { hospital: 'H', brand: { logoUrl: 'http://insecure/logo.png" onerror="x' } })
+    expect(h).toContain('letter-spacing:8px;color:#292966;font-family:\'SFMono-Regular\',Consolas,monospace">482915</div>')
+    expect(h).not.toContain('javascript:')
+    expect(h).not.toContain('onerror')
+    expect(h).not.toContain('>Open</a>')
   })
 })

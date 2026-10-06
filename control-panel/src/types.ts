@@ -3,6 +3,8 @@ import type { LicenseInfo } from '../../src/billing/license'
 import type { PaymentRow } from '../../src/billing/types'
 import type { BillingConfig } from '../../src/platform/billing'
 import type { ProviderRole } from '../../src/tenancy/state'
+import type { PlatformTemplate } from '../../src/notify'
+export type { PlatformTemplate }
 
 export type { ProviderRole, BillingConfig }
 export type ModuleMap = Record<string, 'provider' | 'hospital'>
@@ -310,6 +312,13 @@ export interface MessagingSetup {
   vault: boolean
 }
 export interface PlatformTemplateIds { waTemplate?: string; waParams?: string; smsTemplateId?: string }
+export interface CpTemplates {
+  saved: Record<string, PlatformTemplate & { updated_by_name: string | null }>
+  /** built-in key → hospitals that use their own wording */
+  overrides: Record<string, number>
+  /** key → messages sent in the last 30 days (all hospitals) */
+  sent30: Record<string, number>
+}
 export interface CpAlert { id: string; created_at: string; event: string; severity: AlertSeverity; title: string; body: string; link: string | null; read_at: string | null }
 export interface CpAlertPrefs {
   channels: Record<AlertChannel, boolean>

@@ -9,7 +9,7 @@ import type {
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
   SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
   MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
-  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp, CpDemo,
+  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp, CpDemo, CpTemplates, PlatformTemplate,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
 import { hospitalUrl } from '../../src/tenancy/urls'
@@ -96,6 +96,11 @@ export interface CpApi {
   /** API keys need the admin's password again (the database wants a sign-in from the last 10 minutes) */
   saveMessagingSetup(settings: Record<string, string>, secrets: Record<string, string>, password?: string): Promise<MessagingSetup>
   saveTemplates(t: Record<string, PlatformTemplateIds>): Promise<Record<string, PlatformTemplateIds>>
+  /** the template library (notify_catalog.sql): saved edits, how many hospitals reworded each, sends in 30 days */
+  templates(): Promise<CpTemplates>
+  saveTemplate(key: string, p: Partial<PlatformTemplate>): Promise<PlatformTemplate>
+  /** custom: deleted; built-in: back to the default */
+  deleteTemplate(key: string): Promise<void>
   testMessage(channel: 'sms' | 'whatsapp' | 'email' | 'push', to: string): Promise<{ ok: boolean; message: string }>
   /** the notify function's view of the shared accounts — proves which keys the Edge Functions can see */
   platformStatus(): Promise<{ platform: Record<string, string | null> }>
@@ -282,6 +287,9 @@ const db: CpApi = {
     return rpc('cp_save_messaging_setup', { p_settings: settings, p_secrets: secrets })
   },
   saveTemplates: (t) => rpc('cp_save_platform_templates', { p_templates: t }),
+  templates: () => rpc('cp_templates'),
+  saveTemplate: (key, p) => rpc('cp_save_template', { p_key: key, p }),
+  deleteTemplate: (key) => rpc('cp_delete_template', { p_key: key }),
   testMessage: (channel, to) => invoke('ops', { test: { channel, to } }),
   platformStatus: () => invoke('notify', { ping: true }),
   deliveryLog: (f) => rpc('cp_delivery_log', { p: { ...f, limit: 200 } }),

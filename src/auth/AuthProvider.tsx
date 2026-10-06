@@ -10,6 +10,10 @@ import { OtpRequiredError, type OtpChannelId, type OtpStatus } from '../data/err
 import { requestLoginOtp, verifyLoginOtp, type OtpSent } from './loginOtp'
 import { flushNotificationsSoon } from '../settings/store'
 import { supabase } from '../lib/supabase'
+import { noteSignIn } from '../notify/api'
+
+/** "new sign-in" alert (template AUTH-008) — not in the shared demo hospital, where everyone uses the same accounts */
+const afterSignIn = () => { if (!siteTenant()?.is_demo) void noteSignIn() }
 
 export const auth: AuthAdapter = supabaseAuth
 
@@ -85,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthCtx>(() => ({
     user, loading, refresh, signedOut, context, otp,
-    signIn: async (e, p) => { const u = (await load(() => auth.signIn(e, p)))!; qc.clear(); setSignedOut(false); return u },
+    signIn: async (e, p) => { const u = (await load(() => auth.signIn(e, p)))!; qc.clear(); setSignedOut(false); afterSignIn(); return u },
     signUp: async (input) => { const u = (await load(() => auth.signUp(input)))!; qc.clear(); setSignedOut(false); return u },
     requestOtp: async (channel) => {
       const r = await requestLoginOtp(channel)
@@ -94,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       else if (r.sent) void supabase?.functions.invoke('ops', { body: { deliver_otp: r.ref } }).catch(() => undefined)
       return r
     },
-    verifyOtp: async (code) => { await verifyLoginOtp(code); const u = await load(() => auth.getCurrent()); qc.clear(); setSignedOut(false); return u },
+    verifyOtp: async (code) => { await verifyLoginOtp(code); const u = await load(() => auth.getCurrent()); qc.clear(); setSignedOut(false); afterSignIn(); return u },
     // the session is dropped locally even if the network call fails, so "Sign out" always works
     signOut: async () => { try { await auth.signOut() } finally { clearProviderChoice(); setSignedOut(true); setUser(null); setContext(null); setOtp(null); qc.clear() } },
     // the demo hospital's shared accounts keep their published password (the platform team may still change theirs)

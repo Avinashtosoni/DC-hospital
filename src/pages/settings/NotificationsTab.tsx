@@ -2,14 +2,16 @@ import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlarmClock, BellRing, CheckCircle2, CircleAlert, ExternalLink, FileText, History, MessageCircle, MessageSquareText,
-  PlugZap, RefreshCw, RotateCcw, Send, ServerCog, Bot, Copy,
+  PlugZap, RefreshCw, RotateCcw, Send, ServerCog, Bot, Copy, Lock, Search,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { Badge, Button, Drawer, EmptyState, Field, Input, Skeleton, Textarea, type Tone } from '../../components/ui'
 import { cn, fmtDate, fmtTime } from '../../lib/utils'
 import { channelIssues, recipientProblem, settingsStore, type OutboxRow, type SecretStatus, type SendResult } from '../../settings/store'
-import { DEFAULT_TEMPLATES, EVENTS, type AppSettings, type Channel, type NotifyEvent } from '../../settings/types'
+import { DEFAULT_TEMPLATES, EVENTS, type AppSettings, type Channel, type EventChannel, type NotifyEvent } from '../../settings/types'
+import { GROUP_LABEL, AUDIENCE_LABEL, type Group } from '../../notify/catalog'
+import { platformOverrides, type PlatformOverride } from '../../notify/api'
 import { useAuth } from '../../auth/AuthProvider'
 import { Issues, SECRETS_QK, SecretInput, Section, Segmented, type TabCtx } from './shared'
 import { BotSimulator } from './BotSimulator'
@@ -277,25 +279,43 @@ function ChannelCard({ channel, ctx, secrets }: { channel: Channel; ctx: TabCtx;
 }
 
 // ------------------------------------------------------------------ template editor
-function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: TabCtx; onClose: () => void }) {
+type Wording = 'subject' | 'text' | 'waText' | 'pushText'
+const WORDING: Wording[] = ['subject', 'text', 'waText', 'pushText']
+
+function TemplateDrawer({ ev, ctx, ov, onClose }: { ev: NotifyEvent | null; ctx: TabCtx; ov?: PlatformOverride; onClose: () => void }) {
   const area = useRef<HTMLTextAreaElement>(null)
   const def = ev ? EVENTS.find((e) => e.id === ev)! : null
   if (!ev || !def) return <Drawer open={false} onClose={onClose} title="">{null}</Drawer>
-  const t = ctx.app.notifications.templates[ev] ?? DEFAULT_TEMPLATES[ev]
+  const stored = ctx.app.notifications.templates[ev] ?? DEFAULT_TEMPLATES[ev]
+  // what actually goes out: the hospital's own wording (when changed from the default) unless the platform locked it,
+  // else the platform team's edit, else the default — the same order as notify_resolve_template() in the database
+  const locked = !!ov?.locked
+  const D = DEFAULT_TEMPLATES[ev]
+  const pick = (f: Wording) => {
+    const own = stored[f] ?? '', plat = ov?.tpl?.[f]?.trim() ? ov.tpl[f]! : ''
+    if (!locked && own.trim() && own !== (D[f] ?? '')) return own
+    return plat || (locked ? D[f] ?? '' : own)
+  }
+  const t = { ...stored, ...Object.fromEntries(WORDING.map((f) => [f, pick(f)])) } as typeof stored
+  const fromPlatform = !!ov && WORDING.some((f) => ov.tpl?.[f]?.trim() && t[f] === ov.tpl[f])
   const set = (fn: (x: typeof t) => void) => edit(ctx, (n) => { n.templates[ev] = { ...DEFAULT_TEMPLATES[ev], ...n.templates[ev] }; fn(n.templates[ev]) })
   const vars: Record<string, string> = { ...SAMPLE, hospital: ctx.site.brand.shortName || ctx.site.name, hospital_phone: ctx.site.appointmentsPhone || ctx.site.phone }
   const seg = smsSegments(fill(t.text, vars))
   const insert = (tok: string) => {
     const el = area.current, s = `{${tok}}`
     const [a, b] = el ? [el.selectionStart, el.selectionEnd] : [t.text.length, t.text.length]
-    set((x) => { x.text = x.text.slice(0, a) + s + x.text.slice(b) })
+    set((x) => { x.text = t.text.slice(0, a) + s + t.text.slice(b) })
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length) })
   }
   const unknown = Array.from(t.text.matchAll(/\{(\w+)\}/g)).map((m) => m[1]).filter((k) => !def.tokens.includes(k))
   return (
-    <Drawer open onClose={onClose} title={def.label} subtitle={def.hint} width="max-w-2xl"
-      footer={<div className="flex justify-between gap-2"><Button variant="ghost" icon={<RotateCcw className="h-4 w-4" />} onClick={() => set((x) => Object.assign(x, DEFAULT_TEMPLATES[ev]))}>Reset to default</Button><Button onClick={onClose}>Done</Button></div>}>
+    <Drawer open onClose={onClose} title={def.label} subtitle={def.code ? `${def.code} · ${def.hint}` : def.hint} width="max-w-2xl"
+      footer={<div className="flex justify-between gap-2"><Button variant="ghost" icon={<RotateCcw className="h-4 w-4" />} disabled={locked} onClick={() => set((x) => Object.assign(x, DEFAULT_TEMPLATES[ev]))}>Use standard wording</Button><Button onClick={onClose}>Done</Button></div>}>
       <div className="space-y-5">
+        {locked && <p className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-100"><Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />{platformName} has locked this message's wording (for example, for a registered WhatsApp / DLT template). You can still switch it on or off and set your own template IDs below.</p>}
+        {!locked && fromPlatform && <p className="rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-800 ring-1 ring-brand-100">Showing the standard wording from {platformName}. Edit it to use your own.</p>}
+        {ov && !ov.enabled && <p className="rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">{platformName} has switched this message off for every hospital, so it isn't sent right now.</p>}
+        <fieldset disabled={locked} className="space-y-5 disabled:opacity-70">
         <div>
           <span className="label">Message text</span>
           <Textarea ref={area} rows={5} value={t.text} onChange={(e) => set((x) => { x.text = e.target.value })} />
@@ -311,7 +331,7 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
             <span className="label flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" />WhatsApp text <span className="font-normal normal-case text-slate-400">(optional)</span></span>
             <Textarea rows={6} value={t.waText ?? ''} onChange={(e) => set((x) => { x.waText = e.target.value })} placeholder={t.text} className="font-[inherit]" />
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {def.tokens.map((k) => <button key={k} type="button" onClick={() => set((x) => { x.waText = (x.waText ?? '') + `{${k}}` })} className="rounded-md bg-emerald-50 px-1.5 py-0.5 font-mono text-[11px] text-emerald-800 ring-1 ring-emerald-100 hover:bg-emerald-100">{`{${k}}`}</button>)}
+              {def.tokens.map((k) => <button key={k} type="button" onClick={() => set((x) => { x.waText = (t.waText ?? '') + `{${k}}` })} className="rounded-md bg-emerald-50 px-1.5 py-0.5 font-mono text-[11px] text-emerald-800 ring-1 ring-emerald-100 hover:bg-emerald-100">{`{${k}}`}</button>)}
             </div>
             <p className="mt-1 text-xs text-slate-400">WhatsApp formatting works: <code>*bold*</code>, <code>_italic_</code>, emoji and line breaks. Sent as-is by OpenWA, Twilio and webhook; Meta / Interakt use it only when no approved template name is set.</p>
           </div>
@@ -322,6 +342,7 @@ function TemplateDrawer({ ev, ctx, onClose }: { ev: NotifyEvent | null; ctx: Tab
             <Textarea rows={2} value={t.pushText ?? ''} onChange={(e) => set((x) => { x.pushText = e.target.value })} placeholder={t.text} maxLength={400} />
           </Field>
         )}
+        </fieldset>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="DLT / MSG91 template ID" hint="Required for MSG91; Fast2SMS DLT message ID"><Input value={t.smsTemplateId} onChange={(e) => set((x) => { x.smsTemplateId = e.target.value.trim() })} className="font-mono text-xs" placeholder="e.g. 65f1c2…" /></Field>
           <Field label="WhatsApp template name" hint="Approved template (Meta / MSG91 / Interakt) or AiSensy campaign name. Empty = free text"><Input value={t.waTemplate} onChange={(e) => set((x) => { x.waTemplate = e.target.value.trim() })} className="font-mono text-xs" placeholder="appointment_confirmed" /></Field>
@@ -356,49 +377,90 @@ function WaText({ text }: { text: string }) {
 }
 
 // ------------------------------------------------------------------ events matrix
+const OVERRIDES_QK = ['notify-platform-overrides'] as const
+const MATRIX_CHANNELS: EventChannel[] = ['sms', 'whatsapp', 'email', 'push', 'inapp']
+const CH_LABEL: Record<EventChannel, string> = { sms: CH.sms.label, whatsapp: CH.whatsapp.label, email: CH.email.label, push: CH.push.label, inapp: 'In-app' }
+
 function EventsMatrix({ ctx }: { ctx: TabCtx }) {
   const [open, setOpen] = useState<NotifyEvent | null>(null)
+  const [q, setQ] = useState('')
+  const [group, setGroup] = useState<Group | 'all'>('all')
   const n = ctx.app.notifications
-  const channels: Channel[] = ['sms', 'whatsapp', 'email', 'push']
+  const ovq = useQuery({ queryKey: OVERRIDES_QK, queryFn: platformOverrides, staleTime: 5 * 60_000 })
+  const ov = ovq.data ?? {}
+  const channelOn = (c: EventChannel) => c === 'inapp' || n[c].enabled
+  const groups = useMemo(() => Array.from(new Set(EVENTS.map((e) => e.group ?? 'SYS'))) as Group[], [])
+  const needle = q.trim().toLowerCase()
+  const rows = EVENTS.filter((e) => (group === 'all' || (e.group ?? 'SYS') === group)
+    && (!needle || `${e.label} ${e.hint} ${e.code ?? ''}`.toLowerCase().includes(needle)))
+  const byGroup = groups.map((g) => [g, rows.filter((e) => (e.group ?? 'SYS') === g)] as const).filter(([, r]) => r.length)
   return (
-    <Section title="Messages & templates" description="Choose which events send a message on which channel, and edit the wording." icon={<MessageSquareText className="h-4 w-4" />}>
+    <Section title="Messages & templates" description={`${EVENTS.length} messages. Choose the channels for each one and edit the wording. In-app = the bell in the top bar.`} icon={<MessageSquareText className="h-4 w-4" />}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or ID (e.g. APT-002)" className="pl-9" />
+        </div>
+        <select value={group} onChange={(e) => setGroup(e.target.value as Group | 'all')} className="input w-auto" aria-label="Group">
+          <option value="all">All groups</option>
+          {groups.map((g) => <option key={g} value={g}>{GROUP_LABEL[g]}</option>)}
+        </select>
+      </div>
       <div className="-mx-5 overflow-x-auto">
-        <table className="w-full min-w-[640px] text-sm">
+        <table className="w-full min-w-[720px] text-sm">
           <thead><tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wider text-slate-400">
-            <th className="px-5 pb-2 font-semibold">Event</th>
-            {channels.map((c) => <th key={c} className={cn('px-3 pb-2 text-center font-semibold', !n[c].enabled && 'opacity-50')}>{CH[c].label}</th>)}
+            <th className="px-5 pb-2 font-semibold">Message</th>
+            {MATRIX_CHANNELS.map((c) => <th key={c} className={cn('px-2 pb-2 text-center font-semibold', !channelOn(c) && 'opacity-50')}>{CH_LABEL[c]}</th>)}
             <th className="px-5 pb-2" />
           </tr></thead>
           <tbody>
-            {EVENTS.map((ev) => {
-              const t = n.templates[ev.id] ?? DEFAULT_TEMPLATES[ev.id]
-              const custom = JSON.stringify(t) !== JSON.stringify(DEFAULT_TEMPLATES[ev.id])
-              return (
-                <tr key={ev.id} className="border-b border-slate-50 last:border-0">
-                  <td className="px-5 py-3"><p className="font-medium text-slate-800">{ev.label}</p><p className="text-xs text-slate-400">{ev.hint}</p></td>
-                  {channels.map((c) => {
-                    const supported = ev.channels.includes(c)
-                    const on = !!n.events[ev.id]?.[c]
-                    return (
-                      <td key={c} className="px-3 py-3 text-center">
-                        {supported ? (
-                          <input type="checkbox" checked={on} aria-label={`${ev.label} by ${CH[c].label}`} onChange={() => edit(ctx, (x) => { x.events[ev.id] = { ...x.events[ev.id], [c]: !on } })}
-                            className={cn('h-4 w-4 cursor-pointer rounded border-slate-300 text-brand-600 focus:ring-brand-500', !n[c].enabled && 'opacity-50')} />
-                        ) : <span className="text-slate-300" title="Not available for this event">—</span>}
-                      </td>
-                    )
-                  })}
-                  <td className="px-5 py-3 text-right">
-                    <Button size="sm" variant="outline" icon={<FileText className="h-3.5 w-3.5" />} onClick={() => setOpen(ev.id)}>Template{custom && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-brand-600" aria-label="customised" />}</Button>
-                  </td>
-                </tr>
-              )
-            })}
+            {byGroup.length === 0 && <tr><td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-400">No message matches “{q}”.</td></tr>}
+            {byGroup.map(([g, list]) => [
+              <tr key={`g-${g}`} className="bg-brand-50/50"><td colSpan={7} className="px-5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-brand-800">{GROUP_LABEL[g]}</td></tr>,
+              ...list.map((ev) => {
+                const t = n.templates[ev.id] ?? DEFAULT_TEMPLATES[ev.id]
+                const D = DEFAULT_TEMPLATES[ev.id]
+                const custom = WORDING.some((f) => (t[f] ?? '') !== (D[f] ?? ''))
+                const o = ov[ev.id]
+                const off = !!o && !o.enabled
+                return (
+                  <tr key={ev.id} className={cn('border-b border-slate-50 last:border-0', off && 'opacity-60')}>
+                    <td className="px-5 py-3">
+                      <p className="flex flex-wrap items-center gap-1.5 font-medium text-slate-800">
+                        {ev.label}
+                        {ev.code && <span className="rounded bg-slate-100 px-1 font-mono text-[10px] font-normal text-slate-500">{ev.code}</span>}
+                        {ev.audience && <span className="text-[11px] font-normal text-slate-400">→ {AUDIENCE_LABEL[ev.audience]}</span>}
+                        {off && <Badge tone="slate">Off for all hospitals</Badge>}
+                        {o?.locked && <span title="Wording locked by the platform"><Lock className="h-3 w-3 text-amber-600" /></span>}
+                      </p>
+                      <p className="text-xs text-slate-400">{ev.hint}</p>
+                    </td>
+                    {MATRIX_CHANNELS.map((c) => {
+                      const supported = c === 'inapp' ? !!ev.inapp : ev.channels.includes(c)
+                      const blocked = off || o?.channels?.[c] === false
+                      const on = !!n.events[ev.id]?.[c] && !blocked
+                      return (
+                        <td key={c} className="px-2 py-3 text-center">
+                          {supported ? (
+                            <input type="checkbox" checked={on} disabled={blocked} title={blocked ? `${platformName} has switched this off` : undefined}
+                              aria-label={`${ev.label} by ${CH_LABEL[c]}`} onChange={() => edit(ctx, (x) => { x.events[ev.id] = { ...x.events[ev.id], [c]: !on } })}
+                              className={cn('h-4 w-4 cursor-pointer rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed', !channelOn(c) && 'opacity-50')} />
+                          ) : <span className="text-slate-300" title="Not available for this message">—</span>}
+                        </td>
+                      )
+                    })}
+                    <td className="px-5 py-3 text-right">
+                      <Button size="sm" variant="outline" icon={<FileText className="h-3.5 w-3.5" />} onClick={() => setOpen(ev.id)}>Template{custom && !o?.locked && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-brand-600" aria-label="customised" />}</Button>
+                    </td>
+                  </tr>
+                )
+              }),
+            ])}
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-xs text-slate-400">A message is only sent when both the event checkbox and the channel itself are on. Patients without a phone number or email are skipped.</p>
-      <TemplateDrawer ev={open} ctx={ctx} onClose={() => setOpen(null)} />
+      <p className="mt-3 text-xs text-slate-400">A message is only sent when both its checkbox and the channel itself are on. People without a phone number or email are skipped. Daily messages (schedules, digests, overdue bills) go out once a day.</p>
+      <TemplateDrawer ev={open} ctx={ctx} ov={open ? ov[open] : undefined} onClose={() => setOpen(null)} />
     </Section>
   )
 }

@@ -122,6 +122,15 @@ function BroadcastModal({ value, onClose, scheduledAt }: { value: BroadcastSave;
   const [at, setAt] = useState(toLocal(scheduledAt))
   const [confirm, setConfirm] = useState(false)
   const hospitals = useQuery({ queryKey: ['cp-hospitals'], queryFn: () => cp.hospitals() })
+  // custom templates (Messaging → Templates) as starting points for a new broadcast
+  const templates = useQuery({ queryKey: ['cp-templates'], queryFn: () => cp.templates(), enabled: !f.id, staleTime: 60_000 })
+  const custom = Object.values(templates.data?.saved ?? {}).filter((t) => t.custom && t.enabled)
+  const applyTemplate = (key: string) => {
+    const t = custom.find((x) => x.key === key)
+    if (!t) return
+    const ch = (Object.keys(t.channels ?? {}) as BroadcastChannel[]).filter((c) => t.channels[c])
+    setF({ ...f, title: (t.tpl.subject || t.meta?.label || f.title).slice(0, 120), body: (t.tpl.text ?? '').slice(0, 2000), channels: ch.length ? ch : f.channels })
+  }
   const settings = useQuery({ queryKey: ['cp-settings'], queryFn: () => cp.settings(), staleTime: 300_000 })
   const audience = useDebounced(useMemo(() => ({ ...f.audience, hospitals: f.audience.hospitals?.length ? f.audience.hospitals : null }), [f.audience]))
   const preview = useQuery({ queryKey: ['cp-broadcast-preview', audience, f.channels], queryFn: () => cp.broadcastPreview(audience, f.channels), enabled: f.audience.roles.length > 0 })
@@ -152,6 +161,11 @@ function BroadcastModal({ value, onClose, scheduledAt }: { value: BroadcastSave;
       </>}>
       <div className="grid gap-5 md:grid-cols-[1fr_260px]">
         <div className="grid content-start gap-3">
+          {!f.id && custom.length > 0 && (
+            <Field label="Start from a template" hint="Fills the title, message and channels — edit them freely">
+              <Select value="" onChange={(e) => applyTemplate(e.target.value)}><option value="">Choose…</option>{custom.map((t) => <option key={t.key} value={t.key}>{t.meta?.label || t.key}</option>)}</Select>
+            </Field>
+          )}
           <Field label="Title"><Input value={f.title} maxLength={120} placeholder="New: online appointment reminders on WhatsApp" onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
           <Field label="Message"><Textarea rows={4} maxLength={2000} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></Field>
           <div className="grid gap-3 sm:grid-cols-[1fr_140px]">

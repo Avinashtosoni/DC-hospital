@@ -11,6 +11,8 @@
 //   { "check": "razorpay" | "sms" | "whatsapp" | "email" | "push" }   check one account now (Platform settings → Integrations) — admin
 //   { "sources": ["PLATFORM_…"] }                  for each key: saved in the panel / set as an Edge secret (never the value) — admin
 //   { "deliver_otp": "<login_otps id>" }            send the caller's own sign-in code now (request_login_otp queued it) — team member
+//   { "server": { "host", "cpu", "ram", "disk", … } }   the server monitor's report (scripts/server/hc-monitor.sh, every 5 min) —
+//                                                      header x-monitor-key = the SERVER_MONITOR_KEY Edge secret
 //
 // With "Sign-in OTP for the team" on (Platform settings → Security), a team member who has not entered this session's code
 // can only ask for deliver_otp; everything else answers 403 until login_otp_status() says passed.
@@ -24,6 +26,13 @@ import { checkProviders, checkRazorpay, clearPlatformEnv, keySources, loadPlatfo
 import { corsHeaders } from '../_shared/tenant.ts'
 
 const cors = corsHeaders()
+/** constant-time string compare (the monitor key) */
+function sameSecret(a: string, b: string) {
+  if (a.length !== b.length) return false
+  let d = 0
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return d === 0
+}
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -111,6 +120,17 @@ Deno.serve(async (req) => {
   let body: any = {}
   try { body = await req.json() } catch { /* empty */ }
   if (body.ping) return json({ ok: true, message: 'ops function is deployed and reachable' })
+
+  // the server monitor agent: CPU / RAM / disk / containers / SSL → Health page rows + alerts (record_server_metrics)
+  if (body.server) {
+    const key = Deno.env.get('SERVER_MONITOR_KEY') ?? ''
+    if (key.length < 16) return json({ ok: false, message: 'SERVER_MONITOR_KEY is not set on the ops function (16+ characters)' }, 503)
+    if (!sameSecret(req.headers.get('x-monitor-key') ?? '', key)) return json({ ok: false, message: 'Wrong monitor key' }, 401)
+    if (typeof body.server !== 'object' || Array.isArray(body.server) || JSON.stringify(body.server).length > 20_000) return json({ ok: false, message: 'Bad report' }, 400)
+    const { data, error } = await admin.rpc('record_server_metrics', { p: body.server })
+    if (error) return json({ ok: false, message: error.message }, 500)
+    return json({ ok: true, recorded: data })
+  }
 
   const w = await who(req)
 

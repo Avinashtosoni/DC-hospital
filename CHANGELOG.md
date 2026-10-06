@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased: notification template library, in-app bell and server monitor
+
+- **Template library** (`src/notify/`, `scripts/sql/notify_catalog.sql`): every message has an ID (`AUTH-001`, `APT-002`,
+  `BIL-004`, `SYS-010`…), a group, an audience and default English wording for Email / WhatsApp / SMS / Push / In-app.
+  ~45 new hospital events: staff invites and role changes, new device sign-in, patient registration, booking received
+  (reception), checked in / no-show / rescheduled, admission and discharge, lab results ready, part payments, cancelled
+  and overdue invoices, leave requests and decisions, privacy request updates, the doctor's daily schedule and the owner's
+  daily digest. Platform → owner: suspended / restored, plan changed, trial extended, domain connected, closing. Team:
+  daily platform digest, server alerts.
+- **Control panel → Messaging → Templates:** full control of all templates — on/off for every hospital, single channels
+  off, reword, lock (hospitals can't reword), WhatsApp template name / parameters / category / approval status and DLT
+  IDs, custom templates (also a starting point in Broadcasts), reset to standard, and a **WhatsApp submission sheet (CSV)**
+  with `{{1}}, {{2}}…` and sample values. Team-alert wording from here is used by `raise_platform_alert`.
+- **Hospital Settings → Notifications:** grouped list with IDs, search, an In-app column, and the platform's switches /
+  locks shown (disabled checkboxes, read-only wording).
+- **In-app bell:** the top-bar bell now has "For you" (personal notifications, mark read / all read) and "Notices".
+- **Branded HTML email:** logo, periwinkle header, button for the main link, large code box for OTPs, contact footer.
+- **Server monitor:** `scripts/server/hc-monitor.sh` (cron, every 5 min) posts CPU / RAM / disk / containers / SSL to the
+  `ops` function (`x-monitor-key` = `SERVER_MONITOR_KEY`); rows on Health ("Server"), alerts over the thresholds, and a
+  "server silent" alert after 15 minutes without a report.
+- Renewal reminders 30 / 15 / 7 / 3 / 1 days before; demo resets send nothing (`app.notify_off`).
+
 ## Unreleased: hospital subdomains and the demo hospital
 
 - **Platform domain fix:** `https://<PLATFORM_DOMAIN>/` is always the product page. A hospital opened earlier in the

@@ -68,6 +68,10 @@ async function loadCtx(tenant: string, events: string[] = []): Promise<Setup> {
     n,
     secrets: Object.fromEntries((sec ?? []).map((r: any) => [r.key, r.value])),
     hospital: (site?.data as any)?.name || t?.name || 'DC Hospital',
+    brand: {
+      logoUrl: (site?.data as any)?.brand?.logoUrl, phone: (site?.data as any)?.appointmentsPhone || (site?.data as any)?.phone,
+      address: (site?.data as any)?.address, siteUrl,
+    },
     devices: {
       siteUrl: /^https:\/\//.test(siteUrl) ? siteUrl : undefined,
       icon: /^https:\/\//.test(siteUrl) ? `${siteUrl.replace(/\/$/, '')}/favicon.svg` : undefined,

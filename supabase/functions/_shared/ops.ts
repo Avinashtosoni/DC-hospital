@@ -57,6 +57,7 @@ export function platformSendCtx(env: Env, opts: { templates?: Record<string, Pla
   const site = /^https:\/\//.test(opts.siteUrl ?? '') ? opts.siteUrl!.replace(/\/$/, '') : undefined
   return {
     n, secrets, hospital: name,
+    brand: { siteUrl: site, footer: `Sent by ${name}.` },
     devices: opts.devices ? { tokens: opts.devices.tokens, forget: opts.devices.forget, siteUrl: site ? `${site}/control-panel/` : undefined, icon: site ? `${site}/favicon.svg` : undefined } : undefined,
   }
 }

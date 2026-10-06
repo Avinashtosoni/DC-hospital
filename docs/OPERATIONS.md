@@ -142,6 +142,32 @@ The site itself: `/healthz` returns `ok` (Docker health check).
 - "Last run … looks stopped": the scheduler is off, or `ops` isn't deployed. Check `select public.ops_call('{"health":true}')` and look at the Edge Function logs.
 - Push "not set up": either the Firebase web config is missing in Platform settings → Integrations, or Push is switched off in Alerts → Settings.
 
+### Message templates and the in-app bell
+
+- **Where:** Control panel → Messaging → **Templates** (admins edit, support can view). Every message has an ID such as
+  `APT-002`; hospitals see the same IDs in Settings → Notifications.
+- **Order of wording:** catalog default → control-panel edit → the hospital's own wording (ignored when the template is
+  **locked**). Off in the panel = never sent, for every hospital; a channel off in the panel stays off for all of them.
+- **WhatsApp approval:** "WhatsApp sheet (CSV)" lists every WhatsApp template with `{{1}}…` and sample values. Submit
+  them at Meta / your provider, then fill in the approved name, parameters and status in each template.
+- **Daily messages** (doctor schedule 07:30 IST, platform digest 08:30, overdue invoices 10:00, owner digest 20:30) run from the
+  every-minute tick (`notify_daily_tick()`), once per hospital per day (`notify_once`).
+- **Bell:** `public.user_notifications`, 90-day history, read by `my_notifications()` / `read_notifications()`.
+- **Deploy:** run `supabase/upgrade-2026-10.sql`, then `npx supabase functions deploy ops notify`.
+
+### Server monitor (CPU, RAM, disk, containers, SSL)
+
+1. Make a long random key (`openssl rand -hex 24`) and save it as the **`SERVER_MONITOR_KEY`** secret of the `ops` Edge
+   Function (Supabase → Edge Functions → Secrets). Redeploy `ops`.
+2. On the server, as root: copy `scripts/server/hc-monitor.sh` to `/usr/local/bin/hc-monitor` (`chmod +x`), and create
+   `/etc/hc-monitor.env` (`chmod 600`) with `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SERVER_MONITOR_KEY` and
+   `SSL_DOMAINS="hospital.digitalcomrade.in airbase.digitalcomrade.in"`.
+3. `hc-monitor --dry-run` prints the report; `hc-monitor` sends one (Health → "Server" rows appear).
+4. Cron: `echo '*/5 * * * * root /usr/local/bin/hc-monitor >/dev/null 2>&1' > /etc/cron.d/hc-monitor`.
+
+Limits are in Alerts → Settings → thresholds (CPU 85 %, RAM 90 %, disk 85 %, SSL 14 days, silent after 15 minutes).
+No report for 15 minutes raises "Server monitor silent" (the agent or the server is down).
+
 ### Sign-in verification (OTP)
 
 - **Team:** Platform settings → **Security**. Hospitals: their **Settings → Security**, or control panel → Hospital → **Security**. Booking code on / off is in the same places.

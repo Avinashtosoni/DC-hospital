@@ -1,12 +1,12 @@
 import { ErrorBoundary } from '../ErrorBoundary'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, ChevronDown, Cross, EyeOff, LogOut, Megaphone, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
+import { ChevronDown, Cross, EyeOff, LogOut, Megaphone, Menu, Search, Settings, X, CircleUserRound } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { NAV, navLabel } from './nav'
 import { Avatar, Badge, Spinner } from '../ui'
 import { ROLE_LABEL } from '../../types'
-import { cn, ago } from '../../lib/utils'
+import { cn } from '../../lib/utils'
 import { useSiteSettings } from '../../site/cms/content'
 import { useAppSettings, useDashboardChrome } from '../../settings/AppSettingsProvider'
 import { appEnv } from '../../lib/supabase'
@@ -22,6 +22,7 @@ import { setMonitoringContext } from '../../lib/monitoring'
 import { siteTenant } from '../../tenancy/state'
 import { ImpersonationBanner } from '../../auth/ImpersonationBanner'
 import { PlatformAnnouncements } from './PlatformAnnouncements'
+import { NotificationBell } from './NotificationBell'
 
 /** Patients get the portal in their language; staff screens stay English. */
 function usePortalT() {
@@ -160,7 +161,6 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
   const navigate = useNavigate()
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
-  const [bell, setBell] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const notices = useTable('notices')
   const reads = useNoticeReads(user?.id)
@@ -197,32 +197,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
       <div className="ml-auto flex items-center gap-2">
         {user?.role === 'patient' && <LanguageSwitch />}
         {appEnv === 'staging' && <Badge tone="violet" className="hidden md:inline-flex">Staging</Badge>}
-        <div className="relative">
-          <button onClick={() => setBell((b) => !b)} className="relative grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Notifications">
-            <Bell className="h-5 w-5" />
-            {unread.length > 0 && <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white" aria-label={`${unread.length} unread`}>{unread.length > 9 ? '9+' : unread.length}</span>}
-          </button>
-          {bell && <>
-            <div className="fixed inset-0 z-40" onClick={() => setBell(false)} />
-            <div className="absolute right-0 z-50 mt-2 w-80 animate-pop-in rounded-xl border border-slate-200 bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><span className="text-sm font-semibold">{tr('Notices')}{unread.length > 0 && <span className="ml-1.5 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-600">{unread.length} new</span>}</span><Link to="/notices" onClick={() => setBell(false)} className="text-xs font-medium text-brand-700">{tr('View all')}</Link></div>
-              <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
-                {visible.length === 0 && <p className="px-4 py-8 text-center text-sm text-slate-400">{tr("You're all caught up")}</p>}
-                {visible.map((n) => (
-                  <button type="button" key={n.id} onClick={() => { setBell(false); navigate(`/notices?open=${n.id}`) }} className="block w-full px-4 py-3 text-left hover:bg-brand-50/50">
-                    <div className="flex items-center gap-2">
-                      {!reads.isRead(n.id) && isFresh(n) && <span className="h-2 w-2 shrink-0 rounded-full bg-brand-600" aria-label="unread" />}
-                      {n.priority !== 'normal' && <span className={cn('h-1.5 w-1.5 rounded-full', n.priority === 'urgent' ? 'bg-rose-500' : 'bg-amber-500')} />}
-                      <span className="text-sm font-medium text-slate-800">{n.title}</span>
-                    </div>
-                    <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{n.body}</p>
-                    <p className="mt-1 text-[11px] text-slate-400">{ago(n.published_on)}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>}
-        </div>
+        <NotificationBell notices={visible} unreadNotices={unread.length} isNoticeRead={(n) => reads.isRead(n.id) || !isFresh(n)} tr={tr} />
         <div className="relative">
           <button onClick={() => setMenu((m) => !m)} className="flex items-center gap-2 rounded-lg p-1 pr-2 hover:bg-slate-100">
             <Avatar name={user?.full_name} src={user?.avatar_url} size="sm" />

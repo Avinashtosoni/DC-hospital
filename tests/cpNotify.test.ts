@@ -9,7 +9,8 @@ import { broadcastCost } from '../control-panel/src/pages/BroadcastsPage'
 import { dayCells, hourCells, overall } from '../control-panel/src/pages/health/LiveChecks'
 import { validTo } from '../control-panel/src/pages/messaging/TestTab'
 import { canRetry } from '../control-panel/src/pages/messaging/DeliveryLogTab'
-import { TEMPLATE_EVENTS } from '../control-panel/src/pages/messaging/TemplatesTab'
+import { DELIVERY_TEMPLATES } from '../control-panel/src/pages/messaging/TemplateManager'
+import { CATALOG } from '../src/notify'
 
 const spec = (c: string) => ACCOUNTS.find((a) => a.channel === c)!
 
@@ -35,9 +36,9 @@ describe('shared accounts form', () => {
     expect(d.settings).toEqual({ PLATFORM_SMS_PROVIDER: 'fast2sms', PLATFORM_SMS_SENDER_ID: 'HCOMRD' })
     expect(diffAccount(spec('sms'), { PLATFORM_SMS_PROVIDER: 'msg91' }, { PLATFORM_SMS_PROVIDER: '' }, {}, []).settings).toEqual({ PLATFORM_SMS_PROVIDER: '' })
   })
-  test('templates cover the platform messages and every hospital event once', () => {
-    const ids = TEMPLATE_EVENTS.map((e) => e.id)
-    expect(ids.slice(0, 2)).toEqual(['platform_alert', 'platform_broadcast'])
+  test('templates cover the platform messages and every catalog message once', () => {
+    const ids = [...DELIVERY_TEMPLATES.map((e) => e.id), ...CATALOG.map((e) => e.id)]
+    expect(ids.slice(0, 3)).toEqual(['platform_alert', 'platform_broadcast', 'platform_otp'])
     expect(new Set(ids).size).toBe(ids.length)
     for (const id of ids) expect(id).toMatch(/^[a-z0-9_:-]{2,64}$/)
   })
