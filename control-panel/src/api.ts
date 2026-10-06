@@ -9,9 +9,10 @@ import type {
   ImportResult, HospitalMessaging, Channel, WalletRow, CreditNote, Announcement, AnnouncementSave, ImpersonationRow,
   SiteState, SitePageRow, SiteRevision, CpPost, PostSave,
   MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
-  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus,
+  DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
+import { carryLoginOtp, currentSessionId, requestLoginOtp, verifyLoginOtp, type OtpSent } from '../../src/auth/loginOtp'
 
 export interface CpApi {
   signIn(email: string, password: string): Promise<CpMe>
@@ -115,6 +116,15 @@ export interface CpApi {
   checkIntegration(id: 'razorpay' | 'sms' | 'whatsapp' | 'email' | 'push'): Promise<{ ok: boolean; check: { status: HealthStatus; detail?: string; latency_ms?: number } }>
   /** for each key: saved in the panel / set as an Edge secret (never the value) */
   keySources(keys: string[]): Promise<{ sources: Record<string, { panel: boolean; edge: boolean }> }>
+  /** team sign-in OTP: send this session's code now / check it (then cp_me says passed) */
+  requestOtp(channel: OtpChannelId | null): Promise<OtpSent>
+  verifyOtp(code: string): Promise<CpMe | null>
+  /** Platform settings → Security */
+  security(): Promise<CpSecurity>
+  saveSecurity(p: { loginOtp: Partial<CpSecurity['loginOtp']> }): Promise<CpSecurity>
+  /** Hospital → Security: that hospital's OTP switches */
+  hospitalOtp(id: string): Promise<CpHospitalOtp>
+  setHospitalOtp(id: string, p: { login?: Partial<CpHospitalOtp['otp']['login']>; booking?: Partial<CpHospitalOtp['otp']['booking']> }): Promise<CpHospitalOtp>
 }
 
 /** Postgres / PostgREST error → a sentence for people */
@@ -137,8 +147,10 @@ async function reauth(password: string) {
   const { data } = await supabase!.auth.getUser()
   const email = data.user?.email
   if (!email) throw new Error('Your session has expired — please sign in again.')
+  const before = await currentSessionId()
   const { error } = await supabase!.auth.signInWithPassword({ email, password })
   if (error) throw new Error(/invalid/i.test(error.message) ? 'Wrong password.' : error.message)
+  await carryLoginOtp(before)   // the new session keeps this device's verified sign-in code
 }
 
 /** Edge Function errors carry the real message in the JSON body */
@@ -283,6 +295,17 @@ const db: CpApi = {
   checkNow: () => invoke('ops', { health: true }),
   checkIntegration: (id) => invoke('ops', { check: id }),
   keySources: (keys) => invoke('ops', { sources: keys }),
+  async requestOtp(channel) {
+    const r = await requestLoginOtp(channel)
+    // deliver it now; if the ops function is not deployed the scheduled flush sends it within a minute
+    if (r.sent) await invoke<{ ok: boolean; message?: string }>('ops', { deliver_otp: r.ref }).then((d) => { if (d && d.ok === false && d.message) throw new Error(d.message) }, () => undefined)
+    return r
+  },
+  async verifyOtp(code) { await verifyLoginOtp(code); return rpc<CpMe | null>('cp_me') },
+  security: () => rpc('cp_security'),
+  saveSecurity: (p) => rpc('cp_save_security', { p }),
+  hospitalOtp: (id) => rpc('cp_hospital_otp', { p_tenant: id }),
+  setHospitalOtp: (id, p) => rpc('cp_set_hospital_otp', { p_tenant: id, p }),
 }
 
 /** no database configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY missing) — the panel can't work */

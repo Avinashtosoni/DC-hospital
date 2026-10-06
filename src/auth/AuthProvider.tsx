@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import { OtpRequiredError, type OtpChannelId, type OtpStatus } from '../data/errors'
 import { requestLoginOtp, verifyLoginOtp, type OtpSent } from './loginOtp'
 import { flushNotificationsSoon } from '../settings/store'
+import { supabase } from '../lib/supabase'
 
 export const auth: AuthAdapter = supabaseAuth
 
@@ -89,6 +90,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     requestOtp: async (channel) => {
       const r = await requestLoginOtp(channel)
       if (r.scope === 'hospital') flushNotificationsSoon(0, [r.ref])   // deliver the code right away
+      // a Hospital Comrade team member: their code goes out on the platform's shared accounts
+      else if (r.sent) void supabase?.functions.invoke('ops', { body: { deliver_otp: r.ref } }).catch(() => undefined)
       return r
     },
     verifyOtp: async (code) => { await verifyLoginOtp(code); const u = await load(() => auth.getCurrent()); qc.clear(); setSignedOut(false); return u },

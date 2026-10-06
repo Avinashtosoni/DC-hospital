@@ -9,7 +9,7 @@ import { platformName } from '../../src/lib/supabase'
 import { cp } from './api'
 import { MeContext, ROLE_LABEL, ROLE_TONE, useMe } from './ui'
 import type { ProviderRole } from './types'
-import { LoginPage } from './pages/LoginPage'
+import { LoginPage, OtpScreen } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { HospitalsPage } from './pages/HospitalsPage'
 import { HospitalPage } from './pages/HospitalPage'
@@ -55,6 +55,10 @@ export function App() {
     await cp.signOut()
     qc.setQueryData(['cp-me'], null)
     qc.removeQueries({ predicate: (q) => q.queryKey[0] !== 'cp-me' })   // the next person must not see this one's data
+  }
+  // team sign-in OTP on and this session has not entered its code: nothing else answers until it does
+  if (me.data.otp?.required && !me.data.otp.passed) {
+    return <OtpScreen status={me.data.otp} onVerified={(m) => { qc.removeQueries({ predicate: (q) => q.queryKey[0] !== 'cp-me' }); qc.setQueryData(['cp-me'], m) }} onCancel={signOut} />
   }
   return (
     <MeContext.Provider value={{ me: me.data, signOut }}>

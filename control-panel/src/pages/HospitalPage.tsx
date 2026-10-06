@@ -15,9 +15,10 @@ import { UsersTab } from './hospital/UsersTab'
 import { DataTab, openAsAdmin } from './hospital/DataTab'
 import { MessagingTab } from './hospital/MessagingTab'
 import { DomainsTab } from './hospital/DomainsTab'
+import { SecurityTab } from './hospital/SecurityTab'
 import { CreditNoteModal, CreditNotesSection, InvoiceActions, WalletLedgerSection } from './hospital/BillingExtras'
 
-type Tab = 'overview' | 'details' | 'users' | 'data' | 'messaging' | 'domains' | 'billing' | 'settings' | 'activity'
+type Tab = 'overview' | 'details' | 'users' | 'data' | 'messaging' | 'security' | 'domains' | 'billing' | 'settings' | 'activity'
 
 export function HospitalPage() {
   const { id = '' } = useParams()
@@ -29,6 +30,7 @@ export function HospitalPage() {
   const tabs: { value: Tab; label: string }[] = [{ value: 'overview', label: 'Overview' }, { value: 'details', label: 'Details' }]
   if (me.role !== 'finance') tabs.push({ value: 'users', label: 'Users' })
   tabs.push({ value: 'data', label: 'Data' }, { value: 'messaging', label: 'Messaging' })
+  if (me.role === 'admin' || me.role === 'support') tabs.push({ value: 'security', label: 'Security' })
   if (isAdmin(me.role)) tabs.push({ value: 'domains', label: 'Domains' })
   if (canBill(me.role) || me.role === 'support') tabs.push({ value: 'billing', label: canBill(me.role) ? 'Plan & billing' : 'Plan' })
   if (isAdmin(me.role)) tabs.push({ value: 'settings', label: 'Settings' }, { value: 'activity', label: 'Activity' })
@@ -61,6 +63,7 @@ export function HospitalPage() {
             {tab === 'users' && <UsersTab h={h} />}
             {tab === 'data' && <DataTab h={h} />}
             {tab === 'messaging' && <MessagingTab h={h} />}
+            {tab === 'security' && <SecurityTab h={h} />}
             {tab === 'domains' && <DomainsTab h={h} />}
             {tab === 'billing' && <BillingTab h={h} />}
             {tab === 'settings' && <SettingsTab h={h} />}

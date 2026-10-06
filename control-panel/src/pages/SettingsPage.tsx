@@ -10,18 +10,26 @@ import { cp, friendly } from '../api'
 import { RETENTION_KEYS, RETENTION_MIN, type BillingConfig, type RetentionKey } from '../types'
 import { dateTime, ErrorBox, Section } from '../ui'
 import { IntegrationsTab } from './settings/IntegrationsTab'
+import { SecurityTab } from './settings/SecurityTab'
 
 type PlanId = keyof BillingConfig['plans']
 
-type SettingsTab = 'billing' | 'integrations'
-const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [{ value: 'billing', label: 'Plans & billing' }, { value: 'integrations', label: 'Integrations' }]
+type SettingsTab = 'billing' | 'integrations' | 'security'
+const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [{ value: 'billing', label: 'Plans & billing' }, { value: 'integrations', label: 'Integrations' }, { value: 'security', label: 'Security' }]
 
 /** Platform settings: prices and billing rules, and the platform's own accounts (Razorpay, SMS, WhatsApp, e-mail, push) */
 export function SettingsPage() {
   const [sp, setSp] = useSearchParams()
-  const tab: SettingsTab = sp.get('tab') === 'integrations' ? 'integrations' : 'billing'
+  const tab: SettingsTab = sp.get('tab') === 'integrations' ? 'integrations' : sp.get('tab') === 'security' ? 'security' : 'billing'
   const tabs = <div className="mb-5"><Tabs tabs={SETTINGS_TABS} value={tab} onChange={(v) => setSp(v === 'billing' ? {} : { tab: v }, { replace: true })} /></div>
   if (tab === 'billing') return <BillingSettings tabs={tabs} />
+  if (tab === 'security') return (
+    <>
+      <PageHeader title="Platform settings" description="Sign-in protection for your own team." />
+      {tabs}
+      <SecurityTab />
+    </>
+  )
   return (
     <>
       <PageHeader title="Platform settings" description="Your own accounts: Razorpay for hospital payments, and the shared SMS, WhatsApp, e-mail and push accounts. Status, checks, test sends and keys." />

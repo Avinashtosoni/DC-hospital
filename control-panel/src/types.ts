@@ -1,3 +1,4 @@
+import type { OtpStatus, OtpChannelId } from '../../src/data/errors'
 import type { LicenseInfo } from '../../src/billing/license'
 import type { PaymentRow } from '../../src/billing/types'
 import type { BillingConfig } from '../../src/platform/billing'
@@ -6,7 +7,25 @@ import type { ProviderRole } from '../../src/tenancy/state'
 export type { ProviderRole, BillingConfig }
 export type ModuleMap = Record<string, 'provider' | 'hospital'>
 
-export interface CpMe { user_id: string; role: ProviderRole; email: string; full_name: string }
+export interface CpMe {
+  user_id: string; role: ProviderRole; email: string; full_name: string
+  /** team sign-in OTP (Platform settings → Security); passed = false → only the code screen until it is entered */
+  otp?: OtpStatus | null
+}
+export type { OtpStatus, OtpChannelId }
+/** Platform settings → Security */
+export interface CpSecurity {
+  loginOtp: { enabled: boolean; channels: OtpChannelId[] }
+  /** active team members and where a code can reach each one */
+  team: { user_id: string; email: string; role: ProviderRole; channels: OtpChannelId[] }[]
+}
+/** Hospital → Security: that hospital's OTP switches */
+export interface CpHospitalOtp {
+  otp: { login: { enabled: boolean; channels: OtpChannelId[]; roles: 'staff' | 'all' }; booking: { enabled: boolean; channels: OtpChannelId[] | null } }
+  channels_on: Record<OtpChannelId, boolean>
+  /** accounts the sign-in code applies to, and how many of them a code can reach */
+  people: number; reachable: number
+}
 
 export interface CpHospital {
   id: string
