@@ -292,10 +292,38 @@ snippets in `supabase/snippets/` still work as a fallback (e.g. for the very fir
 
 Plans, trials, payments and wallets: see *Billing (Razorpay)* below and the control panel's hospital page.
 
-### The platform domain and the demo
-- `https://<PLATFORM_DOMAIN>` is the Hospital Comrade product page. Never map it (or `www.`) to a hospital.
-- A sales demo, if wanted, is just another hospital on the database (sample data from `master.sql`), mapped to e.g.
-  `demo.<PLATFORM_DOMAIN>` in Settings → Domain. The product page no longer links to a browser-only demo.
+### The platform domain, hospital subdomains and the demo hospital
+- `https://<PLATFORM_DOMAIN>/` is **always** the Hospital Comrade product page. Never map it (or `www.`) to a hospital.
+  (Before, a `?hospital=` link opened earlier in the same tab made the bare `/` show that hospital — so one tab showed
+  DC Hospital and an incognito tab the product page. Fixed: `/` on the platform domain no longer remembers a hospital.)
+- **Where a hospital lives** (`src/tenancy/urls.ts`, used by every control-panel and sign-up link):
+  1. its custom domain (control panel → hospital → Domains; Cloudflare for SaaS below) — always wins;
+  2. else `https://<slug>.<PLATFORM_DOMAIN>` when `TENANT_SUBDOMAINS=on`;
+  3. else `https://<PLATFORM_DOMAIN>/?hospital=<slug>` (the `?hospital=` stays in the address bar, so reload / share works).
+- **Turning subdomains on** (once):
+  1. DNS: `A  *.hospital  →  <server IP>` (next to the existing `hospital` record). On Cloudflare keep it **DNS only**
+     (grey cloud): free Universal SSL does not cover a second-level wildcard like `*.hospital.digitalcomrade.in`
+     (proxying it needs Advanced Certificate Manager).
+  2. Coolify → the app → Domains: `https://hospital.digitalcomrade.in,https://*.hospital.digitalcomrade.in`.
+     A wildcard certificate needs Traefik's **DNS challenge** (Coolify → Servers → Proxy: a certresolver with the
+     Cloudflare DNS provider and `CF_DNS_API_TOKEN`); HTTP challenge can't issue wildcards.
+  3. Supabase → Authentication → URL configuration → Redirect URLs: add `https://*.hospital.digitalcomrade.in/**`
+     (password-reset and invitation links return to the hospital's own address).
+  4. Coolify → Environment: `TENANT_SUBDOMAINS=on` → redeploy. From then on old `?hospital=city` links on the platform
+     domain forward to `city.hospital.digitalcomrade.in` (same path), and "Open as Admin" / "Sign in as user" open there.
+  Reserved names (never a hospital slug): main, www, app, api, admin, demo, mail, help, status, signup, legal, controlpanel.
+- **The demo hospital** = the original DC Hospital (primary, slug `main` → `main.<PLATFORM_DOMAIN>`; map
+  `demo.<PLATFORM_DOMAIN>` to it in its Domains tab if you prefer that address). Every other hospital is real.
+  - Set up once: run `supabase/demo-hospital.sql` in the SQL editor (after `upgrade-2026-10.sql`).
+    ⚠ It **replaces everything in the primary hospital** with the demo data — now and every night at 03:00 IST.
+  - Demo doctors, staff, patients, appointments, bills, beds…; sign-in, booking and OTP work and are saved until the reset.
+    The reset deletes every account that signed up there (never the platform team), every record, and loads the demo
+    data again with dates relative to that day. Keys (`app_secrets`), domains and platform billing records stay.
+  - Control panel → **Platform settings → Demo hospital**: codes *shown on screen* (nothing sent, default) or *really
+    sent*; other messages on/off (off = recorded as skipped); one-click sign-ins on the login page (password shown);
+    nightly reset on/off; **Reset now**; **Save current setup as baseline** (its settings + website come back after
+    every reset).
+  - Visitors can't change the demo accounts' password, save provider keys, or connect domains there.
 - Call-back requests: control panel → **Leads** (admins).
 - The control panel lives at `/control-panel/` on every address of the app; only platform team accounts can sign in.
 

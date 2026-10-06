@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased: hospital subdomains and the demo hospital
+
+- **Platform domain fix:** `https://<PLATFORM_DOMAIN>/` is always the product page. A hospital opened earlier in the
+  same tab with `?hospital=` no longer takes over `/` (that is why one tab showed DC Hospital and incognito the product page).
+  A hospital opened on the platform domain keeps `?hospital=` in the address bar.
+- **Hospital subdomains** (`TENANT_SUBDOMAINS=on`): `<slug>.<PLATFORM_DOMAIN>`; old `?hospital=` links forward there.
+  Custom domains still win. All control-panel / sign-up links use one helper (`src/tenancy/urls.ts`).
+- **Demo hospital** (DC Hospital only; `supabase/demo-hospital.sql`, `scripts/sql/demo.sql`):
+  - Reset every night at 03:00 IST and from the control panel (visitors' accounts and records go, demo data comes back).
+  - One-time codes shown on screen or really sent, other messages on/off — Platform settings → Demo hospital.
+  - One-click demo sign-ins on its login page; a "demo hospital" reminder on every page.
+  - Optional baseline of its settings + website, restored after each reset.
+  - Visitors can't change the demo password, save keys or connect domains. Every other hospital is real.
+
 ## Unreleased: wacrm WhatsApp provider and OTP verification
 
 - **wacrm (WhatsApp CRM, Meta Cloud API)** is a WhatsApp provider for hospitals and for the shared platform account.

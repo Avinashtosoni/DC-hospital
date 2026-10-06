@@ -42,6 +42,7 @@ Optional: deploy production from **release tags** (`v1.4.0`) instead of `main` �
 | `TENANCY` | `single` (default) / `multi` | `multi` = Hospital Comrade SaaS: many hospitals on one database, chosen by domain |
 | `PLATFORM_NAME` | `Hospital Comrade` (default) | SaaS brand shown on platform screens (multi mode) |
 | `PLATFORM_DOMAIN` | `hospital.digitalcomrade.in` (default) | The platform's own domain — shows the Hospital Comrade product page (demo and multi mode); change it here when the domain changes |
+| `TENANT_SUBDOMAINS` | off (default) / `on` | multi mode: every hospital at `<slug>.PLATFORM_DOMAIN` — turn on only after wildcard DNS + SSL (docs/MULTI_TENANCY.md) |
 | `APP_ENV` | `production` (default) / `staging` | staging badge + `noindex` |
 | `PLATFORM_LEGAL_NAME`, `PLATFORM_ADDRESS`, `PLATFORM_EMAIL`, `PLATFORM_PHONE`, `PLATFORM_GRIEVANCE_OFFICER`, `PLATFORM_JURISDICTION` | — | company shown on the platform's legal pages (`/legal/*`) |
 | `SENTRY_DSN` | — | optional error reporting (Sentry-compatible; messages scrubbed of personal data) |
