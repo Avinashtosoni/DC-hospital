@@ -202,7 +202,7 @@ describe('upgrade', () => {
     await db.as(null, `update public.app_settings set data = jsonb_build_object('notifications', $1::jsonb) where key = 'app'`, [JSON.stringify(old)])
     await db.exec(readFileSync(resolve(__dirname, '../../supabase/upgrade-2026-10.sql'), 'utf8'))
     const r = await db.one<{ e: unknown; p: { enabled: boolean } }>(null, `select data #> '{notifications,events,notice_published}' e, data #> '{notifications,push}' p from public.app_settings where key = 'app'`)
-    expect(r.e).toEqual({ sms: false, whatsapp: false, email: false, push: true })
+    expect(r.e).toEqual({ sms: false, whatsapp: false, email: false, push: true, inapp: true })
     expect(r.p.enabled).toBe(false)
   })
 })

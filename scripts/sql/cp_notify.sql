@@ -27,7 +27,8 @@ returns jsonb language sql immutable as $$
     "channels":   {"bell": true, "email": true, "push": false, "whatsapp": false},
     "events":     {},
     "thresholds": {"queueBacklog": 200, "failurePct": 10, "dbPct": 80, "dbLimitMb": 8192, "latencyMs": 3000, "walletLowPaise": 20000, "trialDays": 3,
-                   "connPct": 80, "storagePct": 80, "storageLimitMb": 102400, "webhookHours": 24, "sslDays": 14},
+                   "connPct": 80, "storagePct": 80, "storageLimitMb": 102400, "webhookHours": 24, "sslDays": 14,
+                   "cpuPct": 85, "ramPct": 90, "diskPct": 85, "serverStaleMin": 15},
     "health":     {"enabled": true, "siteUrl": ""}
   }'::jsonb
 $$;
@@ -47,7 +48,11 @@ returns jsonb language sql immutable as $$
     {"key": "job_late",         "label": "Scheduled job late or failing",            "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
     {"key": "delivery_spike",   "label": "Message failures spiking",                 "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
     {"key": "threshold",        "label": "Limit crossed (queue, database, storage, SSL…)", "group": "System", "severity": "warning",  "roles": ["admin", "support"]},
-    {"key": "health_recovered", "label": "Service back to normal",                   "group": "System", "severity": "info",     "roles": ["admin", "support"]}
+    {"key": "health_recovered", "label": "Service back to normal",                   "group": "System", "severity": "info",     "roles": ["admin", "support"]},
+    {"key": "tenant_status",    "label": "Hospital suspended / restored",            "group": "Sales",  "severity": "warning",  "roles": ["admin", "support"]},
+    {"key": "domain_added",     "label": "Custom domain added",                      "group": "System", "severity": "info",     "roles": ["admin", "support"]},
+    {"key": "impersonation",    "label": "Signed in as a user",                      "group": "Safety", "severity": "warning",  "roles": ["admin"]},
+    {"key": "platform_digest",  "label": "Daily platform summary",                   "group": "Sales",  "severity": "info",     "roles": ["admin", "finance"]}
   ]'::jsonb
 $$;
 
@@ -321,9 +326,15 @@ declare
   cfg jsonb := public.ops_config();
   ev jsonb := (select e from jsonb_array_elements(public.ops_alert_catalog()) e where e ->> 'key' = p_event);
   v_sev text; v_id uuid; u record; v_ch text[]; v_subject text; v_text text;
+  pt jsonb; v_vars jsonb; k text;
 begin
   if ev is null then raise exception 'Unknown alert %', p_event; end if;
   if not coalesce((cfg #>> array['events', p_event, 'enabled'])::boolean, true) then return null; end if;
+  -- control panel → Messaging → Templates (notify_catalog.sql): off / channels / wording
+  if to_regprocedure('public.platform_template(text)') is not null then
+    execute 'select public.platform_template($1)' into pt using p_event;
+  end if;
+  if pt is not null and not coalesce((pt ->> 'enabled')::boolean, true) then return null; end if;
   v_sev := coalesce(nullif(p_severity, ''), nullif(cfg #>> array['events', p_event, 'severity'], ''), ev ->> 'severity');
   if v_sev not in ('info', 'warning', 'critical') then v_sev := ev ->> 'severity'; end if;
   if p_dedupe is not null and exists (select 1 from public.platform_alerts where dedupe_key = p_dedupe
@@ -335,12 +346,23 @@ begin
   returning id into v_id;
   v_subject := case v_sev when 'critical' then '[Critical] ' when 'warning' then '[Warning] ' else '' end || left(p_title, 180);
   v_text := p_title || case when coalesce(p_body, '') <> '' then E'\n\n' || p_body else '' end;
+  if coalesce(trim(pt -> 'tpl' ->> 'subject'), '') <> '' or coalesce(trim(pt -> 'tpl' ->> 'text'), '') <> '' then
+    v_vars := coalesce(p_data, '{}'::jsonb) || jsonb_build_object('title', p_title, 'body', coalesce(p_body, ''), 'link', coalesce(p_link, ''), 'severity', v_sev);
+    if coalesce(trim(pt -> 'tpl' ->> 'subject'), '') <> '' then v_subject := pt -> 'tpl' ->> 'subject'; end if;
+    if coalesce(trim(pt -> 'tpl' ->> 'text'), '') <> '' then v_text := pt -> 'tpl' ->> 'text'; end if;
+    for k in select jsonb_object_keys(v_vars) loop
+      v_subject := replace(v_subject, '{' || k || '}', coalesce(v_vars ->> k, ''));
+      v_text := replace(v_text, '{' || k || '}', coalesce(v_vars ->> k, ''));
+    end loop;
+    v_subject := left(v_subject, 200);
+  end if;
   for u in select pu.user_id, pu.role, a.email, pr.events as pevents, pr.whatsapp
              from public.provider_users pu join auth.users a on a.id = pu.user_id
              left join public.platform_alert_prefs pr on pr.user_id = pu.user_id
             where pu.active and (pu.role = 'admin' or pu.role in (select jsonb_array_elements_text(ev -> 'roles'))) loop
     v_ch := case when jsonb_typeof(u.pevents -> p_event) = 'array' then array(select jsonb_array_elements_text(u.pevents -> p_event)) else public.ops_default_channels(v_sev) end;
-    v_ch := array(select c from unnest(v_ch) c where coalesce((cfg #>> array['channels', c])::boolean, false));
+    v_ch := array(select c from unnest(v_ch) c where coalesce((cfg #>> array['channels', c])::boolean, false)
+                    and coalesce((pt -> 'channels' ->> case c when 'bell' then 'inapp' else c end)::boolean, true));
     if 'bell' = any (v_ch) then insert into public.platform_alert_inbox (alert_id, user_id) values (v_id, u.user_id) on conflict do nothing; end if;
     if 'email' = any (v_ch) and coalesce(u.email, '') <> '' then
       insert into public.platform_outbox (kind, ref_id, channel, recipient, user_id, subject, body, vars)

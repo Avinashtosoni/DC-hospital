@@ -18,6 +18,7 @@ import type { Role, TableName } from '../src/types'
 import { DEFAULT_FORMS } from '../src/forms/schema'
 import { DEFAULT_APP_SETTINGS, type NotifyEvent } from '../src/settings/types'
 import { BILLING_DEFAULTS } from '../src/platform/billing'
+import { CATALOG } from '../src/notify'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RAW = '__SQL__'
@@ -222,6 +223,15 @@ const platformCmsSql = readFileSync(resolve(root, 'scripts/sql/platform_cms.sql'
 const cpNotifySql = readFileSync(resolve(root, 'scripts/sql/cp_notify.sql'), 'utf8')
 // OTP on sign-in (hospital + control-panel team) — enforced through current_tenant() / provider_role()
 const otpSql = readFileSync(resolve(root, 'scripts/sql/otp_verify.sql'), 'utf8')
+// the notification template library (src/notify/catalog.ts) — last of the modules: it replaces the queue functions
+const catalogJson = JSON.stringify(Object.fromEntries(CATALOG.map((e) => [e.id, {
+  code: e.code, group: e.group, scope: e.scope, audience: e.audience, label: e.label, channels: e.channels,
+  defaults: Object.fromEntries(e.channels.map((c) => [c, !!e.defaults[c]])), tokens: e.tokens, waCategory: e.waCategory,
+  ...(e.copy ? { copy: e.copy } : {}), ...(e.freeText ? { freeText: true } : {}),
+}])))
+if (catalogJson.includes('$catalog$')) throw new Error('notification catalog contains $catalog$')
+const notifySql = readFileSync(resolve(root, 'scripts/sql/notify_catalog.sql'), 'utf8').replace('@@NOTIFY_CATALOG@@', () => catalogJson)
+if (notifySql.includes('@@NOTIFY_CATALOG@@')) throw new Error('notification catalog placeholder missing')
 const demoSql = readFileSync(resolve(root, 'scripts/sql/demo.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
@@ -308,6 +318,8 @@ ${cpNotifySql}
 
 ${otpSql}
 
+${notifySql}
+
 ${demoSql}
 commit;
 
@@ -390,6 +402,8 @@ ${cpNotifySql}
 
 ${otpSql}
 
+${notifySql}
+
 ${demoSql}
 
 -- =====================================================================================================
@@ -425,6 +439,7 @@ const CORE_SECTIONS = ['audit', 'cms', 'booking', 'settings', 'patient']
 for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCoreSql],
   ['audit', 'audit.sql', auditSql], ['cms', 'cms.sql', cmsSql], ['booking', 'booking.sql', bookingSql], ['settings', 'settings.sql', settingsSql], ['patient', 'patient.sql', patientSql],
   ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql], ['control-ops', 'control_panel_ops.sql', controlOpsSql], ['platform-cms', 'platform_cms.sql', platformCmsSql], ['cp-notify', 'cp_notify.sql', cpNotifySql], ['otp-verify', 'otp_verify.sql', otpSql],
+  ['notify-catalog', 'notify_catalog.sql', notifySql],
   ['demo', 'demo.sql', demoSql],
   ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
   const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`

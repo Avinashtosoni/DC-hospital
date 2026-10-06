@@ -127,7 +127,8 @@ begin
            where c.table_schema = 'public' and c.column_name = 'tenant_id'
              and c.table_name not in ('tenant_domains', 'provider_assignments', 'provider_audit', 'profiles', 'push_tokens', 'password_reset_otps',
                                       'notification_outbox', 'message_usage', 'audit_log', 'billing_payments', 'wallet_ledger', 'billing_credit_notes',
-                                      'privacy_requests', 'consent_log')  -- phase 7: patients' privacy rights work even when read-only
+                                      'privacy_requests', 'consent_log',  -- phase 7: patients' privacy rights work even when read-only
+                                      'user_notifications', 'notify_once', 'known_devices')  -- the bell, sign-in devices, daily bookkeeping
   loop
     execute format('drop trigger if exists trg_license_guard on public.%I', t);
     execute format('create trigger trg_license_guard before insert or update or delete on public.%I for each row execute function public.license_guard()', t);
@@ -346,8 +347,9 @@ begin
     from (select (v_now - make_interval(months => g))::date as month from generate_series(v_n - 1, 0, -1) g) m), '[]'::jsonb);
 end $$;
 
--- phase 6: renewal reminders to each hospital's owner — 7, 3 and 1 day before the trial / plan ends, and once when the
--- grace period starts. E-mail (+ app push). Daily from the scheduler (Settings → Notifications → automatic delivery).
+-- phase 6: renewal reminders to each hospital's owner — 30, 15, 7, 3 and 1 day before the trial / plan ends, and once when
+-- the grace period starts. E-mail + app push + in-app bell (control panel → Templates: SUB-001 may change channels / wording).
+-- Daily from the scheduler (Settings → Notifications → automatic delivery).
 create or replace function public.queue_billing_reminders()
 returns int language plpgsql volatile security definer set search_path = public as $$
 declare
@@ -370,7 +372,7 @@ begin
     v_end := greatest(coalesce(r.paid_until, '-infinity'::timestamptz), coalesce(r.trial_ends_at, '-infinity'::timestamptz));
     continue when v_end = '-infinity'::timestamptz;
     v_left := ((v_end at time zone 'Asia/Kolkata')::date - v_today);
-    v_m := case when r.lic in ('trial', 'active') and v_left in (7, 3, 1) then 'd' || v_left
+    v_m := case when r.lic in ('trial', 'active') and v_left in (30, 15, 7, 3, 1) then 'd' || v_left
                 when r.lic = 'grace' then 'grace' end;
     continue when v_m is null;
     -- once per hospital, milestone and end date (paying moves the end date, so the next round starts fresh)
@@ -390,15 +392,16 @@ begin
       else 'Namaste {name}, the ' || case when r.lic = 'trial' then 'free trial' else '{plan} plan' end
            || ' for {hospital} ends on {date} ({days}). Renew in a minute: {link} — UPI, cards and net banking, with a GST invoice.' end;
     perform set_config('app.tenant_id', r.id::text, true);
-    v_count := v_count + public.notify_enqueue_raw('billing_reminder',
-      jsonb_build_object('subject', v_subj, 'text', v_body), array['email', 'push'], null, v_mail, v_prof,
+    -- one per hospital reminded (email + push + bell count once)
+    if public.notify_enqueue_raw('billing_reminder',
+      jsonb_build_object('subject', v_subj, 'text', v_body), array['email', 'push', 'inapp'], null, v_mail, v_prof,
       jsonb_build_object('name', split_part(coalesce(v_name, 'there'), ' ', 1), 'milestone', v_m,
         'hospital', coalesce(nullif((select c.data ->> 'name' from public.site_content c where c.tenant_id = r.id and c.key = 'settings'), ''), r.name),
         'until', to_char(v_end at time zone 'Asia/Kolkata', 'YYYY-MM-DD'), 'date', to_char(v_end at time zone 'Asia/Kolkata', 'DD Mon YYYY'),
         'days', case when v_left = 1 then 'tomorrow' else 'in ' || v_left || ' days' end,
         'read_only', to_char((v_end + make_interval(days => coalesce((cfg ->> 'graceDays')::int, 7))) at time zone 'Asia/Kolkata', 'DD Mon YYYY'),
         'plan', initcap(r.plan), 'link', v_link),
-      'tenants', r.id, null);
+      'tenants', r.id, null) > 0 then v_count := v_count + 1; end if;
   end loop;
   perform set_config('app.tenant_id', '', true);
   return v_count;

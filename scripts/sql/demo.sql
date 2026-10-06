@@ -103,6 +103,7 @@ begin
   end if;
   perform set_config('app.tenant_id', v::text, true);
   perform set_config('app.skip_audit', 'on', true);
+  perform set_config('app.notify_off', 'on', true);   -- loading the demo data must not message (or ring the bell for) anyone
   -- run as the database itself (like the SQL editor): role guards and the sign-in OTP gate are for people.
   -- Put back before returning.
   perform set_config('request.jwt.claim.sub', '', true);
@@ -152,6 +153,7 @@ begin
   on conflict (key) do update set data = public.platform_settings.data || jsonb_build_object('last_reset_at', now(),
     'last_reset_by', v_by), updated_at = now();
   perform set_config('app.skip_audit', '', true);
+  perform set_config('app.notify_off', '', true);
   perform set_config('app.tenant_id', '', true);
   perform set_config('request.jwt.claim.sub', coalesce(v_sub, ''), true);
   perform set_config('request.jwt.claims', coalesce(v_jwt, ''), true);

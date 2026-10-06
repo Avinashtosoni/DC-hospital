@@ -1,14 +1,20 @@
 import type { Role } from '../types'
 import { THEME_PALETTES, type ThemeId } from './palettes'
+import { GROUP_LABEL, NEW_HOSPITAL_EVENTS, ORIGINAL_META, type Audience, type Group, type NewHospitalEvent } from '../notify/catalog'
 
 // ------------------------------------------------------------------ notifications
 export type Channel = 'sms' | 'whatsapp' | 'email' | 'push'
 export const CHANNELS: Channel[] = ['sms', 'whatsapp', 'email', 'push']
 export const CHANNEL_LABEL: Record<Channel, string> = { sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', push: 'Push (FCM)' }
-export type NotifyEvent =
+/** the 17 events from before the template library (their wording below is what saved settings were compared with) */
+export type OriginalEvent =
   | 'otp' | 'password_otp' | 'login_otp' | 'appointment_booked' | 'appointment_reminder' | 'appointment_rescheduled' | 'appointment_cancelled'
   | 'invoice_created' | 'payment_received' | 'lab_report_ready' | 'feedback_request' | 'staff_invite'
   | 'account_created' | 'account_updated' | 'account_deleted' | 'password_changed' | 'notice_published'
+/** every event a hospital controls in Settings → Notifications (the full library: src/notify/catalog.ts) */
+export type NotifyEvent = OriginalEvent | NewHospitalEvent
+/** a channel switch for one event — the five delivery channels plus the in-app bell */
+export type EventChannel = Channel | 'inapp'
 
 export interface EventTemplate {
   /** SMS / WhatsApp text (and email body). Tokens like {name} are replaced. */
@@ -27,7 +33,8 @@ export interface EventTemplate {
   pushText?: string
 }
 
-export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: Channel[]; tokens: string[] }[] = [
+export interface EventDef { id: NotifyEvent; label: string; hint: string; channels: Channel[]; tokens: string[]; code?: string; group?: Group; audience?: Audience; inapp?: boolean }
+const ORIGINAL_EVENTS: EventDef[] = [
   { id: 'otp', label: 'Booking OTP', hint: 'One-time code when a patient books online (channels: Settings → Security)', channels: ['sms', 'whatsapp', 'email'], tokens: ['code', 'hospital'] },
   { id: 'password_otp', label: 'Password reset OTP', hint: '"Forgot password → Use mobile" on the sign-in page', channels: ['sms', 'whatsapp'], tokens: ['code', 'hospital'] },
   { id: 'login_otp', label: 'Sign-in OTP', hint: 'Code after the password, when Settings → Security asks for one (channels picked there)', channels: ['sms', 'whatsapp', 'email'], tokens: ['code', 'name', 'hospital'] },
@@ -46,12 +53,19 @@ export const EVENTS: { id: NotifyEvent; label: string; hint: string; channels: C
   { id: 'password_changed', label: 'Password changed', hint: 'Security alert after any password change', channels: ['sms', 'whatsapp', 'email', 'push'], tokens: ['name', 'time', 'link', 'hospital', 'hospital_phone'] },
   { id: 'notice_published', label: 'New notice', hint: 'A notice is posted on the Notice Board (sent to its audience)', channels: ['sms', 'whatsapp', 'email', 'push'], tokens: ['name', 'title', 'notice', 'priority', 'link', 'hospital'] },
 ]
+/** every hospital event, original ones first (with their ID / group from the catalog) */
+export const EVENTS: EventDef[] = [
+  ...ORIGINAL_EVENTS.map((e) => { const m = ORIGINAL_META[e.id as OriginalEvent]; return { ...e, code: m.code, group: m.group, audience: m.audience, inapp: !!m.inapp } }),
+  ...NEW_HOSPITAL_EVENTS.map((e) => ({ id: e.id, label: e.label, hint: e.hint, channels: e.channels.filter((c): c is Channel => c !== 'inapp'), tokens: e.tokens,
+    code: e.code, group: e.group, audience: e.audience, inapp: e.channels.includes('inapp') })),
+]
+export const EVENT_GROUP_LABEL = GROUP_LABEL
 
 /** Events that only make sense on some channels (others are greyed out in the matrix). */
 export const eventChannels = (id: NotifyEvent): Channel[] => EVENTS.find((e) => e.id === id)?.channels ?? []
 
 const T = (text: string, subject: string, waTemplate = '', waParams = '', waText = ''): EventTemplate => ({ text, subject, waTemplate, waParams, smsTemplateId: '', waText })
-export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
+const ORIGINAL_TEMPLATES: Record<OriginalEvent, EventTemplate> = {
   otp: T('{code} is your {hospital} booking code. It is valid for 10 minutes. Do not share it with anyone.', 'Your booking code', '', 'code',
     '🔐 *{code}* is your {hospital} verification code.\n\nIt is valid for 10 minutes. Do not share it with anyone — our staff will never ask for it.'),
   password_otp: T('{code} is your {hospital} password reset code. It is valid for 10 minutes. If you did not ask for it, ignore this message.', 'Your password reset code', '', 'code',
@@ -81,6 +95,18 @@ export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
   notice_published: { ...T('{hospital} notice: {title}. {notice} — {link}', '📌 {title}', '', 'title,notice', '📌 *{title}*\n\n{notice}\n\nRead on the notice board: {link}\n— {hospital}'),
     pushText: '{notice}' },
 }
+/** default wording of every hospital event: the original 17 above + the template library's new events */
+export const DEFAULT_TEMPLATES: Record<NotifyEvent, EventTemplate> = {
+  ...ORIGINAL_TEMPLATES,
+  ...(Object.fromEntries(NEW_HOSPITAL_EVENTS.map((e) => [e.id, { text: e.copy!.text, subject: e.copy!.subject, waTemplate: '', waParams: e.copy!.waParams ?? '',
+    smsTemplateId: '', waText: e.copy!.waText ?? '', pushText: e.copy!.pushText ?? '' }])) as Record<NewHospitalEvent, EventTemplate>),
+}
+
+/** default switches: the original events (in-app on where the catalog says so) + the new events' catalog defaults */
+const withEventDefaults = (original: Record<OriginalEvent, Partial<Record<Channel, boolean>>>): Record<NotifyEvent, Partial<Record<EventChannel, boolean>>> => ({
+  ...(Object.fromEntries(Object.entries(original).map(([k, v]) => [k, ORIGINAL_META[k as OriginalEvent].inapp ? { ...v, inapp: true } : v])) as Record<OriginalEvent, Partial<Record<EventChannel, boolean>>>),
+  ...(Object.fromEntries(NEW_HOSPITAL_EVENTS.map((e) => [e.id, Object.fromEntries(e.channels.map((c) => [c, !!e.defaults[c]]))])) as Record<NewHospitalEvent, Partial<Record<EventChannel, boolean>>>),
+})
 
 export type EmailProvider = 'resend' | 'sendgrid' | 'smtp'
 export type SmsProvider = 'msg91' | 'twilio' | 'fast2sms' | 'webhook'
@@ -111,7 +137,7 @@ export interface NotificationSettings {
   push: { enabled: boolean; apiKey: string; authDomain: string; projectId: string; messagingSenderId: string; appId: string; vapidKey: string }
   /** ₹ per message, only used to estimate the messaging bill in the usage report */
   rates: Record<Channel, number>
-  events: Record<NotifyEvent, Partial<Record<Channel, boolean>>>
+  events: Record<NotifyEvent, Partial<Record<EventChannel, boolean>>>
   templates: Record<NotifyEvent, EventTemplate>
 }
 
@@ -198,7 +224,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     whatsapp: { enabled: false, source: 'own', provider: 'openwa', phoneNumberId: '', businessAccountId: '', language: 'en', twilioAccountSid: '', twilioFrom: '', webhookUrl: '', openwaUrl: '', openwaSession: '', wacrmUrl: '', chatIdFormat: '91{phone}@c.us', msg91Number: '', msg91Namespace: '', aisensyTestCampaign: '', botEnabled: false },
     push: { enabled: false, apiKey: '', authDomain: '', projectId: '', messagingSenderId: '', appId: '', vapidKey: '' },
     rates: { sms: 0.25, whatsapp: 0.8, email: 0.05, push: 0 },
-    events: {
+    events: withEventDefaults({
       otp: { sms: true, whatsapp: true },
       password_otp: { sms: true, whatsapp: true },
       login_otp: { sms: true, whatsapp: true, email: true },
@@ -216,7 +242,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
       account_deleted: { sms: false, whatsapp: false, email: true },
       password_changed: { sms: true, whatsapp: false, email: true, push: true },
       notice_published: { sms: false, whatsapp: false, email: false, push: true },
-    },
+    }),
     templates: DEFAULT_TEMPLATES,
   },
 }

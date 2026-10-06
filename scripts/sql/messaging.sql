@@ -556,6 +556,8 @@ begin
   if to_regprocedure('public.impersonation_expire()') is not null then execute 'select public.impersonation_expire()'; end if;
   -- control panel: team alerts, broadcasts and health checks (cp_notify.sql)
   if to_regprocedure('public.ops_cron_tick()') is not null then execute 'select public.ops_cron_tick()'; end if;
+  -- template library: doctor schedules, follow-ups, birthdays, overdue bills, digests, server watchdog (notify_catalog.sql)
+  if to_regprocedure('public.notify_daily_tick()') is not null then execute 'select public.notify_daily_tick()'; end if;
   if not exists (select 1 from public.notification_outbox where status = 'pending' and next_attempt_at <= now()) then return; end if;
   v_url := public.tenant_secret('notify_function_url');
   v_key := public.tenant_secret('service_role_key');

@@ -173,7 +173,7 @@ begin
     perform public.notify_enqueue_raw('privacy_request',
       jsonb_build_object('subject', '{hospital}: new privacy request ({kind})',
         'text', 'A patient ({name}) asked for data {kind}. Please answer within 30 days: Privacy requests in the app.'),
-      array['email', 'push'], null, o.email, o.profile_id, jsonb_build_object('kind', p_kind, 'name', coalesce(v_name, 'patient')), 'privacy_requests', v_id);
+      array['email', 'push', 'inapp'], null, o.email, o.profile_id, jsonb_build_object('kind', p_kind, 'name', coalesce(v_name, 'patient')), 'privacy_requests', v_id);
   end if;
   return v_id;
 end $$;
