@@ -13,6 +13,7 @@ import { cp, friendly } from '../../api'
 import type { HealthStatus, LiveService } from '../../types'
 import { dateTime, Section } from '../../ui'
 import { ago } from '../../AlertBell'
+import { slug } from './visuals'
 
 const ServiceChart = lazy(() => import('./ServiceChart'))
 
@@ -97,7 +98,7 @@ export function LiveChecks() {
       {!h ? <Skeleton className="h-40" /> : !services.length ? <p className="text-sm text-slate-500">No results yet.</p> : (
         <div className="space-y-5">
           {groups.map((g) => (
-            <div key={g}>
+            <div key={g} id={`grp-${slug(g)}`} className="scroll-mt-20">
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">{g}</p>
               <ul className="divide-y divide-slate-100 rounded-xl border border-slate-100">
                 {services.filter((s) => (s.group ?? 'Other') === g).map((s) => {
