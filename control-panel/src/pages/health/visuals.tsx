@@ -2,7 +2,7 @@
  * Small, dependency-free SVG visuals for the Health page: a status ring / gauge, a donut with legend, a stacked
  * horizontal bar and a sparkline-sized meter. (The bigger time / bar charts are in HealthCharts.tsx with recharts.)
  */
-import type { ReactNode } from 'react'
+import { useSyncExternalStore, type ReactNode } from 'react'
 import { cn } from '../../../../src/lib/utils'
 
 export const COLOR = {
@@ -114,4 +114,14 @@ export function pctFrom(detail: string | null | undefined): number | null {
 }
 
 /** anchor id for a live-check group ("Edge functions" → "edge-functions") */
+/** true below the given width (default: Tailwind's sm, 640 px) — re-renders when the window crosses it */
+export function useIsSmall(px = 640) {
+  const query = `(max-width: ${px - 1}px)`
+  return useSyncExternalStore(
+    (cb) => { const m = window.matchMedia(query); m.addEventListener('change', cb); return () => m.removeEventListener('change', cb) },
+    () => window.matchMedia(query).matches,
+    () => false,
+  )
+}
+
 export const slug = (g: string) => g.toLowerCase().replace(/[^a-z0-9]+/g, '-')

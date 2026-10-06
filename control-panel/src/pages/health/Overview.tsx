@@ -12,7 +12,7 @@ import { cp } from '../../api'
 import type { HealthStatus, LiveService } from '../../types'
 import { ago } from '../../AlertBell'
 import { cellLabel, dayCells, hourCells, overall } from './LiveChecks'
-import { COLOR, Donut, goodColor, Legend, Meter, pctFrom, Ring, slug, StackBar, type Slice } from './visuals'
+import { COLOR, Donut, goodColor, Legend, Meter, pctFrom, Ring, slug, StackBar, type Slice, useIsSmall } from './visuals'
 
 const Charts = lazy(() => import('./HealthCharts').then((m) => ({ default: m.UptimeTrend })))
 const LatencyBars = lazy(() => import('./HealthCharts').then((m) => ({ default: m.LatencyBars })))
@@ -39,6 +39,7 @@ const fmtMs = (ms: number | null) => (ms == null ? '—' : ms >= 1000 ? `${(ms /
 export function HealthOverview() {
   const q = useQuery({ queryKey: ['cp-health-live'], queryFn: () => cp.liveHealth(), refetchInterval: 60_000, retry: false })
   const [range, setRange] = useState<'24h' | '7d'>('24h')
+  const small = useIsSmall()
   const services = useMemo(() => q.data?.services ?? [], [q.data])
   const live = services.filter((s) => s.status !== 'off')
   const state = overall(services)
@@ -90,10 +91,10 @@ export function HealthOverview() {
       {/* hero */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <Card className={cn('overflow-hidden bg-gradient-to-br ring-1', HERO[state])}>
-          <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center">
-            <Ring className="self-center sm:self-auto" value={score} size={148} stroke={14} color={score == null ? COLOR.off : score >= 95 ? COLOR.ok : score >= 75 ? COLOR.warn : COLOR.fail} label={`Health score ${score ?? 'unknown'}`}>
+          <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:gap-5 sm:p-5">
+            <Ring className="self-center sm:self-auto" value={score} size={small ? 120 : 148} stroke={small ? 12 : 14} color={score == null ? COLOR.off : score >= 95 ? COLOR.ok : score >= 75 ? COLOR.warn : COLOR.fail} label={`Health score ${score ?? 'unknown'}`}>
               <div>
-                <p className="font-display text-4xl font-bold leading-none text-brand-950 tabular-nums">{score ?? '—'}</p>
+                <p className="font-display text-3xl font-bold leading-none text-brand-950 tabular-nums sm:text-4xl">{score ?? '—'}</p>
                 <p className="mt-1 text-[11px] font-medium uppercase tracking-wider text-slate-500">health score</p>
               </div>
             </Ring>
@@ -105,12 +106,12 @@ export function HealthOverview() {
                 </span>
                 Live status
               </p>
-              <h2 className="mt-1 font-display text-2xl font-bold text-brand-950">{HEADLINE[state]}</h2>
+              <h2 className="mt-1 font-display text-xl font-bold text-brand-950 sm:text-2xl">{HEADLINE[state]}</h2>
               <p className="mt-1 text-sm text-slate-600">
                 {counts.ok} of {live.length} services healthy{counts.warn > 0 && <> · <b className="text-amber-700">{counts.warn} need attention</b></>}{counts.fail > 0 && <> · <b className="text-rose-700">{counts.fail} down</b></>}
               </p>
               <p className="mt-0.5 text-xs text-slate-400">{q.data.last_run ? `Last checked ${ago(q.data.last_run)}` : 'Not checked yet'} · {services.length} checks</p>
-              <div className="mt-4 grid grid-cols-3 gap-2">
+              <div className="mt-4 grid grid-cols-3 gap-1.5 sm:gap-2">
                 <Kpi icon={<Activity className="h-3.5 w-3.5" />} label="Uptime 24 h" value={up24 == null ? '—' : `${up24.toFixed(up24 === 100 ? 0 : 2)}%`} tone={up24 == null ? undefined : goodColor(up24)} />
                 <Kpi icon={<Gauge className="h-3.5 w-3.5" />} label="Uptime 7 d" value={up7 == null ? '—' : `${up7.toFixed(up7 === 100 ? 0 : 2)}%`} tone={up7 == null ? undefined : goodColor(up7)} />
                 <Kpi icon={<Zap className="h-3.5 w-3.5" />} label="Avg response" value={fmtMs(avgMs)} tone={avgMs == null ? undefined : avgMs >= 3000 ? COLOR.fail : avgMs >= 1500 ? COLOR.warn : COLOR.ok} />
@@ -119,11 +120,11 @@ export function HealthOverview() {
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="p-4 sm:p-5">
           <p className="text-sm font-semibold text-brand-950">Services by status</p>
           <p className="text-xs text-slate-500">{services.length} live checks</p>
           <div className="mt-3 flex items-center gap-5">
-            <Donut slices={slices} size={132} stroke={18}>
+            <Donut slices={slices} size={small ? 112 : 132} stroke={small ? 16 : 18}>
               <div><p className="font-display text-2xl font-bold text-brand-950 tabular-nums">{services.length}</p><p className="text-[10px] uppercase tracking-wider text-slate-400">checks</p></div>
             </Donut>
             <Legend slices={slices} className="min-w-0 flex-1" />
@@ -137,11 +138,11 @@ export function HealthOverview() {
       </div>
 
       {/* groups */}
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(165px,1fr))] gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(auto-fit,minmax(165px,1fr))] sm:gap-3">
         {groups.map(({ g, list, state: st }) => {
           const ok = list.filter((s) => s.status === 'ok').length, set = list.filter((s) => s.status !== 'off').length
           return (
-            <a key={g} href={`#grp-${slug(g)}`} className="group rounded-2xl border border-slate-100 bg-white p-3.5 shadow-sm transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md">
+            <a key={g} href={`#grp-${slug(g)}`} className="group min-w-0 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm sm:p-3.5 transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md">
               <div className="flex items-center justify-between gap-2">
                 <p className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{g}</p>
                 <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', { ok: 'bg-emerald-500', warn: 'bg-amber-500', fail: 'bg-rose-500', off: 'bg-slate-300' }[st])} title={STATUS_LABEL[st]} />
@@ -153,9 +154,9 @@ export function HealthOverview() {
         })}
       </div>
 
-      {/* resources + trend */}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
-        <Card className="p-5">
+      {/* resources + trend (+ response times on very wide screens) */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
+        <Card className="p-4 sm:p-5">
           <p className="text-sm font-semibold text-brand-950">Resources</p>
           <p className="text-xs text-slate-500">Database, storage{resources.some((r) => r.s.service.startsWith('server:')) ? ' and the server' : ' — server CPU / RAM / disk appear once the monitor agent reports'}</p>
           {resources.length === 0 ? <p className="mt-4 text-sm text-slate-500">No resource numbers yet.</p> : (
@@ -164,7 +165,7 @@ export function HealthOverview() {
             </div>
           )}
         </Card>
-        <Card className="p-5">
+        <Card className="p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div><p className="text-sm font-semibold text-brand-950">Uptime & response time</p><p className="text-xs text-slate-500">Average of every service that is set up</p></div>
             <div className="flex rounded-lg border border-slate-200 p-0.5 text-xs" role="group" aria-label="Trend range">
@@ -177,10 +178,9 @@ export function HealthOverview() {
               : <Suspense fallback={<Skeleton className="h-56" />}><Charts data={trend} /></Suspense>}
           </div>
         </Card>
-      </div>
 
       {withMs.length > 1 && (
-        <Card className="p-5">
+        <Card className="p-4 sm:p-5 lg:col-span-2 2xl:col-span-1">
           <p className="text-sm font-semibold text-brand-950">Response time by service</p>
           <p className="text-xs text-slate-500">Latest check · amber over 1.5 s, red over 3 s</p>
           <div className="mt-2">
@@ -190,15 +190,16 @@ export function HealthOverview() {
           </div>
         </Card>
       )}
+      </div>
     </div>
   )
 }
 
 function Kpi({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-xl bg-white/80 p-2.5 ring-1 ring-slate-100">
-      <p className="flex items-center gap-1 text-[11px] text-slate-500">{icon}{label}</p>
-      <p className="mt-0.5 font-display text-base font-bold tabular-nums" style={{ color: tone ?? '#121233' }}>{value}</p>
+    <div className="min-w-0 rounded-xl bg-white/80 p-2 ring-1 ring-slate-100 sm:p-2.5">
+      <p className="flex items-center gap-1 truncate text-[10px] text-slate-500 sm:text-[11px]"><span className="hidden shrink-0 sm:inline">{icon}</span>{label}</p>
+      <p className="mt-0.5 truncate font-display text-sm font-bold tabular-nums sm:text-base" style={{ color: tone ?? '#121233' }}>{value}</p>
     </div>
   )
 }

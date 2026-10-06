@@ -105,7 +105,7 @@ function Shell({ children }: { children: ReactNode }) {
           <p className="text-[11px] uppercase tracking-wider text-brand-300">Control panel</p>
         </div>
       </div>
-      <div className="flex-1 space-y-0.5 px-3">
+      <div className="scrollbar-thin min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3">
         {NAV.filter((n) => n.roles.includes(me.role)).map((n) => (
           <NavLink key={n.to} to={n.to} end={n.to === '/'} onClick={() => setOpen(false)}
             className={({ isActive }) => cn('flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition',
@@ -114,7 +114,7 @@ function Shell({ children }: { children: ReactNode }) {
           </NavLink>
         ))}
       </div>
-      <div className="space-y-3 border-t border-white/10 p-4">
+      <div className="space-y-3 border-t border-white/10 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <a href="/" className="flex items-center gap-2 text-xs text-brand-300 hover:text-white"><ExternalLink className="h-3.5 w-3.5" /> Product website</a>
         <div className="flex items-center gap-3">
           <Avatar name={me.full_name} size="sm" />
@@ -133,21 +133,22 @@ function Shell({ children }: { children: ReactNode }) {
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <button type="button" aria-label="Close menu" className="absolute inset-0 bg-brand-950/50" onClick={() => setOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-64 animate-slide-left bg-brand-950">
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] animate-slide-left bg-brand-950">
             <button type="button" aria-label="Close menu" onClick={() => setOpen(false)} className="absolute right-3 top-5 rounded-lg p-1.5 text-brand-200 hover:bg-white/10"><X className="h-5 w-5" /></button>
             {nav}
           </aside>
         </div>
       )}
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-[#e6e6f5] bg-white/85 px-4 backdrop-blur sm:px-6">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-[#e6e6f5] bg-white/85 px-3 backdrop-blur sm:px-6 lg:px-8 2xl:px-10">
         <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="rounded-lg p-2 text-slate-600 hover:bg-brand-50 lg:hidden"><Menu className="h-5 w-5" /></button>
-        <p className="font-display text-sm font-semibold text-brand-950 lg:hidden">{platformName}</p>
+        <p className="min-w-0 truncate font-display text-sm font-semibold text-brand-950 lg:hidden">{NAV.find((n) => n.to !== '/' && loc.pathname.startsWith(n.to))?.label ?? (loc.pathname === '/' ? 'Overview' : platformName)}</p>
         <div className="ml-auto flex items-center gap-2">
           <AlertBell />
           <Badge tone={ROLE_TONE[me.role]}>{ROLE_LABEL[me.role]}</Badge>
         </div>
       </header>
-      <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
+      {/* full width on every screen; comfortable gutters that grow with the screen */}
+      <main className="w-full min-w-0 px-3 py-4 sm:px-6 sm:py-6 lg:px-8 2xl:px-10">
         {/* a crash in one page shows a friendly card; the sidebar keeps working and the next page resets it */}
         <ErrorBoundary resetKey={loc.pathname}>{children}</ErrorBoundary>
       </main>

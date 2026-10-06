@@ -3,7 +3,7 @@
  * response time per service, messages per hospital and records per hospital.
  */
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { COLOR } from './visuals'
+import { COLOR, useIsSmall } from './visuals'
 
 const tick = { fontSize: 11, fill: '#64748b' }
 const tip = { contentStyle: { borderRadius: 12, fontSize: 12, border: '1px solid #e2e8f0', boxShadow: '0 8px 24px -12px rgba(41,41,102,.3)' } }
@@ -12,8 +12,9 @@ export interface TrendPoint { label: string; pct: number | null; ms: number | nu
 
 /** average uptime (area) and response time (line area) of every service, per hour / day */
 export function UptimeTrend({ data }: { data: TrendPoint[] }) {
+  const small = useIsSmall()
   return (
-    <div className="h-56 w-full" role="img" aria-label="Uptime and response time trend, all services">
+    <div className="h-48 w-full sm:h-56 2xl:h-64" role="img" aria-label="Uptime and response time trend, all services">
       <ResponsiveContainer>
         <AreaChart data={data} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
           <defs>
@@ -22,8 +23,8 @@ export function UptimeTrend({ data }: { data: TrendPoint[] }) {
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
           <XAxis dataKey="label" tick={tick} interval="preserveStartEnd" minTickGap={16} />
-          <YAxis yAxisId="pct" domain={[(min: number) => Math.max(0, Math.floor(Math.min(min, 90) / 10) * 10), 100]} tick={tick} unit="%" width={44} />
-          <YAxis yAxisId="ms" orientation="right" tick={tick} unit=" ms" width={58} />
+          <YAxis yAxisId="pct" domain={[(min: number) => Math.max(0, Math.floor(Math.min(min, 90) / 10) * 10), 100]} tick={tick} unit="%" width={small ? 38 : 44} />
+          <YAxis yAxisId="ms" orientation="right" tick={tick} unit={small ? '' : ' ms'} width={small ? 36 : 58} />
           <Tooltip {...tip} formatter={(v, name) => (v == null ? ['no checks', name] : name === 'Uptime' ? [`${v}%`, name] : [`${v} ms`, name])} />
           <Legend wrapperStyle={{ fontSize: 12 }} />
           <Area yAxisId="pct" type="monotone" dataKey="pct" name="Uptime" stroke={COLOR.ok} strokeWidth={2} fill="url(#hc-up)" connectNulls />
@@ -36,14 +37,16 @@ export function UptimeTrend({ data }: { data: TrendPoint[] }) {
 
 /** latest response time per service, slowest first; amber over 1.5 s, red over 3 s */
 export function LatencyBars({ data }: { data: { label: string; ms: number }[] }) {
-  const h = Math.max(160, data.length * 26 + 30)
+  const small = useIsSmall()
+  const h = Math.max(160, data.length * (small ? 24 : 26) + 30)
   return (
     <div className="w-full" style={{ height: h }} role="img" aria-label="Response time per service">
       <ResponsiveContainer>
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: small ? 8 : 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-          <XAxis type="number" tick={tick} unit=" ms" />
-          <YAxis type="category" dataKey="label" tick={tick} width={130} />
+          <XAxis type="number" tick={tick} unit={small ? '' : ' ms'} />
+          <YAxis type="category" dataKey="label" tick={small ? { ...tick, fontSize: 10 } : tick} width={small ? 96 : 130}
+            tickFormatter={(v: string) => (small && v.length > 13 ? `${v.slice(0, 12)}…` : v)} />
           <Tooltip {...tip} formatter={(v) => [`${v} ms`, 'Response time']} cursor={{ fill: '#f1f1fb' }} />
           <Bar dataKey="ms" radius={[0, 6, 6, 0]} maxBarSize={16}>
             {data.map((d) => <Cell key={d.label} fill={d.ms >= 3000 ? COLOR.fail : d.ms >= 1500 ? COLOR.warn : COLOR.brand} />)}

@@ -139,7 +139,7 @@ export default function SettingsPage() {
   if (params.get('tab') === 'plan') return <Navigate to="/billing" replace />
   if (!isOwner) {
     return (
-      <div className="mx-auto max-w-4xl">
+      <div className="w-full">
         <PageHeader title="Settings" description="Your account and access. Hospital-wide settings are managed by the owner." />
         <AccountTab />
       </div>
