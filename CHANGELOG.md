@@ -1,0 +1,251 @@
+# Changelog
+
+## Unreleased: verified mobile number on free-trial sign-up
+
+- **/signup → Mobile number → Verify:** a 6-digit code on WhatsApp (SMS as the fallback) from the platform's shared
+  accounts; 10 minutes, resend after 30 s, "send by SMS instead", 5 attempts. The form can't be sent without it —
+  `platform_trial_signup` checks a one-time token server-side (`scripts/sql/signup_otp.sql`).
+- **Control Panel → Sign-ups:** "Mobile verification" (Required / Off, WhatsApp and/or SMS) and a "Verified on
+  WhatsApp" mark on each request. The default-plan picker uses the live plan list.
+- **wacrm / Meta:** set an approved Authentication template under Messaging → Templates → "Free-trial sign-up code"
+  (parameter `{{code}}`). The `ops` function sends the code at once (`deliver_signup_otp`).
+- Run `supabase/upgrade-2026-10.sql` again and redeploy `ops`.
+
+## Unreleased: Plans & billing page
+
+- **Control panel → Plans & billing** (`/plans`, admin): add, edit, duplicate, hide/show, mark most popular, reorder,
+  archive/restore and delete plans; a live website-card preview while editing; hospitals, paying, trial and MRR per plan.
+  A plan that hospitals use can only be archived (they keep it; new hospitals can't choose it). Tabs for Billing rules
+  (GST, trial, grace, yearly price, extra-message rates, wallet limits), Invoices (seller / GSTIN / SAC) and History.
+- **Price changes** on a plan in use ask: new price for everyone from their next renewal, or keep today's price for
+  existing hospitals (saved as their own agreed price). Owners can be told by in-app bell + e-mail (template `SUB-008`),
+  and their Billing page shows the change for 30 days.
+- **Plans live in the database** (`scripts/sql/plans.sql`, `platform_plans()`): the product site's pricing, contact form,
+  sign-up, the hospital Billing page, invoices and every control-panel plan picker use them. The built-in Clinic /
+  Hospital / Enterprise / Custom plans are the defaults. Platform settings no longer has a Billing tab.
+- Run `supabase/upgrade-2026-10.sql` again to get it.
+
+
+## Unreleased: notification template library, in-app bell and server monitor
+
+- **Template library** (`src/notify/`, `scripts/sql/notify_catalog.sql`): every message has an ID (`AUTH-001`, `APT-002`,
+  `BIL-004`, `SYS-010`…), a group, an audience and default English wording for Email / WhatsApp / SMS / Push / In-app.
+  ~45 new hospital events: staff invites and role changes, new device sign-in, patient registration, booking received
+  (reception), checked in / no-show / rescheduled, admission and discharge, lab results ready, part payments, cancelled
+  and overdue invoices, leave requests and decisions, privacy request updates, the doctor's daily schedule and the owner's
+  daily digest. Platform → owner: suspended / restored, plan changed, trial extended, domain connected, closing. Team:
+  daily platform digest, server alerts.
+- **Control panel → Messaging → Templates:** full control of all templates — on/off for every hospital, single channels
+  off, reword, lock (hospitals can't reword), WhatsApp template name / parameters / category / approval status and DLT
+  IDs, custom templates (also a starting point in Broadcasts), reset to standard, and a **WhatsApp submission sheet (CSV)**
+  with `{{1}}, {{2}}…` and sample values. Team-alert wording from here is used by `raise_platform_alert`.
+- **Hospital Settings → Notifications:** grouped list with IDs, search, an In-app column, and the platform's switches /
+  locks shown (disabled checkboxes, read-only wording).
+- **In-app bell:** the top-bar bell now has "For you" (personal notifications, mark read / all read) and "Notices".
+- **Branded HTML email:** logo, periwinkle header, button for the main link, large code box for OTPs, contact footer.
+- **Server monitor:** `scripts/server/hc-monitor.sh` (cron, every 5 min) posts CPU / RAM / disk / containers / SSL to the
+  `ops` function (`x-monitor-key` = `SERVER_MONITOR_KEY`); rows on Health ("Server"), alerts over the thresholds, and a
+  "server silent" alert after 15 minutes without a report.
+- Renewal reminders 30 / 15 / 7 / 3 / 1 days before; demo resets send nothing (`app.notify_off`).
+
+## Unreleased: hospital subdomains and the demo hospital
+
+- **Platform domain fix:** `https://<PLATFORM_DOMAIN>/` is always the product page. A hospital opened earlier in the
+  same tab with `?hospital=` no longer takes over `/` (that is why one tab showed DC Hospital and incognito the product page).
+  A hospital opened on the platform domain keeps `?hospital=` in the address bar.
+- **Hospital subdomains** (`TENANT_SUBDOMAINS=on`): `<slug>.<PLATFORM_DOMAIN>`; old `?hospital=` links forward there.
+  Custom domains still win. All control-panel / sign-up links use one helper (`src/tenancy/urls.ts`).
+- **Demo hospital** (DC Hospital only; `supabase/demo-hospital.sql`, `scripts/sql/demo.sql`):
+  - Reset every night at 03:00 IST and from the control panel (visitors' accounts and records go, demo data comes back).
+  - One-time codes shown on screen or really sent, other messages on/off — Platform settings → Demo hospital.
+  - One-click demo sign-ins on its login page; a "demo hospital" reminder on every page.
+  - Optional baseline of its settings + website, restored after each reset.
+  - Visitors can't change the demo password, save keys or connect domains. Every other hospital is real.
+
+## Unreleased: wacrm WhatsApp provider and OTP verification
+
+- **wacrm (WhatsApp CRM, Meta Cloud API)** is a WhatsApp provider for hospitals and for the shared platform account.
+  - Key and scope check via `/api/v1/me`.
+  - System health check.
+  - **Connect** registers the signed `message.received` webhook, so patient replies reach the booking chatbot (`X-Wacrm-Signature` verified).
+  - The old "WA CRM / OpenWA" wording is now just "OpenWA".
+- **Sign-in verification (OTP):**
+  - A 6-digit code after the password, once per device sign-in.
+  - Hospitals (staff only, or everyone) and the control-panel team each get an on/off switch and channel choice (WhatsApp / SMS / e-mail).
+  - Enforced in the database: `current_tenant()` and `provider_role()` stay empty until the code is entered.
+  - Safeguards:
+    - Switching it on needs your own verified code.
+    - People with no reachable channel aren't locked out.
+    - Impersonation sessions count as verified.
+    - Password re-checks keep the verified session.
+  - New pages: **Settings → Security**, **Platform settings → Security**, and **Hospital → Security** in the control panel.
+- **Booking OTP:**
+  - On/off switch: when off, `/book` confirms straight away, still rate-limited per number.
+  - Channel choice, including **e-mail**.
+- New message templates: **Sign-in code** (`login_otp`) and **Team sign-in code** (`platform_otp`).
+
+## Earlier: control panel messaging, alerts, broadcasts and live health
+
+- **Platform settings → Integrations:**
+  - Razorpay, SMS, WhatsApp, e-mail and Firebase push are now in one place.
+  - Each card shows the live status, where the keys come from (panel or Edge secret), Check connection, Send test, and write-only keys.
+  - Razorpay keys can now be saved in the panel (Vault). The `billing` function prefers them over the `RAZORPAY_*` secrets.
+  - The card shows test / live mode, whether webhooks are arriving, and the webhook URL to copy.
+  - Health also checks the Razorpay keys.
+- **Messaging** keeps Templates and the Delivery log. Old Shared accounts / Test send links go to Integrations.
+
+- **Messaging page:**
+  - Shared SMS, WhatsApp, e-mail and Firebase push accounts, with keys kept in Supabase Vault. Keys are write-only, saving one needs your password, and every change is audited.
+  - Template IDs per message, test sends, and a cross-hospital delivery log with Retry.
+- **Broadcasts:**
+  - Channels: banner, e-mail, WhatsApp, SMS and push.
+  - Audience: by plan, status, a hand-picked list of hospitals, and role.
+  - Preview with recipient count and cost, schedule option, and a delivery report. The platform pays.
+- **Team alerts:**
+  - Header bell and an Alerts page.
+  - Admin switches per channel and per event, with severity and limits.
+  - Personal choices per member (bell, e-mail, browser push, WhatsApp), plus a separate control-panel push service worker.
+- **Live health checks:** every 5 minutes, covering site, Auth, Storage, Edge Functions, provider keys, database size, queue, failures and scheduler. Shows uptime, latency, failure history and Check now. Alerts fire when something goes down or recovers.
+- **More health checks:** Razorpay webhook last seen (and rejected signatures), database connections, file storage used, hospital domain HTTPS and certificate expiry, and MSG91 / Fast2SMS key checks. The live checks have a 24 hours / 7 days toggle.
+- **Own alerts** for "Scheduled job late" and "Message failures spiking", each switchable on its own. New limits: connections, storage, webhook hours and SSL days.
+- Health also checks the database itself (with response time). Each service has a graph of uptime and response time. Old history is cleaned up once a night.
+- Alerts in the inbox can be marked unread again.
+- Test send has one card and button per channel. Messaging (including the delivery log) is admin-only.
+- **New `ops` Edge Function.** `notify` now reads shared-account keys saved in the control panel (Edge secrets are the fallback).
+- **To upgrade:**
+  - Re-run `supabase/upgrade-2026-10.sql`.
+  - Run `supabase functions deploy notify ops` and `supabase functions deploy billing --no-verify-jwt`.
+  - Enable the `supabase_vault` extension.
+
+## Unreleased — About us page redesign
+
+- New layout: split hero with buttons and an illustrated card (or your picture), numbers strip, story with a sticky heading and quote, icon mission/vision cards, "who we build for", a comparison table, numbered values, a vertical "how we work" timeline, a commitments band, company details and a "work with us" card.
+- All new sections are editable in control panel → Website → About us; empty sections and company rows are hidden.
+
+## Unreleased — richer product website
+
+- New CMS-editable sections, each with built-in default content: before/after problems, "made for India", integrations strip (Home); patient journey timeline and per-role views (Features); "included in every plan" (Pricing); specialities and a go-live plan (Solutions); role access table and FAQs (Security); how we work (About); what happens next and FAQs (Contact).
+- More modules, solutions (diagnostic labs, day-care) and FAQ topics (WhatsApp & SMS, support & training, patients, GST invoices).
+- Softened claims that the product cannot yet back up.
+- Three starter blog articles (OPD no-shows, HMS checklist, DPDP overview), seeded only once — deleting them keeps them deleted.
+- Saved CMS pages pick up the new sections automatically (deep-merge over defaults).
+
+## Unreleased — product website & its CMS
+
+- **Separate pages** on the platform domain: Home, Features, Solutions, Pricing (plan comparison, add-ons, pricing
+  questions), Security & privacy, About, Contact, FAQ and a **Blog** (topics, scheduled posts). Header navigation,
+  a full footer, an optional announcement bar and per-page SEO tags. Old `/#pricing`-style links still work.
+- **Legal pages:** five new ones: Cookie Policy, Acceptable Use, Grievance Redressal (IT Rules 2021 / DPDP),
+  Disclaimer and Service Levels & Support. There are 11 in all, every one editable. ⚠ Starting text: have a lawyer review it.
+- **Control panel → Website:** edit every page, the legal pages and the brand / contact details with forms, save
+  drafts, preview them on the live site (`?preview`, platform team only), publish, see the earlier versions and restore
+  them, or reset a page to the built-in text. Blog editor with Markdown, cover image, topics, SEO and scheduling. An
+  image library (`platform-media` storage bucket). Admins edit; support can look. Every publish is in the audit log.
+- A page that was never published shows the built-in text, so the site is never empty. Plan prices still come from
+  `src/platform/plans.ts`, because they must match billing.
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run). The product site only shows when
+`TENANCY=multi`.
+
+## Unreleased — control panel: manage every hospital
+
+The Hospital Comrade control panel can now run a hospital's account without opening it (admin = everything,
+support = their assigned hospitals without money or deleting, finance = billing). Every action is in the audit log.
+
+- **Details:** website contact (name, address, phones, e-mail, logo link) and legal / GST details (legal name, GSTIN,
+  PAN, billing address); hand the hospital to another owner; resend / copy the owner's sign-up link.
+- **Users:** every account with search and role filter — change role, block / unblock, e-mail a password reset,
+  invite staff (link copied), cancel invitations, remove (admins). A hospital always keeps an owner.
+- **Data:** record counts and 30-day figures, read-only look-up of patients / doctors / appointments / bills (each look
+  is logged), *Open as admin* (the hospital app with owner access) and *Export ZIP*, CSV import of patients and doctors
+  (checked first, duplicates skipped, a bad row never stops the rest).
+- **Messaging:** WhatsApp / SMS / e-mail on or off, own or shared account, and a monthly cap on the shared accounts.
+- **Domains:** add, check, make primary and remove website addresses from the panel.
+- **Billing:** download any tax invoice as PDF, full wallet history, and GST credit notes against paid invoices
+  (credit to the wallet or refund; full credit marks the invoice refunded).
+- **Announcements:** banners inside the hospital app for chosen hospitals and roles (critical ones can't be dismissed).
+- **Hospitals list:** plan filter and CSV export.
+- **Sign in as user (admins):** written reason + password, a new tab only (the admin's own sign-in is untouched), amber
+  banner with a 30-minute countdown and *End session*; sign-out, password change and "sign out everywhere" are blocked in
+  that tab; the session is deleted when it ends or expires; all sessions are listed in the Audit log (and can be ended).
+  Patients can't be impersonated. Note: an already-issued access token can live until its expiry (Supabase default 1 h —
+  set *JWT expiry* to 1800 s in Supabase → Auth to match the 30 minutes).
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run), then deploy the new Edge Function:
+`supabase functions deploy impersonate`.
+
+## Unreleased — production-readiness audit
+
+- **Security (important):** when no SMS / WhatsApp gateway was connected, the booking OTP was returned to the browser
+  (the *show demo OTP* switch defaulted to on). The code is now never sent to the browser; online booking needs SMS or
+  WhatsApp switched on for *Booking OTP*, otherwise the booking page asks visitors to call the hospital.
+- **Demo mode removed:** the app always uses the database. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` it shows
+  *Database not connected* instead of keeping patient data in one browser's storage. The one-click demo logins, the
+  in-browser demo hospitals, the *show demo OTP / demo logins* switches and the product page's *Live demo* links are gone.
+  `REQUIRE_BACKEND` is no longer needed. Sample data for staging stays in `master.sql` (`scripts/seed/`).
+- **Data integrity (database):** records can't point at another hospital's rows; invoice totals are recomputed from the
+  line items; payments can't exceed the balance or be taken on draft / cancelled bills; a bill with payments can't be
+  cancelled; a patient can't hold two live admissions and a bed can't hold two patients.
+- **Access rules:** doctors sign / change only their own prescriptions and appointments; reception edits only unpaid bills
+  and no longer sees the staff directory (salaries are owner / accountant only); a hospital always keeps at least one owner;
+  licence dates are no longer readable by the public.
+- **Validation:** Indian mobile numbers, no future dates of birth, amounts and quantities with limits, discharge after
+  admission — checked in the forms and by the database, with readable error messages.
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run).
+
+## Hardening after the October 2026 audit
+
+- **Security:** the WhatsApp webhook rejects (401) Twilio / Meta messages when their signing secret is not set, instead of
+  accepting them unsigned. Booking and password-reset codes are also limited per internet connection (10/hour, hashed
+  address) so one person cannot exhaust a hospital's hourly OTP budget. Website CMS links (social, map, directions, logo)
+  only allow http(s)/tel/mailto — a `javascript:` link is hidden.
+- **Go-live check:** `npm run preflight` fails when Supabase Auth has *Confirm email* off or sign-ups disabled.
+- **Scale:** the owner / accountant dashboards add up revenue in the database (`dashboard_finance()`), not by downloading
+  six months of payments.
+- **Speed:** the demo store and seed data (~24 kB gzip) loaded only in demo mode (since removed).
+  Firebase is now just `@firebase/app` + `@firebase/messaging` (push) — no Firestore/gRPC.
+- **Tooling:** Vite 7, Vitest 4, plugin-react 5 — `npm audit` reports 0 vulnerabilities. ESLint 9 (`npm run lint`, in CI
+  and `npm run check`).
+- **Fixes:** dashboard cards no longer push the page sideways on phones; the control panel shows a friendly card instead
+  of a white page if a screen crashes; the service worker trims old cached files; privacy requests give clear errors;
+  a date-dependent test no longer fails late in the evening (IST).
+
+Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run).
+
+## v1.0.0 — Hospital Comrade (October 2026)
+
+The single-hospital system becomes **Hospital Comrade**: many hospitals on one database, each on its own domain, with
+a control panel for the platform team, subscriptions and a launch kit.
+
+### Hospital app
+- Six roles (owner, doctor, receptionist, accountant, staff, patient) with role dashboards, permissions mirrored by
+  row-level security, appointments, patient records, prescriptions, lab, admissions and beds, billing with GST,
+  expenses and reports, inventory, notice board, audit log.
+- Hospital website with a CMS, online booking with OTP, forms and enquiries; Hindi / English; installable app (PWA).
+- Messaging on SMS, WhatsApp and e-mail (own keys or the platform's), push notifications, WhatsApp booking bot.
+- Server-side pagination and search for large hospitals.
+
+### Multi-hospital platform (phases 0–7)
+- Tenancy in the database itself (restrictive `tenant_isolation` policy on every table), hospital picked by domain.
+- Custom domains with automatic SSL (Cloudflare for SaaS).
+- Plans, free trial, grace and read-only, messaging wallet, Razorpay payments, GST invoices (`HC/YYYY-YY/NNNNNN`).
+- Control panel: hospitals, team (admin / support / finance), payments, leads, audit, platform settings.
+- Owner billing page; privacy rights, data export, offboarding with notice and purge, incident register, system health,
+  retention.
+
+### Phase 8 — launch
+- **Legal pages** — Terms, Privacy, Refund & Cancellation, Service Delivery, Data Processing Agreement, Contact on the
+  platform domain (`/legal/*`); company details from `PLATFORM_*` variables; consent links at checkout and on forms.
+- **Self-service free trial** — `/signup` with Terms + DPA consent (version recorded), rate limits and a honeypot;
+  open / closed, review first or instant, trial length — all set in the panel's new **Sign-ups** page; welcome e-mail;
+  unclaimed trials closed automatically.
+- **Security & monitoring** — Content-Security-Policy and HSTS (`CSP_MODE`, `HSTS`), launch checklist in System health
+  (`cp_launch_check`), optional error reporting without personal data (`SENTRY_DSN`), encrypted nightly off-site
+  database backup (GitHub Action).
+- **Go-live kit** — [docs/GO_LIVE.md](docs/GO_LIVE.md) (Mumbai runbook), `npm run preflight`, and a setup checklist on
+  new hospitals' owner dashboards.
+
+### Upgrading an existing database
+Run `supabase/upgrade-2026-10.sql` (safe to run again), redeploy the Edge Functions, then switch automatic delivery
+off and on once in Settings → Notifications.

@@ -1,0 +1,83 @@
+# Off-site database backup (phase 8.3) — on top of Supabase's own daily backups.
+# Every night at 02:30 IST (and on demand) it dumps the database, encrypts it with your passphrase and keeps it as a
+# private workflow artifact for 30 days — optionally also in your own S3 / R2 bucket.
+#
+# Repository → Settings → Secrets and variables → Actions:
+#   SUPABASE_DB_URL     required  Supabase → Connect → Session pooler URI (postgresql://postgres.xxx:PASSWORD@aws-0-ap-south-1.pooler.supabase.com:5432/postgres)
+#   BACKUP_PASSPHRASE   required  long random text — keep a copy offline; without it the backups cannot be opened
+#   BACKUP_S3_URI       optional  s3://bucket/path   (+ AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION; BACKUP_S3_ENDPOINT for R2 / other S3)
+# Nothing set → the job just says so and succeeds. Restore steps: docs/GO_LIVE.md → "Backups".
+# (Scheduled runs only happen on the default branch.)
+name: Database backup
+
+on:
+  schedule:
+    - cron: '0 21 * * *'   # 21:00 UTC = 02:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      S3_URI: ${{ secrets.BACKUP_S3_URI }}
+      S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+    steps:
+      - name: Not configured
+        if: env.DB_URL == ''
+        run: echo "::notice::SUPABASE_DB_URL is not set — no backup taken. See the comments at the top of .github/workflows/backup.yml."
+
+      - name: Refuse unencrypted backups
+        if: env.DB_URL != '' && env.PASSPHRASE == ''
+        run: |
+          echo "::error::BACKUP_PASSPHRASE is not set — backups contain patient data and are never stored unencrypted."
+          exit 1
+
+      - name: Dump (pg_dump 17, custom format)
+        if: env.DB_URL != '' && env.PASSPHRASE != ''
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y-%m-%dT%H%MZ)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          mkdir -p out
+          # public = all hospital data; auth = sign-in accounts; storage = file metadata (the files live in Storage)
+          docker run --rm -e PGURL="$DB_URL" -v "$PWD/out:/out" postgres:17-alpine \
+            sh -c 'pg_dump "$PGURL" --format=custom --compress=9 --no-owner --no-privileges --schema=public --schema=auth --schema=storage --file=/out/db.dump'
+          ls -lh out/db.dump
+          test "$(stat -c %s out/db.dump)" -gt 10000
+
+      - name: Encrypt (AES-256)
+        if: env.DB_URL != '' && env.PASSPHRASE != ''
+        run: |
+          set -euo pipefail
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PASSPHRASE" --symmetric --cipher-algo AES256 \
+            --output "out/hospital-comrade-$STAMP.dump.gpg" out/db.dump
+          shred -u out/db.dump
+          sha256sum out/*.gpg | tee out/SHA256SUMS
+
+      - name: Keep as artifact (30 days)
+        if: env.DB_URL != '' && env.PASSPHRASE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ env.STAMP }}
+          path: out/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Copy to S3 / R2 (optional)
+        if: env.DB_URL != '' && env.PASSPHRASE != '' && env.S3_URI != ''
+        run: |
+          set -euo pipefail
+          aws s3 cp out/ "${S3_URI%/}/" --recursive ${S3_ENDPOINT:+--endpoint-url "$S3_ENDPOINT"}

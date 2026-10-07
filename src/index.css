@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dashboard theme — defaults = periwinkle (#CCCCFF · #A3A3CC · #5C5C99 · #292966). Overridden at runtime by Settings → Appearance. */
+:root {
+  --brand-50: 245 245 255; --brand-100: 235 235 255; --brand-200: 220 220 250; --brand-300: 204 204 255; --brand-400: 163 163 204;
+  --brand-500: 122 122 179; --brand-600: 92 92 153; --brand-700: 72 72 133; --brand-800: 54 54 115; --brand-900: 41 41 102; --brand-950: 27 27 71;
+}
+/* Settings → Appearance → Interface size (dashboard only; everything is rem-based) */
+html[data-app-size='compact'] { font-size: 15px; }
+html[data-app-size='large'] { font-size: 17px; }
+/* Settings → Appearance → Corners */
+html[data-radius='sharp'] .card { border-radius: .5rem; }
+html[data-radius='round'] .card { border-radius: 1.5rem; }
+html[data-radius='sharp'] .input { border-radius: .375rem; }
+html[data-radius='round'] .input { border-radius: .875rem; }
+
+@layer base {
+  html { font-feature-settings: 'cv11', 'ss01'; }
+  ::selection { @apply bg-brand-200 text-brand-950; }
+}
+
+@layer components {
+  .input {
+    @apply block w-full rounded-lg border border-brand-100 bg-white px-3 py-2 text-sm text-slate-900 shadow-[0_1px_2px_rgba(41,41,102,.04)] outline-none transition
+      placeholder:text-slate-400 hover:border-brand-300 focus:border-brand-500 focus:ring-4 focus:ring-brand-300/40 disabled:cursor-not-allowed disabled:bg-slate-50;
+  }
+  .label { @apply mb-1.5 block text-xs font-medium text-slate-600; }
+  .card { @apply rounded-2xl border border-brand-100 bg-white shadow-card; }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #c9c9e6 transparent; }
+  .scrollbar-dark { scrollbar-width: thin; scrollbar-color: rgba(204,204,255,.18) transparent; }
+  /* calm periwinkle canvas behind the signed-in app */
+  .app-canvas { background: radial-gradient(1200px 500px at 85% -10%, rgba(204,204,255,.45), transparent 60%), radial-gradient(900px 420px at -10% 0%, rgba(163,163,204,.18), transparent 55%), #f6f6fc; }
+}
+
+/* ───────── Landing page ───────── */
+@layer components {
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1); transition-delay: var(--d, 0ms); }
+  .reveal.reveal-left { transform: translateX(-28px); }
+  .reveal.reveal-right { transform: translateX(28px); }
+  .reveal.reveal-scale { transform: scale(.94); }
+  .reveal.is-visible { opacity: 1; transform: none; }
+  .text-gradient { @apply bg-gradient-to-r from-peri-600 via-peri-800 to-peri-600 bg-[length:200%_auto] bg-clip-text text-transparent animate-shimmer; }
+  .glass { @apply border border-white/70 bg-white/60 shadow-glass backdrop-blur-xl; }
+  .l-container { @apply mx-auto w-full max-w-7xl px-5 sm:px-8; }
+  .l-eyebrow { @apply inline-flex items-center gap-2 rounded-full border border-peri-300/70 bg-white/70 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-[.14em] text-peri-700 backdrop-blur; }
+  .l-h2 { @apply mt-4 font-display text-3xl font-bold tracking-tight text-peri-900 sm:text-4xl lg:text-[2.75rem] lg:leading-[1.15]; }
+  .l-lead { @apply mt-4 text-base leading-relaxed text-slate-600 sm:text-lg; }
+  .btn-peri { @apply inline-flex items-center justify-center gap-2 rounded-full bg-peri-800 px-6 py-3.5 text-sm font-semibold text-white shadow-glow transition duration-300 hover:-translate-y-0.5 hover:bg-peri-900 hover:shadow-[0_16px_40px_-10px_rgba(41,41,102,.6)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-peri-300 active:translate-y-0; }
+  .btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-full border border-peri-300 bg-white/70 px-6 py-3.5 text-sm font-semibold text-peri-800 backdrop-blur transition duration-300 hover:-translate-y-0.5 hover:border-peri-400 hover:bg-white hover:shadow-soft focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-peri-300 active:translate-y-0; }
+  .l-rise { animation: l-rise .9s cubic-bezier(.2,.7,.2,1) both; }
+  .mask-fade-x { mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+}
+@keyframes l-rise { from { opacity: 0; transform: translateY(18px); filter: blur(6px); } to { opacity: 1; transform: none; filter: blur(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .l-rise { animation: none !important; }
+  .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .motion-safe-only { animation: none !important; }
+  html { scroll-behavior: auto !important; }
+}
+html { scroll-behavior: smooth; }
+
+/* Invoice / bill of supply: print only the document, on A4 (see src/components/InvoiceDocument.tsx) */
+@page { size: A4; margin: 10mm 12mm; }
+@media print {
+  html.print-doc body * { visibility: hidden !important; }
+  html.print-doc .invoice-doc, html.print-doc .invoice-doc * { visibility: visible !important; }
+  html.print-doc .invoice-doc { position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; max-width: none !important; margin: 0 !important; box-shadow: none !important; border: 0 !important; border-radius: 0 !important; }
+  .invoice-doc { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .invoice-doc .avoid-break { break-inside: avoid; }
+}
+@media print {
+  body { background: white !important; }
+  .no-print { display: none !important; }
+  .print-area { box-shadow: none !important; border: none !important; }
+}
