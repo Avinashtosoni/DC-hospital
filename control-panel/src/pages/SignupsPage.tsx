@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ExternalLink, Mail, MapPin, Phone, Save, UserPlus, X } from 'lucide-react'
+import { BadgeCheck, Check, ExternalLink, Mail, MapPin, MessageCircle, Phone, Save, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Skeleton, Tabs, Textarea } from '../../../src/components/ui'
 import { platformDomain } from '../../../src/lib/supabase'
 import { cn } from '../../../src/lib/utils'
 import { cp, friendly } from '../api'
 import type { CpSignup, SignupSettings, SignupStatus } from '../types'
-import { appUrl, dateTime, ErrorBox, planLabel, Section } from '../ui'
+import { appUrl, dateTime, ErrorBox, planLabel, PlanOptions, Section } from '../ui'
 
 const TONE: Record<SignupStatus, 'amber' | 'green' | 'slate' | 'red'> = { pending: 'amber', created: 'green', rejected: 'red', expired: 'slate' }
 const LABEL: Record<SignupStatus, string> = { pending: 'Waiting', created: 'Hospital created', rejected: 'Rejected', expired: 'Expired' }
@@ -62,6 +62,9 @@ export function SignupsPage() {
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
                     <a href={`mailto:${s.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-800"><Mail className="h-3.5 w-3.5" />{s.email}</a>
                     <a href={`tel:${s.phone}`} className="inline-flex items-center gap-1.5 hover:text-brand-800"><Phone className="h-3.5 w-3.5" />{s.phone}</a>
+                    {s.phone_verified_at
+                      ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700" title={`Verified ${dateTime(s.phone_verified_at)}`}><BadgeCheck className="h-3.5 w-3.5" />Verified on {s.phone_verified_via === 'sms' ? 'SMS' : 'WhatsApp'}</span>
+                      : <span className="text-xs text-slate-400">number not verified</span>}
                     {s.city && <span className="inline-flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />{s.city}</span>}
                   </div>
                   <p className="mt-2 text-xs text-slate-500">Short name <span className="font-mono">{s.hospital_slug ?? s.slug}</span> · prefix <span className="font-mono">{s.code}</span> · accepted Terms {s.terms_version}</p>
@@ -103,7 +106,8 @@ function SignupSettingsCard() {
   }, [q.data])
   const save = useMutation({
     mutationFn: (s: SignupSettings) => cp.saveSignupSettings({ enabled: s.enabled, mode: s.mode, trialDays: Number(s.trialDays), plan: s.plan,
-      maxPerDay: Number(s.maxPerDay), unclaimedDays: Number(s.unclaimedDays), platformUrl: s.platformUrl.trim().replace(/\/+$/, '') }),
+      maxPerDay: Number(s.maxPerDay), unclaimedDays: Number(s.unclaimedDays), platformUrl: s.platformUrl.trim().replace(/\/+$/, ''),
+      otp: s.otp ?? { enabled: true, channels: ['whatsapp', 'sms'] } }),
     onSuccess: (s) => { qc.setQueryData(['cp-signup-settings'], s); toast.success('Sign-up settings saved') },
     onError: (e) => toast.error(friendly(e)),
   })
@@ -127,7 +131,7 @@ function SignupSettingsCard() {
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
           <Field label="Free trial (days)" hint="1–90 · existing trials keep their date; extend one from its Plan & billing"><Input type="number" min={1} max={90} value={f.trialDays} onChange={(e) => set('trialDays', Number(e.target.value))} /></Field>
-          <Field label="Plan picked by default"><Select value={f.plan} onChange={(e) => set('plan', e.target.value)}>{['clinic', 'hospital', 'enterprise'].map((p) => <option key={p} value={p}>{planLabel(p)}</option>)}</Select></Field>
+          <Field label="Plan picked by default"><Select value={f.plan} onChange={(e) => set('plan', e.target.value)}><PlanOptions withPrice hideArchived /></Select></Field>
         </div>
       </div>
       <div className="mt-5 grid gap-3 border-t border-slate-100 pt-5 sm:grid-cols-3">
@@ -135,7 +139,42 @@ function SignupSettingsCard() {
         <Field label="Close unclaimed trials after (days)" hint="If the owner never signs up · 3–90, then the normal 7-day notice"><Input type="number" min={3} max={90} value={f.unclaimedDays} onChange={(e) => set('unclaimedDays', Number(e.target.value))} /></Field>
         <Field label="Product website address" hint="Used for the link in the welcome e-mail"><Input value={f.platformUrl} onChange={(e) => set('platformUrl', e.target.value)} placeholder={`https://${platformDomain || 'your-domain.in'}`} /></Field>
       </div>
+      <OtpSettings value={f.otp ?? { enabled: true, channels: ['whatsapp', 'sms'] }} onChange={(v) => set('otp', v)} />
     </Section>
+  )
+}
+
+/** Mobile verification: a WhatsApp / SMS code before the form can be sent (platform's shared accounts) */
+function OtpSettings({ value, onChange }: { value: NonNullable<SignupSettings['otp']>; onChange: (v: NonNullable<SignupSettings['otp']>) => void }) {
+  const toggle = (c: 'whatsapp' | 'sms') => {
+    const next = value.channels.includes(c) ? value.channels.filter((x) => x !== c) : [...value.channels, c]
+    onChange({ ...value, channels: (['whatsapp', 'sms'] as const).filter((x) => next.includes(x)) })
+  }
+  return (
+    <div className="mt-5 grid gap-4 border-t border-slate-100 pt-5 lg:grid-cols-3">
+      <div className="space-y-2">
+        <p className="flex items-center gap-1.5 text-sm font-medium text-slate-700"><MessageCircle className="h-4 w-4 text-emerald-600" />Mobile verification</p>
+        <Choice active={value.enabled} onClick={() => onChange({ ...value, enabled: true, channels: value.channels.length ? value.channels : ['whatsapp', 'sms'] })} title="Required" text="The visitor enters a 6-digit code before the form can be sent." />
+        <Choice active={!value.enabled} onClick={() => onChange({ ...value, enabled: false })} title="Off" text="Any mobile number is accepted (shown as “not verified”)." />
+      </div>
+      <div className={cn('space-y-2', !value.enabled && 'pointer-events-none opacity-50')}>
+        <p className="text-sm font-medium text-slate-700">Send the code on</p>
+        {(['whatsapp', 'sms'] as const).map((c) => (
+          <label key={c} className={cn('flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 transition', value.channels.includes(c) ? 'border-brand-600 bg-brand-50' : 'border-slate-200 bg-white hover:border-brand-300')}>
+            <input type="checkbox" className="mt-0.5 accent-brand-700" checked={value.channels.includes(c)} onChange={() => toggle(c)} />
+            <span><span className="block text-sm font-semibold text-brand-950">{c === 'whatsapp' ? 'WhatsApp (first choice)' : 'SMS (fallback)'}</span>
+              <span className="block text-xs text-slate-500">{c === 'whatsapp' ? 'The visitor can switch to SMS if WhatsApp doesn’t arrive.' : 'Needs a DLT-approved OTP template on the shared SMS account.'}</span></span>
+          </label>
+        ))}
+        {value.enabled && !value.channels.length && <p className="text-xs text-rose-700">Pick at least one.</p>}
+      </div>
+      <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-amber-100">
+        <p className="font-semibold">Uses the platform’s shared accounts</p>
+        <p className="mt-1">Platform settings → Integrations. With wacrm / Meta Cloud API, WhatsApp needs an approved <b>Authentication</b> template: set its name and parameters in
+          <Link to="/messaging?tab=templates" className="mx-1 font-semibold text-brand-700 hover:underline">Messaging → Templates</Link>→ “Free-trial sign-up code” (parameter <span className="font-mono">{'{{code}}'}</span>).
+          Codes that fail show on the Messaging page.</p>
+      </div>
+    </div>
   )
 }
 

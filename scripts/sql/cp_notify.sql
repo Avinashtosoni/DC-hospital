@@ -199,7 +199,7 @@ end $$;
 -- ------------------------------------------------------------------ 2. platform outbox + control-panel devices
 create table if not exists public.platform_outbox (
   id               uuid primary key default gen_random_uuid(),
-  kind             text not null check (kind in ('alert', 'broadcast', 'test', 'otp')),   -- otp: team sign-in codes (otp_verify.sql)
+  kind             text not null check (kind in ('alert', 'broadcast', 'test', 'otp', 'signup_otp')),   -- otp: team sign-in codes (otp_verify.sql); signup_otp: signup_otp.sql
   ref_id           uuid,
   channel          text not null check (channel in ('email', 'sms', 'whatsapp', 'push')),
   recipient        text not null check (char_length(recipient) between 3 and 200),

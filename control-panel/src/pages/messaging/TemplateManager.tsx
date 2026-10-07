@@ -27,6 +27,7 @@ export const DELIVERY_TEMPLATES: { id: string; label: string; hint: string; toke
   { id: 'platform_alert', label: 'Team alert', hint: 'Alerts to your own team (WhatsApp / SMS)', tokens: ['title', 'body', 'link'] },
   { id: 'platform_broadcast', label: 'Broadcast', hint: 'Broadcasts to hospital owners and staff', tokens: ['name', 'hospital', 'title', 'link'] },
   { id: 'platform_otp', label: 'Team sign-in code', hint: 'Control-panel sign-in OTP (Platform settings → Security)', tokens: ['code', 'name'] },
+  { id: 'platform_signup_otp', label: 'Free-trial sign-up code', hint: 'Mobile check on the product site’s /signup (Sign-ups → Mobile verification). wacrm / Meta: an approved AUTHENTICATION template, parameter {{code}}', tokens: ['code'] },
 ]
 
 const QK = ['cp-templates'] as const

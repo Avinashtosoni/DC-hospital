@@ -7,6 +7,7 @@ import { LEGAL_VERSION } from './legal'
 import { siteHref as platformHref } from './site/ui'
 import { usePlans } from './planStore'
 import { hospitalUrl } from '../tenancy/urls'
+import { PhoneField, type Verified } from './PhoneVerify'
 
 const EMPTY: SignupForm = { organisation: '', name: '', email: '', phone: '', city: '', plan: '', website: '' }
 const firstName = (n: string) => n.trim().replace(/^(dr|mr|mrs|ms|shri|smt)\.?\s+/i, '').split(/\s+/)[0]
@@ -21,6 +22,10 @@ export default function SignupPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState<SignupResult | null>(null)
+  const [verified, setVerified] = useState<Verified | null>(null)
+  const [needVerify, setNeedVerify] = useState(false)
+  const otp = info?.otp?.required ? info.otp : null
+  const phoneOk = !otp || (!!verified && verified.phone === f.phone.replace(/\D/g, '').slice(-10))
 
   useEffect(() => { document.title = `Start your free trial · ${platformName}` }, [])
   useEffect(() => {
@@ -36,8 +41,13 @@ export default function SignupPage() {
     e.preventDefault()
     const p = signupProblem(f, agreed)
     if (p) { setError(p); return }
+    if (!phoneOk) { setNeedVerify(true); setError('Please verify your mobile number first.'); return }
     setError(''); setSending(true)
-    try { setDone(await trialSignup(f, LEGAL_VERSION)) } catch (err) { setError(err instanceof Error ? err.message : 'Could not sign up. Please try again.') } finally { setSending(false) }
+    try { setDone(await trialSignup(f, LEGAL_VERSION, phoneOk && otp ? verified?.token : null)) } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not sign up. Please try again.'
+      if (/verify your mobile/i.test(msg)) { setVerified(null); setNeedVerify(true) }   // the check expired (30 minutes)
+      setError(msg)
+    } finally { setSending(false) }
   }
 
   const link = 'underline underline-offset-2 hover:text-peri-500'
@@ -77,7 +87,12 @@ export default function SignupPage() {
                 <h2 className="font-display text-xl font-bold text-peri-900 sm:col-span-2">Create your hospital</h2>
                 <Field label="Hospital / clinic name *" className="sm:col-span-2"><input className="input" value={f.organisation} onChange={set('organisation')} autoComplete="organization" maxLength={120} required /></Field>
                 <Field label="Your name *"><input className="input" value={f.name} onChange={set('name')} autoComplete="name" maxLength={100} required /></Field>
-                <Field label="Mobile number *"><input className="input" value={f.phone} onChange={set('phone')} type="tel" inputMode="tel" autoComplete="tel" maxLength={16} placeholder="98765 43210" required /></Field>
+                {otp ? (
+                  <PhoneField phone={f.phone} onPhone={(v) => setF((x) => ({ ...x, phone: v }))} channels={otp.channels} verified={verified} highlight={needVerify && !phoneOk}
+                    onVerified={(v) => { setVerified(v); if (v) { setNeedVerify(false); setError((e) => (/verify your mobile/i.test(e) ? '' : e)) } }} />
+                ) : (
+                  <Field label="Mobile number *"><input className="input" value={f.phone} onChange={set('phone')} type="tel" inputMode="tel" autoComplete="tel" maxLength={16} placeholder="98765 43210" required /></Field>
+                )}
                 <Field label="E-mail (you’ll sign in with it) *" className="sm:col-span-2"><input className="input" value={f.email} onChange={set('email')} type="email" autoComplete="email" maxLength={150} required /></Field>
                 <Field label="City"><input className="input" value={f.city} onChange={set('city')} autoComplete="address-level2" maxLength={80} /></Field>
                 <Field label="Plan to try">

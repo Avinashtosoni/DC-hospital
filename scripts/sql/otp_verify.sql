@@ -59,7 +59,7 @@ grant all on public.login_otp_sessions to service_role;
 do $$ begin
   if to_regclass('public.platform_outbox') is not null then
     alter table public.platform_outbox drop constraint if exists platform_outbox_kind_check;
-    alter table public.platform_outbox add constraint platform_outbox_kind_check check (kind in ('alert', 'broadcast', 'test', 'otp'));
+    alter table public.platform_outbox add constraint platform_outbox_kind_check check (kind in ('alert', 'broadcast', 'test', 'otp', 'signup_otp'));
   end if;
 end $$;
 

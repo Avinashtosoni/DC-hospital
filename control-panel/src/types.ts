@@ -227,8 +227,13 @@ export interface CpSignup {
   decided_at: string | null
   decided_by_name: string | null
   reason: string | null
+  /** mobile number checked by a code (signup_otp.sql) */
+  phone_verified_at?: string | null
+  phone_verified_via?: 'whatsapp' | 'sms' | null
 }
 export interface SignupSettings {
+  /** mobile verification on /signup (default on, WhatsApp then SMS) */
+  otp?: { enabled: boolean; channels: ('whatsapp' | 'sms')[] }
   enabled: boolean
   mode: 'instant' | 'approve'
   trialDays: number

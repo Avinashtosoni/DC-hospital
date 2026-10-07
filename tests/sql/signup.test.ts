@@ -32,6 +32,8 @@ beforeAll(async () => {
     await db.as(null, `delete from public.patients where profile_id = $1`, [id])
     await db.as(null, `insert into public.provider_users (user_id, role) values ($1, $2)`, [id, role])
   }
+  // mobile verification has its own tests (signup_otp.test.ts)
+  await db.as(null, `update public.platform_settings set data = data || jsonb_build_object('otp', jsonb_build_object('enabled', false, 'channels', jsonb_build_array('whatsapp'))) where key = 'signup'`)
 }, 240_000)
 
 describe('self-service sign-up', () => {

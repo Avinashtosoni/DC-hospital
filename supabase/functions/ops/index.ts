@@ -81,7 +81,7 @@ async function ctx() {
   return { env, siteUrl: s.siteUrl, c: platformSendCtx(env, { templates: s.templates, siteUrl: s.siteUrl, devices }) }
 }
 
-const EVENT: Record<string, string> = { alert: 'platform_alert', broadcast: 'platform_broadcast', test: 'test', otp: 'platform_otp' }
+const EVENT: Record<string, string> = { alert: 'platform_alert', broadcast: 'platform_broadcast', test: 'test', otp: 'platform_otp', signup_otp: 'platform_signup_otp' }
 
 async function flush() {
   const { data: rows, error } = await admin.rpc('claim_platform_outbox', { p_limit: 25 })
@@ -130,6 +130,22 @@ Deno.serve(async (req) => {
     const { data, error } = await admin.rpc('record_server_metrics', { p: body.server })
     if (error) return json({ ok: false, message: error.message }, 500)
     return json({ ok: true, recorded: data })
+  }
+
+  // free-trial sign-up: the visitor's mobile check code (request_signup_otp) — sent now rather than at the next flush.
+  // Anyone may ask, but only for a code queued in the last 5 minutes, once, to the number it was queued for.
+  if (body.deliver_signup_otp) {
+    const ref = String(body.deliver_signup_otp)
+    if (!/^[0-9a-f-]{36}$/i.test(ref)) return json({ ok: false, message: 'Bad request' }, 400)
+    const { data: rows, error } = await admin.from('platform_outbox')
+      .update({ status: 'sending', attempts: 1, next_attempt_at: new Date().toISOString() })
+      .eq('kind', 'signup_otp').eq('ref_id', ref).eq('status', 'pending').gt('created_at', new Date(Date.now() - 5 * 60_000).toISOString()).select('*')
+    if (error) return json({ ok: false, message: 'Could not send the code right now' }, 500)
+    if (!rows?.length) return json({ ok: true, message: 'Already on its way' })
+    const r = await deliverRows(rows as any[])
+    // the visitor sees a plain message; the reason is on the Health / Messaging pages
+    if (r.sent === 0 && r.errors[0]) console.error('signup otp:', r.errors[0])
+    return json({ ok: r.sent > 0, message: r.sent > 0 ? 'Code sent' : `We could not send the code on ${rows[0].channel === 'whatsapp' ? 'WhatsApp' : 'SMS'} right now` })
   }
 
   const w = await who(req)

@@ -191,7 +191,7 @@ async function whatsapp(m: Msg, c: Ctx): Promise<Result> {
   }
 }
 
-export const OTP_EVENTS = ['otp', 'password_otp', 'login_otp', 'platform_otp'] as const
+export const OTP_EVENTS = ['otp', 'password_otp', 'login_otp', 'platform_otp', 'platform_signup_otp'] as const
 export const isOtp = (event: string) => (OTP_EVENTS as readonly string[]).includes(event)
 
 /** wacrm (ArnasDon/wacrm, Meta Cloud API CRM): approved templates (the event's WhatsApp template + parameters) for

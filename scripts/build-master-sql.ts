@@ -236,6 +236,8 @@ if (notifySql.includes('@@NOTIFY_CATALOG@@')) throw new Error('notification cata
 const plansSql = readFileSync(resolve(root, 'scripts/sql/plans.sql'), 'utf8').replace('@@PLAN_DEFAULTS@@', () => JSON.stringify(BILLING_DEFAULTS.plans))
 if (plansSql.includes('@@PLAN_DEFAULTS@@')) throw new Error('plan defaults placeholder missing')
 if (JSON.stringify(BILLING_DEFAULTS.plans).includes('$json$')) throw new Error('plan defaults contain $json$')
+// free-trial sign-up: verify the mobile number (after the platform outbox and the OTP module)
+const signupOtpSql = readFileSync(resolve(root, 'scripts/sql/signup_otp.sql'), 'utf8')
 const demoSql = readFileSync(resolve(root, 'scripts/sql/demo.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
@@ -326,6 +328,8 @@ ${notifySql}
 
 ${plansSql}
 
+${signupOtpSql}
+
 ${demoSql}
 commit;
 
@@ -412,6 +416,8 @@ ${notifySql}
 
 ${plansSql}
 
+${signupOtpSql}
+
 ${demoSql}
 
 -- =====================================================================================================
@@ -449,6 +455,7 @@ for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCor
   ['scale', 'scale.sql', scaleSql], ['auth', 'auth.sql', authSql], ['forms', 'forms.sql', formsSql], ['messaging', 'messaging.sql', messagingSql], ['tenancy', 'tenancy.sql', tenancySql], ['billing', 'billing.sql', billingSql], ['control-panel', 'control_panel.sql', controlPanelSql], ['compliance', 'compliance.sql', complianceSql], ['signup', 'signup.sql', signupSql], ['launch', 'launch.sql', launchSql], ['integrity', 'integrity.sql', integritySql], ['control-ops', 'control_panel_ops.sql', controlOpsSql], ['platform-cms', 'platform_cms.sql', platformCmsSql], ['cp-notify', 'cp_notify.sql', cpNotifySql], ['otp-verify', 'otp_verify.sql', otpSql],
   ['notify-catalog', 'notify_catalog.sql', notifySql],
   ['plans', 'plans.sql', plansSql],
+  ['signup-otp', 'signup_otp.sql', signupOtpSql],
   ['demo', 'demo.sql', demoSql],
   ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
   const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`

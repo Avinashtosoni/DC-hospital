@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased: verified mobile number on free-trial sign-up
+
+- **/signup → Mobile number → Verify:** a 6-digit code on WhatsApp (SMS as the fallback) from the platform's shared
+  accounts; 10 minutes, resend after 30 s, "send by SMS instead", 5 attempts. The form can't be sent without it —
+  `platform_trial_signup` checks a one-time token server-side (`scripts/sql/signup_otp.sql`).
+- **Control Panel → Sign-ups:** "Mobile verification" (Required / Off, WhatsApp and/or SMS) and a "Verified on
+  WhatsApp" mark on each request. The default-plan picker uses the live plan list.
+- **wacrm / Meta:** set an approved Authentication template under Messaging → Templates → "Free-trial sign-up code"
+  (parameter `{{code}}`). The `ops` function sends the code at once (`deliver_signup_otp`).
+- Run `supabase/upgrade-2026-10.sql` again and redeploy `ops`.
+
 ## Unreleased: Plans & billing page
 
 - **Control panel → Plans & billing** (`/plans`, admin): add, edit, duplicate, hide/show, mark most popular, reorder,
