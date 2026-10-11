@@ -19,6 +19,25 @@ const solutionImages: Record<string, string> = {
   Video: '/landing/solution-daycare.jpg',
 }
 
+const featureImages: Record<string, string> = {
+  CalendarCheck: '/landing/feature-appointments.jpg',
+  FileText: '/landing/feature-patient-records.jpg',
+  CreditCard: '/landing/feature-billing.jpg',
+  FlaskConical: '/landing/feature-lab-inventory.jpg',
+  Bed: '/landing/feature-ward-admissions.jpg',
+  Globe2: '/landing/feature-hospital-website.jpg',
+  Phone: '/landing/feature-messaging.jpg',
+  Activity: '/landing/feature-reports.jpg',
+  Users: '/landing/feature-staff-team.jpg',
+  Smile: '/landing/feature-patient-portal.jpg',
+  CalendarDays: '/landing/solution-clinic.jpg',
+  ClipboardCheck: '/landing/solution-daycare.jpg',
+}
+
+function featureImage(icon: string, title: string): string | undefined {
+  return title.toLowerCase().includes('data export') ? '/landing/feature-reports.jpg' : featureImages[icon]
+}
+
 export function FeaturesPage({ site }: P) {
   const c = site.features
   useSeo(c.seo, 'Features')
@@ -35,7 +54,7 @@ export function FeaturesPage({ site }: P) {
       <div className="l-container space-y-6 pb-8">
         {c.modules.map((m, i) => {
           const Icon = iconFor(m.icon)
-          const img = safeUrl(m.image, 'image')
+          const img = safeUrl(m.image, 'image') || featureImage(m.icon, m.title)
           return (
             <article key={m.title} id={`m${i}`} className="scroll-mt-24 grid items-center gap-8 rounded-[2rem] border border-peri-200/80 bg-white p-6 shadow-soft sm:p-10 lg:grid-cols-2">
               <div className={cn(i % 2 === 1 && img && 'lg:order-2')}>
@@ -43,9 +62,13 @@ export function FeaturesPage({ site }: P) {
                 <h2 className="mt-5 font-display text-2xl font-extrabold text-peri-900 sm:text-3xl">{m.title}</h2>
                 {m.summary && <p className="mt-2 text-lg text-slate-600">{m.summary}</p>}
               </div>
-              <div className={cn(img && 'space-y-6')}>
-                {img && <img src={img} alt="" loading="lazy" className="w-full rounded-2xl" />}
-                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <div className={cn(img && 'grid items-center gap-5 sm:grid-cols-2')}>
+                {img && (
+                  <div className="aspect-video w-full overflow-hidden rounded-2xl bg-peri-50">
+                    <img src={img} alt="" loading="lazy" decoding="async" className="h-full w-full object-contain" />
+                  </div>
+                )}
+                <ul className="grid gap-3 sm:grid-cols-1">
                   {m.points.map((p) => <li key={p} className="flex gap-3 text-slate-700"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-peri-600" />{p}</li>)}
                 </ul>
               </div>
