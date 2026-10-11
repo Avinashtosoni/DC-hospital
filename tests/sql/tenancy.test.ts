@@ -132,10 +132,10 @@ describe('isolation between hospitals', () => {
 
 describe('website visitors (anon)', () => {
   test('the domain header picks the hospital; no header means the primary hospital', async () => {
-    const b = await asH<{ key: string; data: { name: string } }>('anon', { 'x-tenant-id': B }, `select key, data from public.site_content`)
+    const b = await asH<{ key: string; data: { name: string } }>('anon', { 'x-tenant-id': B }, `select key, data from public.public_site_content()`)
     expect(b).toEqual([{ key: 'brand', data: { name: 'City Hospital' } }])
-    const a = await asH<{ tenant_id: string }>('anon', {}, `select distinct tenant_id from public.site_content`)
-    expect(a.every((r) => r.tenant_id === A)).toBe(true)
+    const a = await asH<{ key: string; data: unknown }>('anon', {}, `select key, data from public.public_site_content()`)
+    expect(JSON.stringify(a)).not.toContain('City Hospital')
     const t = await db.as<{ id: string; name: string }>('anon', `select id, name from public.resolve_tenant('CityHospital.in:443')`)
     expect(t).toEqual([{ id: B, name: 'City Hospital' }])
     expect(await db.as('anon', `select * from public.resolve_tenant('unknown.example')`)).toEqual([])

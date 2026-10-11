@@ -80,7 +80,7 @@ async function loadSetup(tenant: TenantRow): Promise<Setup> {
 }
 
 const phone10 = (p: string) => (p ?? '').replace(/\D/g, '').slice(-10)
-function depsFor(phone: string, setup: Setup): BotDeps {
+function depsFor(phone: string, setup: Setup, eventId: string, leaseToken: number): BotDeps {
   const site = setup.site
   const db = forTenant(setup.tenant.id)
   const rpc = async <T,>(fn: string, args: Record<string, unknown>): Promise<T> => {
@@ -94,7 +94,7 @@ function depsFor(phone: string, setup: Setup): BotDeps {
     freeSlots: async (doctorId) => (await rpc<any[]>('bot_free_slots', { p_doctor: doctorId, p_limit: 8 })).map((r) => ({ date: r.slot_date, time: r.slot_time })),
     patient: async () => rpc<{ full_name: string } | null>('bot_patient', { p_phone: phone }),
     book: async (i) => {
-      const r = await rpc<any>('whatsapp_book_appointment', { p_phone: phone, p_doctor: i.doctorId, p_date: i.date, p_time: i.time, p_name: i.name, p_reason: i.reason })
+      const r = await rpc<any>('whatsapp_book_appointment', { p_phone: phone, p_doctor: i.doctorId, p_date: i.date, p_time: i.time, p_name: i.name, p_reason: i.reason, p_event_id: eventId, p_lease_token: leaseToken })
       return { ref: r.ref, date: i.date, time: i.time, doctor: r.doctor?.full_name ?? '', total: Number(r.invoice?.total ?? 0), mrn: r.patient?.mrn }
     },
     upcoming: async () => rpc<any[]>('bot_upcoming', { p_phone: phone }),
@@ -102,12 +102,44 @@ function depsFor(phone: string, setup: Setup): BotDeps {
   }
 }
 
-async function converse(phone: string, text: string, setup: Setup) {
-  const tenant_id = setup.tenant.id
-  const { data: row } = await admin.from('wa_sessions').select('state').eq('tenant_id', tenant_id).eq('phone', phone).maybeSingle()
-  const res = await botReply((row?.state as BotState) ?? null, text, depsFor(phone, setup))
-  await admin.from('wa_sessions').upsert({ tenant_id, phone, state: res.state, updated_at: new Date().toISOString() }, { onConflict: 'tenant_id,phone' })
-  return res
+async function converse(provider: 'meta' | 'openwa' | 'wacrm' | 'twilio' | 'simulator', externalId: string, phone: string, text: string, setup: Setup, dispatchReplies = true) {
+  const { data: claim, error: claimError } = await admin.rpc('wa_begin_event', {
+    p_tenant: setup.tenant.id, p_provider: provider, p_external_id: externalId, p_phone: phone, p_lease_seconds: 180,
+  })
+  if (claimError) throw new Error('Could not claim the incoming message')
+  if ((claim as any)?.duplicate) return { duplicate: true, state: null, replies: [] as string[] }
+  if (!(claim as any)?.ok) throw new Error('Conversation is busy; retry the incoming message')
+
+  const eventId = String((claim as any).event_id)
+  const leaseToken = Number((claim as any).lease_token)
+  try {
+    let state: BotState, replies: string[]
+    if ((claim as any).staged_state && Array.isArray((claim as any).staged_replies)) {
+      state = (claim as any).staged_state as BotState
+      replies = (claim as any).staged_replies as string[]
+    } else {
+      const result = await botReply((claim as any).state as BotState | null, text, depsFor(phone, setup, eventId, leaseToken))
+      state = result.state
+      replies = result.replies
+      const { data: staged, error: stageError } = await admin.rpc('wa_stage_event', {
+        p_event: eventId, p_lease_token: leaseToken, p_state: state, p_replies: replies,
+      })
+      if (stageError || staged !== true) throw new Error('Could not stage the incoming message')
+    }
+
+    if (dispatchReplies) {
+      for (const reply of replies) {
+        const delivered = await deliver({ event: 'bot', channel: 'whatsapp', recipient: phone, body: reply, vars: {} }, setup.ctx)
+        if (!delivered.ok) throw new Error('Could not deliver the chatbot reply')
+      }
+    }
+    const { data: completed, error: completeError } = await admin.rpc('wa_complete_event', { p_event: eventId, p_lease_token: leaseToken })
+    if (completeError || completed !== true) throw new Error('Could not complete the incoming message')
+    return { duplicate: false, state, replies }
+  } catch (error) {
+    await admin.rpc('wa_fail_event', { p_event: eventId, p_lease_token: leaseToken }).then(() => {}, () => {})
+    throw error
+  }
 }
 
 // ------------------------------------------------------------------ signatures
@@ -118,7 +150,6 @@ async function hmac(alg: 'SHA-256' | 'SHA-1', key: string, data: string) {
 }
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b))
-const seen = new Set<string>()   // recently handled OpenWA message ids (per instance)
 const safeEq = (a: string, b: string) => a.length === b.length && [...a].reduce((d, c, i) => d | (c.charCodeAt(0) ^ b.charCodeAt(i)), 0) === 0
 
 // ------------------------------------------------------------------ handler
@@ -166,7 +197,11 @@ Deno.serve(async (req) => {
     if (!/^[6-9]\d{9}$/.test(phone)) return json({ error: 'Enter a valid 10-digit mobile number.' }, 400)
     const tenant = await tenantById(who.tenant)
     if (!tenant) return json({ error: 'Hospital not found.' }, 404)
-    return json(await converse(phone, String(simulate.text ?? ''), await loadSetup(tenant)))
+    try {
+      return json(await converse('simulator', crypto.randomUUID(), phone, String(simulate.text ?? ''), await loadSetup(tenant), false))
+    } catch {
+      return json({ error: 'The conversation could not be processed. Please try again.' }, 503)
+    }
   }
 
   // ---- webhooks: the hospital comes from the address (?hospital=<slug>)
@@ -197,8 +232,14 @@ Deno.serve(async (req) => {
     if (!safeEq(sig, req.headers.get('x-twilio-signature') ?? '')) return new Response('bad signature', { status: 403 })
     const twiml = (msgs: string[]) => new Response(`<?xml version="1.0" encoding="UTF-8"?><Response>${msgs.map((m) => `<Message>${m.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</Message>`).join('')}</Response>`, { headers: { 'Content-Type': 'text/xml' } })
     if (!setup.bot) return twiml([])
-    const res = await converse(phone10(form.get('From') ?? ''), form.get('Body') ?? '', setup)
-    return twiml(res.replies)
+    const phone = phone10(form.get('From') ?? '')
+    if (!phone) return twiml([])
+    try {
+      const res = await converse('twilio', form.get('MessageSid') || crypto.randomUUID(), phone, form.get('Body') ?? '', setup, false)
+      return twiml(res.replies)
+    } catch {
+      return new Response('temporary processing failure', { status: 503 })
+    }
   }
 
   let body: any = {}
@@ -211,13 +252,12 @@ Deno.serve(async (req) => {
     const m = await parseOpenwa(raw, owaSig, { secret: setup.ctx.secrets.openwa_webhook_secret, session: cfg.openwaSession })
     if (m.kind === 'reject') return new Response(m.reason, { status: m.status })
     if (m.kind === 'ignore' || !setup.bot || cfg.provider !== 'openwa') return json({ ok: true })
-    if (m.key && seen.has(m.key)) return json({ ok: true, duplicate: true })   // OpenWA retries deliveries
-    if (m.key) { seen.add(m.key); if (seen.size > 500) seen.delete(seen.values().next().value!) }
     try {
-      const res = await converse(m.phone, m.text, setup)
-      for (const reply of res.replies) await deliver({ event: 'bot', channel: 'whatsapp', recipient: m.phone, body: reply, vars: {} }, setup.ctx)
-    } catch (e) { console.error('whatsapp-bot (openwa)', e) }
-    return json({ ok: true })
+      const res = await converse('openwa', m.key || crypto.randomUUID(), m.phone, m.text, setup)
+      return json({ ok: true, duplicate: res.duplicate })
+    } catch {
+      return json({ ok: false, error: 'Temporary processing failure. Please retry.' }, 503)
+    }
   }
 
   // ---- wacrm (Meta Cloud API CRM) — see ../_shared/wacrm.ts
@@ -227,15 +267,14 @@ Deno.serve(async (req) => {
     const m = await parseWacrm(raw, wSig, { secret: setup.ctx.secrets.wacrm_webhook_secret })
     if (m.kind === 'reject') return new Response(m.reason, { status: m.status })
     if (m.kind === 'ignore' || !setup.bot || cfg.provider !== 'wacrm') return json({ ok: true })
-    if (m.key && seen.has(m.key)) return json({ ok: true, duplicate: true })
-    if (m.key) { seen.add(m.key); if (seen.size > 500) seen.delete(seen.values().next().value!) }
     try {
       const phone = await wacrmContactPhone(cfg.wacrmUrl, setup.ctx.secrets.wacrm_api_key ?? '', m.contactId)
       if (!/^[6-9]\d{9}$/.test(phone)) return json({ ok: true, ignored: 'not an Indian mobile' })
-      const res = await converse(phone, m.text, setup)
-      for (const reply of res.replies) await deliver({ event: 'bot', channel: 'whatsapp', recipient: phone, body: reply, vars: {} }, setup.ctx)
-    } catch (e) { console.error('whatsapp-bot (wacrm)', e) }
-    return json({ ok: true })   // single best-effort delivery — always acknowledge
+      const res = await converse('wacrm', m.key || crypto.randomUUID(), phone, m.text, setup)
+      return json({ ok: true, duplicate: res.duplicate })
+    } catch {
+      return json({ ok: false, error: 'Temporary processing failure. Please retry.' }, 503)
+    }
   }
 
   // ---- Meta Cloud API
@@ -251,11 +290,11 @@ Deno.serve(async (req) => {
     const phone = phone10(m.from)
     if (!phone) continue
     try {
-      const res = await converse(phone, text || 'menu', setup)
-      for (const reply of res.replies) {
-        await deliver({ event: 'bot', channel: 'whatsapp', recipient: phone, body: reply, vars: {} }, setup.ctx)
-      }
-    } catch (e) { console.error('whatsapp-bot', e) }
+      const res = await converse('meta', String(m.id ?? crypto.randomUUID()), phone, text || 'menu', setup)
+      if (res.duplicate) continue
+    } catch {
+      return json({ ok: false, error: 'Temporary processing failure. Please retry.' }, 503)
+    }
   }
-  return json({ ok: true })   // Meta retries on non-200, so always acknowledge
+  return json({ ok: true })
 })

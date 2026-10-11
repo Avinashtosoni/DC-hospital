@@ -785,7 +785,8 @@ returns void language plpgsql volatile security definer set search_path = public
 begin
   perform public.cp_require(array['admin']);
   if p_source = 'platform' then
-    update public.platform_outbox set status = 'pending', attempts = 0, error = null, next_attempt_at = now() where id = p_id and status in ('failed', 'skipped');
+    update public.platform_outbox set status = 'pending', attempts = 0, error = null, next_attempt_at = now()
+     where id = p_id and status in ('failed', 'skipped') and kind not in ('otp', 'signup_otp');
   elsif p_source = 'hospital' then
     update public.notification_outbox set status = 'pending', attempts = 0, error = null, next_attempt_at = now()
      where id = p_id and status in ('failed', 'skipped') and event not in ('otp', 'password_otp', 'test');

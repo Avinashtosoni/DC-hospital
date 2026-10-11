@@ -91,6 +91,13 @@ export function recipientProblem(channel: Channel, to: string): string | null {
   return /^[6-9]\d{9}$/.test(to.replace(/\D/g, '').slice(-10)) && to.replace(/\D/g, '').length >= 10 ? null : 'Enter a valid 10-digit Indian mobile number'
 }
 
+function isHttpsUrl(value: string | undefined): boolean {
+  try {
+    const url = new URL(String(value ?? '').trim())
+    return url.protocol === 'https:' && !!url.hostname && !url.username && !url.password && !url.search && !url.hash
+  } catch { return false }
+}
+
 /** What is still missing before a channel can send. */
 export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretStatus[]): string[] {
   const has = (k: string) => secrets.some((x) => x.key === k)
@@ -119,7 +126,7 @@ export function channelIssues(channel: Channel, s: AppSettings, secrets: SecretS
       if (!has('wacrm_api_key')) out.push('wacrm API key is not saved')
     }
     if (w.provider === 'openwa') {
-      if (!/^https?:\/\/[^/\s]+/.test(w.openwaUrl ?? '')) out.push('OpenWA gateway URL is required (e.g. https://wa.example.in)')
+      if (!isHttpsUrl(w.openwaUrl)) out.push('OpenWA gateway URL must be a valid https:// address without credentials, query or fragment (e.g. https://wa.example.in)')
       if (!w.openwaSession) out.push('WhatsApp session ID is required')
       if (!has('openwa_api_key')) out.push('OpenWA API key is not saved')
       if (w.chatIdFormat && !w.chatIdFormat.includes('{phone}')) out.push('Chat ID format must contain {phone}')

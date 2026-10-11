@@ -51,6 +51,10 @@ const users: Record<string, { id: string; ctx: (tenantHeader: string | null) => 
   'tok-admin': { id: 'e0e-1', ctx: (h) => ({ tenant: h ? { id: h } : null, role: h ? 'owner' : null, provider_role: 'admin' }) },
 }
 let claimRows: any[] = []
+const waEvents = new Map<string, any>()
+const waLocks = new Map<string, string>()
+let nextWaEvent = 0
+let failOutboundOnce = false
 
 interface Call { url: URL; method: string; headers: Headers; body: any }
 const calls: Call[] = []
@@ -87,6 +91,46 @@ async function supabase(url: URL, init: RequestInit & { headers: Headers }): Pro
   if (rpc) {
     const fn = rpc[1]
     if (fn === 'my_context') return reply(users[token]?.ctx(h.get('x-tenant-id')) ?? null, h)
+    if (fn === 'wa_begin_event') {
+      const key = `${body.p_tenant}:${body.p_provider}:${body.p_external_id}`
+      let event = waEvents.get(key)
+      if (event?.status === 'completed') return reply({ ok: true, duplicate: true, completed: true }, h)
+      if (!event) {
+        event = { id: `wa-event-${++nextWaEvent}`, tenant_id: body.p_tenant, provider: body.p_provider, external_id: body.p_external_id,
+          phone: body.p_phone, status: 'pending', token: 0, staged_state: null, staged_replies: null }
+        waEvents.set(key, event)
+      }
+      if (event.phone !== body.p_phone) return new Response('{"message":"identity mismatch"}', { status: 400 })
+      const lockKey = `${body.p_tenant}:${body.p_phone}`
+      if (waLocks.has(lockKey)) return reply({ ok: false, busy: true }, h)
+      event.status = 'processing'; event.token++
+      waLocks.set(lockKey, event.id)
+      const saved = db.wa_sessions.find((r) => r.tenant_id === body.p_tenant && r.phone === body.p_phone)
+      return reply({ ok: true, duplicate: false, event_id: event.id, lease_token: event.token, state: saved?.state ?? null,
+        staged_state: event.staged_state, staged_replies: event.staged_replies }, h)
+    }
+    if (fn === 'wa_stage_event') {
+      const event = [...waEvents.values()].find((r) => r.id === body.p_event)
+      if (!event || event.status !== 'processing' || event.token !== body.p_lease_token || waLocks.get(`${event.tenant_id}:${event.phone}`) !== event.id) return reply(false, h)
+      event.staged_state = body.p_state; event.staged_replies = body.p_replies
+      return reply(true, h)
+    }
+    if (fn === 'wa_complete_event') {
+      const event = [...waEvents.values()].find((r) => r.id === body.p_event)
+      if (!event || event.status !== 'processing' || event.token !== body.p_lease_token || waLocks.get(`${event.tenant_id}:${event.phone}`) !== event.id) return reply(false, h)
+      const index = db.wa_sessions.findIndex((r) => r.tenant_id === event.tenant_id && r.phone === event.phone)
+      const row = { tenant_id: event.tenant_id, phone: event.phone, state: event.staged_state, updated_at: new Date().toISOString() }
+      if (index < 0) db.wa_sessions.push(row); else db.wa_sessions[index] = row
+      event.status = 'completed'; event.staged_state = null; event.staged_replies = null
+      waLocks.delete(`${event.tenant_id}:${event.phone}`)
+      return reply(true, h)
+    }
+    if (fn === 'wa_fail_event') {
+      const event = [...waEvents.values()].find((r) => r.id === body.p_event)
+      if (!event || event.status !== 'processing' || event.token !== body.p_lease_token || waLocks.get(`${event.tenant_id}:${event.phone}`) !== event.id) return reply(false, h)
+      event.status = 'pending'; waLocks.delete(`${event.tenant_id}:${event.phone}`)
+      return reply(true, h)
+    }
     if (fn === 'claim_notifications' || fn === 'claim_notifications_for') {
       const rows = body?.p_tenant ? claimRows.filter((r) => r.tenant_id === body.p_tenant) : claimRows
       return reply(rows, h)
@@ -168,6 +212,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => 
   }
   if (url.origin === 'https://api.cloudflare.com') return cloudflare(url, init.method ?? req?.method ?? 'GET', headers, body ? JSON.parse(String(body)) : null)
   sent.push({ url: url.href, auth: headers.get('authorization'), body: body ? JSON.parse(String(body)) : null })
+  if (failOutboundOnce) { failOutboundOnce = false; return new Response('temporarily unavailable', { status: 503 }) }
   return new Response('{}', { status: 200, headers: { 'x-request-id': 'req-1' } })
 }) as typeof fetch
 
@@ -264,20 +309,46 @@ Deno.test("Meta's webhook check uses the hospital in the address", async () => {
 Deno.test("incoming chats are answered from that hospital's doctors, number and chat state", async () => {
   reset()
   db.wa_sessions = [{ tenant_id: DC, phone: '9876500001', state: { step: 'doctor', lang: 'en', at: Date.now() } }]   // same phone, other hospital
-  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '919876500001', text: { body: '1' } }] } }] }] })
+  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ id: 'wamid-city-1', from: '919876500001', text: { body: '1' } }] } }] }] })
   const r = await bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('city-meta-secret', meta) }, body: meta }))
   assertEquals(r.status, 200)
   const doctors = calls.find((c) => c.url.pathname.endsWith('/public_doctors'))!
   assertEquals(doctors.headers.get('x-tenant-id'), CITY)
   assertEquals(doctors.headers.get('authorization'), `Bearer ${SERVICE}`)
-  const upsert = calls.find((c) => c.url.pathname.endsWith('/wa_sessions') && c.method === 'POST')!
-  assertEquals(upsert.body.tenant_id ?? upsert.body[0]?.tenant_id, CITY)
-  assertEquals(upsert.url.searchParams.get('on_conflict'), 'tenant_id,phone')
+  const completed = calls.find((c) => c.url.pathname.endsWith('/wa_complete_event'))!
+  assertEquals(completed.body.p_event.startsWith('wa-event-'), true)
+  assertEquals(db.wa_sessions.some((r) => r.tenant_id === CITY && r.phone === '9876500001'), true)
   for (const c of settingsReads()) assert(c.url.searchParams.get('tenant_id') === `eq.${CITY}`, `read of ${c.url.pathname} without City's filter`)
   // the reply went out through City's WhatsApp, and mentions City's doctor (not DC's)
   assert(sent.length > 0)
   assert(sent.every((s) => s.url === 'https://hooks.city.test/wa' && s.auth === 'Bearer city-wa-secret'))
   assert(sent.some((s) => /Medicine|Vivek/.test(s.body.message)) && !sent.some((s) => /Cardiology|DC Only/.test(s.body.message)))
+})
+
+Deno.test('webhook retries resume staged replies and persist dedupe instead of advancing bot state twice', async () => {
+  reset()
+  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ id: 'wamid-retry-1', from: '919876501001', text: { body: '1' } }] } }] }] })
+  const signature = await metaSig('city-meta-secret', meta)
+  const request = () => new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': signature }, body: meta,
+  })
+  failOutboundOnce = true
+  const first = await bot(request())
+  assertEquals(first.status, 503)
+  const event = waEvents.get(`${CITY}:meta:wamid-retry-1`)
+  assertEquals(event.status, 'pending')
+  assert(Array.isArray(event.staged_replies) && event.staged_replies.length > 0)
+  const doctorCalls = calls.filter((c) => c.url.pathname.endsWith('/public_doctors')).length
+  assertEquals(doctorCalls, 1)
+
+  const retry = await bot(request())
+  assertEquals(retry.status, 200)
+  assertEquals(event.status, 'completed')
+  assertEquals(calls.filter((c) => c.url.pathname.endsWith('/public_doctors')).length, 1)
+  const outboundCount = sent.length
+  const duplicate = await bot(request())
+  assertEquals(duplicate.status, 200)
+  assertEquals(sent.length, outboundCount)
 })
 
 Deno.test('Meta and Twilio chats must be signed — the sender number is the patient identity', async () => {

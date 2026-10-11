@@ -136,6 +136,154 @@ begin
   end loop;
 end $uniq$;
 
+-- Durable WhatsApp idempotency and per-phone leases. Payloads are deliberately not retained; only
+-- the cached booking result and staged replies needed to resume a failed delivery are stored.
+create table if not exists public.wa_webhook_events (
+  id               uuid primary key default gen_random_uuid(),
+  tenant_id        uuid not null references public.tenants(id) on delete cascade,
+  provider         text not null check (provider in ('meta', 'openwa', 'wacrm', 'twilio', 'simulator')),
+  external_id      text not null check (char_length(external_id) between 1 and 200),
+  phone            text not null check (phone ~ '^[6-9][0-9]{9}$'),
+  status           text not null default 'pending' check (status in ('pending', 'processing', 'completed')),
+  lease_token      bigint not null default 0,
+  lease_until      timestamptz,
+  attempts         int not null default 0,
+  staged_state     jsonb,
+  staged_replies   jsonb,
+  booking_result   jsonb,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  completed_at     timestamptz,
+  unique (tenant_id, provider, external_id)
+);
+create index if not exists wa_webhook_events_created_idx on public.wa_webhook_events (created_at);
+create index if not exists wa_webhook_events_phone_idx on public.wa_webhook_events (tenant_id, phone, created_at desc);
+
+create table if not exists public.wa_conversation_locks (
+  tenant_id        uuid not null references public.tenants(id) on delete cascade,
+  phone            text not null check (phone ~ '^[6-9][0-9]{9}$'),
+  event_id         uuid,
+  lease_token      bigint not null default 0,
+  lease_until      timestamptz not null default now(),
+  primary key (tenant_id, phone)
+);
+
+-- These event tables are created after the general tenant-trigger pass above.
+drop trigger if exists trg_keep_tenant on public.wa_webhook_events;
+create trigger trg_keep_tenant before update of tenant_id on public.wa_webhook_events for each row execute function public.keep_tenant();
+drop trigger if exists trg_keep_tenant on public.wa_conversation_locks;
+create trigger trg_keep_tenant before update of tenant_id on public.wa_conversation_locks for each row execute function public.keep_tenant();
+
+alter table public.wa_webhook_events enable row level security;
+alter table public.wa_conversation_locks enable row level security;
+drop policy if exists tenant_isolation on public.wa_webhook_events;
+create policy tenant_isolation on public.wa_webhook_events as restrictive for all to anon, authenticated
+  using (tenant_id = (select public.current_tenant())) with check (tenant_id = (select public.current_tenant()));
+drop policy if exists tenant_isolation on public.wa_conversation_locks;
+create policy tenant_isolation on public.wa_conversation_locks as restrictive for all to anon, authenticated
+  using (tenant_id = (select public.current_tenant())) with check (tenant_id = (select public.current_tenant()));
+revoke all on public.wa_webhook_events, public.wa_conversation_locks from anon, authenticated;
+grant all on public.wa_webhook_events, public.wa_conversation_locks to service_role;
+
+create or replace function public.wa_begin_event(p_tenant uuid, p_provider text, p_external_id text, p_phone text, p_lease_seconds int default 180)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare e public.wa_webhook_events; l public.wa_conversation_locks; v_token bigint; v_state jsonb;
+begin
+  if p_provider is null or p_provider not in ('meta', 'openwa', 'wacrm', 'twilio', 'simulator') or char_length(coalesce(p_external_id, '')) not between 1 and 200
+     or coalesce(p_phone, '') !~ '^[6-9][0-9]{9}$' then raise exception 'Invalid WhatsApp event.'; end if;
+  perform pg_advisory_xact_lock(hashtext('dch_wa_phone:' || p_tenant::text || ':' || p_phone));
+  delete from public.wa_webhook_events where tenant_id = p_tenant and created_at < now() - interval '30 days'
+    and (status <> 'processing' or lease_until is null or lease_until < now());
+  insert into public.wa_webhook_events (tenant_id, provider, external_id, phone)
+  values (p_tenant, p_provider, p_external_id, p_phone) on conflict (tenant_id, provider, external_id) do nothing;
+  select * into e from public.wa_webhook_events where tenant_id = p_tenant and provider = p_provider and external_id = p_external_id for update;
+  if e.phone <> p_phone then raise exception 'WhatsApp event identity mismatch.'; end if;
+  if e.status = 'completed' then return jsonb_build_object('ok', true, 'duplicate', true, 'completed', true); end if;
+  insert into public.wa_conversation_locks (tenant_id, phone) values (p_tenant, p_phone) on conflict do nothing;
+  select * into l from public.wa_conversation_locks where tenant_id = p_tenant and phone = p_phone for update;
+  if l.event_id is not null and l.lease_until > now() then
+    return jsonb_build_object('ok', false, 'busy', true, 'retry_after', greatest(1, ceil(extract(epoch from (l.lease_until - now())))::int));
+  end if;
+  v_token := l.lease_token + 1;
+  update public.wa_conversation_locks set event_id = e.id, lease_token = v_token,
+      lease_until = now() + make_interval(secs => greatest(30, least(coalesce(p_lease_seconds, 180), 600)))
+    where tenant_id = p_tenant and phone = p_phone;
+  update public.wa_webhook_events set status = 'processing', lease_token = v_token,
+      lease_until = now() + make_interval(secs => greatest(30, least(coalesce(p_lease_seconds, 180), 600))),
+      attempts = attempts + 1, updated_at = now()
+    where id = e.id returning * into e;
+  select state into v_state from public.wa_sessions where tenant_id = p_tenant and phone = p_phone;
+  return jsonb_build_object('ok', true, 'duplicate', false, 'event_id', e.id, 'lease_token', v_token,
+      'state', v_state, 'staged_state', e.staged_state, 'staged_replies', e.staged_replies);
+end $$;
+
+create or replace function public.wa_stage_event(p_event uuid, p_lease_token bigint, p_state jsonb, p_replies jsonb)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare e public.wa_webhook_events;
+begin
+  select * into e from public.wa_webhook_events where id = p_event;
+  if not found then return false; end if;
+  perform pg_advisory_xact_lock(hashtext('dch_wa_phone:' || e.tenant_id::text || ':' || e.phone));
+  select * into e from public.wa_webhook_events where id = p_event for update;
+  if e.status <> 'processing' or e.lease_token <> p_lease_token then return false; end if;
+  if jsonb_typeof(p_state) is distinct from 'object' or jsonb_typeof(p_replies) is distinct from 'array' then return false; end if;
+  if jsonb_array_length(p_replies) > 20 then return false; end if;
+  perform 1 from public.wa_conversation_locks where tenant_id = e.tenant_id and phone = e.phone
+      and event_id = p_event and lease_token = p_lease_token for update;
+  if not found then return false; end if;
+  update public.wa_webhook_events set staged_state = p_state, staged_replies = p_replies, updated_at = now(),
+      lease_until = now() + interval '5 minutes' where id = p_event;
+  update public.wa_conversation_locks set lease_until = now() + interval '5 minutes'
+   where tenant_id = e.tenant_id and phone = e.phone and event_id = p_event and lease_token = p_lease_token;
+  return found;
+end $$;
+
+create or replace function public.wa_complete_event(p_event uuid, p_lease_token bigint)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare e public.wa_webhook_events; changed int;
+begin
+  select * into e from public.wa_webhook_events where id = p_event;
+  if not found then return false; end if;
+  perform pg_advisory_xact_lock(hashtext('dch_wa_phone:' || e.tenant_id::text || ':' || e.phone));
+  select * into e from public.wa_webhook_events where id = p_event for update;
+  if e.status <> 'processing' or e.lease_token <> p_lease_token or e.staged_state is null or e.staged_replies is null then return false; end if;
+  perform 1 from public.wa_conversation_locks where tenant_id = e.tenant_id and phone = e.phone
+      and event_id = p_event and lease_token = p_lease_token for update;
+  if not found then return false; end if;
+  insert into public.wa_sessions (tenant_id, phone, state, updated_at) values (e.tenant_id, e.phone, e.staged_state, now())
+    on conflict (tenant_id, phone) do update set state = excluded.state, updated_at = excluded.updated_at;
+  update public.wa_webhook_events set status = 'completed', staged_state = null, staged_replies = null,
+      booking_result = null, lease_until = null, completed_at = now(), updated_at = now() where id = p_event;
+  update public.wa_conversation_locks set event_id = null, lease_until = now()
+    where tenant_id = e.tenant_id and phone = e.phone and event_id = p_event and lease_token = p_lease_token;
+  get diagnostics changed = row_count;
+  return changed = 1;
+end $$;
+
+create or replace function public.wa_fail_event(p_event uuid, p_lease_token bigint)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare e public.wa_webhook_events; changed int;
+begin
+  select * into e from public.wa_webhook_events where id = p_event;
+  if not found then return false; end if;
+  perform pg_advisory_xact_lock(hashtext('dch_wa_phone:' || e.tenant_id::text || ':' || e.phone));
+  select * into e from public.wa_webhook_events where id = p_event for update;
+  if e.status <> 'processing' or e.lease_token <> p_lease_token then return false; end if;
+  perform 1 from public.wa_conversation_locks where tenant_id = e.tenant_id and phone = e.phone
+      and event_id = p_event and lease_token = p_lease_token for update;
+  if not found then return false; end if;
+  update public.wa_webhook_events set status = 'pending', lease_until = null, updated_at = now() where id = p_event;
+  update public.wa_conversation_locks set event_id = null, lease_until = now()
+    where tenant_id = e.tenant_id and phone = e.phone and event_id = p_event and lease_token = p_lease_token;
+  get diagnostics changed = row_count;
+  return changed = 1;
+end $$;
+
+revoke all on function public.wa_begin_event(uuid, text, text, text, int), public.wa_stage_event(uuid, bigint, jsonb, jsonb),
+  public.wa_complete_event(uuid, bigint), public.wa_fail_event(uuid, bigint) from public, anon, authenticated;
+grant execute on function public.wa_begin_event(uuid, text, text, text, int), public.wa_stage_event(uuid, bigint, jsonb, jsonb),
+  public.wa_complete_event(uuid, bigint), public.wa_fail_event(uuid, bigint) to service_role;
+
 drop index if exists public.staff_invites_one_pending;
 create unique index if not exists staff_invites_one_pending_t on public.staff_invites (tenant_id, lower(email)) where status = 'pending';
 
@@ -459,6 +607,8 @@ begin
   if char_length(trim(coalesce(p_organisation, ''))) < 2 then raise exception 'Please enter your hospital or clinic name.'; end if;
   if v_phone !~ '^\+?[0-9]{10,13}$' then raise exception 'Please enter a valid mobile number.'; end if;
   if v_email is not null and v_email !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then raise exception 'Please enter a valid email or leave it empty.'; end if;
+  -- Serialize duplicate-phone and whole-site hourly checks with the insert below.
+  perform pg_advisory_xact_lock(hashtext('dch_platform_lead_rate'));
   -- spam guard: one request per number every 10 minutes, and a ceiling for the whole form
   if exists (select 1 from public.platform_leads where phone = v_phone and created_at > now() - interval '10 minutes') then
     return;   -- already received — quietly accept the repeat

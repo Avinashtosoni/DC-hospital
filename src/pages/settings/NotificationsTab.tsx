@@ -168,7 +168,7 @@ function OpenwaFields({ cfg, set, secrets }: { cfg: AppSettings['notifications']
   try { example = fmt.includes('{phone}') ? fmt.replace('{phone}', '9876543210') : '' } catch { /* */ }
   return <>
     <div className="grid gap-3 sm:grid-cols-2">
-      <Field label="Gateway URL" hint="Paste the base URL or the full send-text URL — the session ID is filled in for you">
+      <Field label="Gateway URL" hint="HTTPS required. Paste the base URL or the full send-text URL — the session ID is filled in for you">
         <Input value={cfg.openwaUrl} onChange={(e) => onUrl(e.target.value)} onBlur={(e) => tidy(e.target.value)} placeholder="https://wacrm.digitalcomrade.in" className="font-mono text-xs" /></Field>
       <Field label="Session ID" hint="OpenWA dashboard → Sessions → the linked WhatsApp number">
         <Input value={cfg.openwaSession} onChange={(e) => set((s) => { s.openwaSession = e.target.value.trim() })} placeholder="9b11cfeb-b5a2-…" className="font-mono text-xs" /></Field>
@@ -346,7 +346,7 @@ function TemplateDrawer({ ev, ctx, ov, onClose }: { ev: NotifyEvent | null; ctx:
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="DLT / MSG91 template ID" hint="Required for MSG91; Fast2SMS DLT message ID"><Input value={t.smsTemplateId} onChange={(e) => set((x) => { x.smsTemplateId = e.target.value.trim() })} className="font-mono text-xs" placeholder="e.g. 65f1c2…" /></Field>
           <Field label="WhatsApp template name" hint="Approved template (Meta / MSG91 / Interakt) or AiSensy campaign name. Empty = free text"><Input value={t.waTemplate} onChange={(e) => set((x) => { x.waTemplate = e.target.value.trim() })} className="font-mono text-xs" placeholder="appointment_confirmed" /></Field>
-          <Field label="Template variables, in order" className="sm:col-span-2" hint="Fills WhatsApp {{1}}, {{2}}… and Fast2SMS DLT variables. Comma-separated token names.">
+          <Field label="Template variables, in order" className="sm:col-span-2" hint="Fills WhatsApp {{1}}ast2SMS DLT variables. Comma-separated token names.">
             <Input value={t.waParams} onChange={(e) => set((x) => { x.waParams = e.target.value.replace(/\s/g, '') })} className="font-mono text-xs" placeholder="name,doctor,date,time" />
           </Field>
         </div>

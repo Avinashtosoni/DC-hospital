@@ -40,8 +40,9 @@ describe('supabase/snippets/add-hospital.sql', () => {
     expect(r.id).toBe(CITY)
     const forms = await db.as<{ slug: string }>(null, `select slug from public.site_forms where tenant_id = $1 order by sort`, [CITY])
     expect(forms.map((f) => f.slug).sort()).toEqual(DEFAULT_FORMS.map((f) => f.slug).sort())
-    const [site] = await on<{ data: { name: string } }>(CITY, 'anon', `select data from public.site_content where key = 'settings'`)
-    expect(site.data).toMatchObject({ name: 'City Care Clinic', phone: '', email: '', billing: { legalName: 'City Care Clinic', gstin: '', pan: '', upiId: '' } })
+    const [site] = await on<{ data: { name: string; phone: string; email: string } }>(CITY, 'anon', `select data from public.public_site_content() where key = 'settings'`)
+    expect(site.data).toMatchObject({ name: 'City Care Clinic', phone: '', email: '' })
+    expect(site.data).not.toHaveProperty('billing')
     // the first hospital keeps its own forms (ids unchanged) and its owner
     expect((await profile(ids.mainOwner))).toEqual({ role: 'owner', tenant_id: PRIMARY })
     expect(Number((await db.one<{ n: string }>(null, `select count(*) n from public.site_forms where tenant_id = $1`, [PRIMARY])).n)).toBe(DEFAULT_FORMS.length)

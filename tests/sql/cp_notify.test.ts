@@ -201,6 +201,14 @@ describe('delivery log', () => {
     await fails(call(P_ADMIN, 'cp_retry_message', ['platform', row.id], ['text', 'uuid']), /Only failed messages/)
   })
 
+  test('one-time codes cannot be manually retried', async () => {
+    const row = await db.one<{ id: string }>(null, `insert into public.platform_outbox (kind, ref_id, channel, recipient, user_id, body, vars, status)
+      values ('otp', gen_random_uuid(), 'email', 'admin@hc.in', $1, '123456 is a code', '{"code":"123456"}', 'failed') returning id`, [P_ADMIN])
+    await fails(call(P_ADMIN, 'cp_retry_message', ['platform', row.id], ['text', 'uuid']), /one-time codes and tests cannot/)
+    expect((await db.one<{ status: string; body: string }>(null, `select status, body from public.platform_outbox where id = $1`, [row.id])))
+      .toEqual({ status: 'failed', body: '123456 is a code' })
+  })
+
   test('claiming for delivery', async () => {
     const got = await db.as<any>('service', `select * from public.claim_platform_outbox(3)`)
     expect(got).toHaveLength(3)

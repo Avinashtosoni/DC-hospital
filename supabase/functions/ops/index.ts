@@ -100,15 +100,23 @@ async function deliverRows(rows: any[]) {
     const body = row.kind === 'alert' && link && row.channel !== 'push' ? `${row.body}\n\nOpen: ${link}` : row.body
     const m: Msg = { id: row.id, event: EVENT[row.kind] ?? row.kind, channel: row.channel as Channel, recipient: row.recipient, subject: row.subject, body,
       vars: { ...(row.vars ?? {}), link, body: String(row.vars?.body ?? row.body ?? '') } }
-    const r = String(c.n[row.channel]?.provider ?? '').endsWith('-missing')
-      ? { ok: false, error: `The shared ${row.channel} account is not configured` }
-      : row.channel === 'push' && !c.n.push?.enabled ? { ok: false, error: 'Firebase service-account JSON is not configured' } : await deliver(m, c)
+    const oneTimeCode = row.kind === 'otp' || row.kind === 'signup_otp'
+    let r: Awaited<ReturnType<typeof deliver>>
+    try {
+      r = String(c.n[row.channel]?.provider ?? '').endsWith('-missing')
+        ? { ok: false, error: `The shared ${row.channel} account is not configured` }
+        : row.channel === 'push' && !c.n.push?.enabled ? { ok: false, error: 'Firebase service-account JSON is not configured' } : await deliver(m, c)
+    } catch (error) {
+      r = { ok: false, error: error instanceof Error ? error.message : 'Delivery failed' }
+    }
     r.ok ? sent++ : failed++
-    if (!r.ok && r.error) errors.push(r.error)
-    const giveUp = !r.ok && (row.attempts >= 3 || isPermanent(r.error))
+    if (!r.ok && r.error) errors.push(oneTimeCode ? 'One-time code delivery failed. Request a new code.' : r.error)
+    const giveUp = oneTimeCode || (!r.ok && (row.attempts >= 3 || isPermanent(r.error)))
     await admin.from('platform_outbox').update({
-      status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending', error: r.error ?? null, provider_ref: (r as any).ref ?? null,
+      status: r.ok ? 'sent' : giveUp ? 'failed' : 'pending', error: oneTimeCode && !r.ok ? 'One-time code delivery failed. Request a new code.' : r.error ?? null,
+      provider_ref: oneTimeCode ? null : (r as any).ref ?? null,
       sent_at: r.ok ? new Date().toISOString() : null,
+      ...(oneTimeCode ? { body: '', vars: {} } : {}),
       ...(!r.ok && !giveUp ? { next_attempt_at: new Date(Date.now() + retryDelayMs(row.attempts)).toISOString() } : {}),
     }).eq('id', row.id)
   }
@@ -137,15 +145,11 @@ Deno.serve(async (req) => {
   if (body.deliver_signup_otp) {
     const ref = String(body.deliver_signup_otp)
     if (!/^[0-9a-f-]{36}$/i.test(ref)) return json({ ok: false, message: 'Bad request' }, 400)
-    const { data: rows, error } = await admin.from('platform_outbox')
-      .update({ status: 'sending', attempts: 1, next_attempt_at: new Date().toISOString() })
-      .eq('kind', 'signup_otp').eq('ref_id', ref).eq('status', 'pending').gt('created_at', new Date(Date.now() - 5 * 60_000).toISOString()).select('*')
+    const { data: rows, error } = await admin.rpc('claim_platform_otp', { p_kind: 'signup_otp', p_ref: ref, p_user: null })
     if (error) return json({ ok: false, message: 'Could not send the code right now' }, 500)
     if (!rows?.length) return json({ ok: true, message: 'Already on its way' })
     const r = await deliverRows(rows as any[])
-    // the visitor sees a plain message; the reason is on the Health / Messaging pages
-    if (r.sent === 0 && r.errors[0]) console.error('signup otp:', r.errors[0])
-    return json({ ok: r.sent > 0, message: r.sent > 0 ? 'Code sent' : `We could not send the code on ${rows[0].channel === 'whatsapp' ? 'WhatsApp' : 'SMS'} right now` })
+    return json({ ok: r.sent > 0, message: r.sent > 0 ? 'Code sent' : 'We could not send the code right now. Please request a new code.' })
   }
 
   const w = await who(req)
@@ -153,13 +157,13 @@ Deno.serve(async (req) => {
   // a team member's own sign-in code: deliver it now rather than at the next scheduled flush
   if (body.deliver_otp) {
     if (w?.kind !== 'team') return json({ ok: false, message: 'Please sign in again' }, 403)
-    const { data: rows, error } = await admin.from('platform_outbox')
-      .update({ status: 'sending', attempts: 1, next_attempt_at: new Date().toISOString() })
-      .eq('kind', 'otp').eq('ref_id', String(body.deliver_otp)).eq('user_id', w.id).eq('status', 'pending').select('*')
-    if (error) return json({ ok: false, message: error.message }, 500)
+    const ref = String(body.deliver_otp)
+    if (!/^[0-9a-f-]{36}$/i.test(ref)) return json({ ok: false, message: 'Bad request' }, 400)
+    const { data: rows, error } = await admin.rpc('claim_platform_otp', { p_kind: 'otp', p_ref: ref, p_user: w.id })
+    if (error) return json({ ok: false, message: 'Could not send the code right now' }, 500)
     if (!rows?.length) return json({ ok: true, message: 'Already on its way' })
     const r = await deliverRows(rows as any[])
-    return json({ ok: r.sent > 0, message: r.sent > 0 ? 'Code sent' : r.errors[0] ?? 'Could not send the code' })
+    return json({ ok: r.sent > 0, message: r.sent > 0 ? 'Code sent' : 'Could not send the code. Please request a new one.' })
   }
   if (w?.kind === 'team' && !w.otpPassed) return json({ ok: false, error: 'Enter your sign-in code first', message: 'Enter your sign-in code first' }, 403)
 

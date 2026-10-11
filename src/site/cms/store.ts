@@ -3,6 +3,7 @@
  * tables `site_content`, `site_content_revisions`, `site_enquiries` + storage bucket `site-media`
  */
 import { supabase } from '../../lib/supabase'
+import { activeTenantId, isPrimaryTenant, PRIMARY_TENANT_ID } from '../../tenancy/state'
 import type { ContentKey } from './types'
 
 export interface ContentRow { key: ContentKey; data: unknown; updated_at: string; updated_by_name?: string | null }
@@ -42,10 +43,13 @@ const safeName = (name: string) => name.toLowerCase().replace(/\.[a-z0-9]+$/, ''
 // ------------------------------------------------------------------ Supabase
 const sb = () => { if (!supabase) throw new Error('Supabase is not configured'); return supabase }
 
+const mediaPrefix = () => activeTenantId() ?? PRIMARY_TENANT_ID
+
 const supabaseStore: CmsStore = {
   mode: 'supabase',
   async fetchAll() {
-    const { data, error } = await sb().from('site_content').select('key, data, updated_at, updated_by_name')
+    // public_site_content returns only public fields to visitors; owners/providers get their own editable rows.
+    const { data, error } = await sb().rpc('public_site_content')
     if (error) throw new Error(error.message)
     const out: ContentRows = {}
     for (const r of (data ?? []) as ContentRow[]) out[r.key] = r
@@ -66,22 +70,34 @@ const supabaseStore: CmsStore = {
     return (data ?? []) as Revision[]
   },
   async listMedia() {
-    const { data, error } = await sb().storage.from(MEDIA_BUCKET).list('', { limit: 200, sortBy: { column: 'created_at', order: 'desc' } })
-    if (error) throw new Error(error.message)
-    return (data ?? []).filter((f) => f.id && !f.name.startsWith('.')).map((f) => ({
-      name: f.name, size: (f.metadata as { size?: number } | null)?.size, created_at: f.created_at ?? undefined,
-      url: sb().storage.from(MEDIA_BUCKET).getPublicUrl(f.name).data.publicUrl,
-    }))
+    const folder = mediaPrefix()
+    const storage = sb().storage.from(MEDIA_BUCKET)
+    const [mine, legacy] = await Promise.all([
+      storage.list(folder, { limit: 200, sortBy: { column: 'created_at', order: 'desc' } }),
+      // Before multi-tenancy all hospital images were stored at the bucket root. They belong to the primary hospital.
+      isPrimaryTenant() ? storage.list('', { limit: 200, sortBy: { column: 'created_at', order: 'desc' } }) : Promise.resolve({ data: [], error: null }),
+    ])
+    if (mine.error) throw new Error(mine.error.message)
+    if (legacy.error) throw new Error(legacy.error.message)
+    const item = (f: NonNullable<typeof mine.data>[number], name: string): MediaItem => ({
+      name, size: (f.metadata as { size?: number } | null)?.size, created_at: f.created_at ?? undefined,
+      url: storage.getPublicUrl(name).data.publicUrl,
+    })
+    const scoped = (mine.data ?? []).filter((f) => f.id && !f.name.startsWith('.')).map((f) => item(f, `${folder}/${f.name}`))
+    const old = isPrimaryTenant() ? (legacy.data ?? []).filter((f) => f.id && !f.name.startsWith('.') && !f.name.includes('/')).map((f) => item(f, f.name)) : []
+    return [...scoped, ...old].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')).slice(0, 200)
   },
   async upload(file) {
     const blob = await compressImage(file)
     const ext = blob.type === 'image/webp' ? 'webp' : (file.name.split('.').pop() || 'bin').toLowerCase()
-    const path = `${Date.now().toString(36)}-${safeName(file.name)}.${ext}`
+    const path = `${mediaPrefix()}/${Date.now().toString(36)}-${safeName(file.name)}.${ext}`
     const { error } = await sb().storage.from(MEDIA_BUCKET).upload(path, blob, { contentType: blob.type || file.type, cacheControl: '31536000', upsert: false })
     if (error) throw new Error(error.message.includes('Bucket not found') ? 'Storage bucket "site-media" is missing — re-run supabase/master.sql.' : error.message)
     return { name: path, size: blob.size, created_at: new Date().toISOString(), url: sb().storage.from(MEDIA_BUCKET).getPublicUrl(path).data.publicUrl }
   },
   async removeMedia(item) {
+    const folder = mediaPrefix()
+    if (!(item.name.startsWith(`${folder}/`) || (isPrimaryTenant() && !item.name.includes('/')))) throw new Error('This image belongs to another hospital.')
     const { error } = await sb().storage.from(MEDIA_BUCKET).remove([item.name])
     if (error) throw new Error(error.message)
   },

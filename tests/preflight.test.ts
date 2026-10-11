@@ -15,7 +15,7 @@ function fakeFetch(over: Record<string, Response> = {}) {
       if (u.pathname === '/control-panel/') return new Response('', { headers: { 'x-robots-tag': 'noindex, nofollow' } })
       return new Response('ok', { headers: SEC })
     }
-    if (u.pathname === '/rest/v1/rpc/platform_signup_info') return Response.json({ enabled: true, mode: 'approve', trialDays: 14 })
+    if (u.pathname === '/rest/v1/rpc/platform_signup_info') return Response.json({ enabled: true, mode: 'approve', trialDays: 14, plan: 'clinic', plans: ['clinic'], otp: { required: true, channels: ['whatsapp', 'sms'] } })
     if (u.pathname === '/rest/v1/rpc/resolve_tenant') return Response.json([{ slug: 'main' }])
     if (u.pathname === '/rest/v1/patients') return Response.json([])
     if (u.pathname === '/auth/v1/settings') return Response.json({ mailer_autoconfirm: false, disable_signup: false })
@@ -32,7 +32,8 @@ describe('go-live preflight', () => {
   it('grades security headers', () => {
     expect(headerChecks(new Headers(SEC)).map((c) => c.status)).toEqual(['ok', 'ok', 'ok', 'ok'])
     const ro = headerChecks(new Headers({ 'content-security-policy-report-only': 'x' }))
-    expect(ro[0].status).toBe('warn')
+    expect(ro[0].status).toBe('fail')
+    expect(ro[1].status).toBe('fail')
     expect(ro[2].status).toBe('fail')
   })
   it('a healthy platform has nothing blocking', async () => {
@@ -56,10 +57,53 @@ describe('go-live preflight', () => {
     expect(r.filter((c) => c.status === 'fail').map((c) => c.name)).toEqual(['Auth: confirm e-mail', 'Auth: sign-ups allowed'])
     expect(r.find((c) => c.name === 'Auth: confirm e-mail')?.detail).toMatch(/Confirm email" is OFF/)
     const unknown = await preflight('https://h.in', { fetch: fakeFetch({ 'GET abc.supabase.co/auth/v1/settings': new Response('', { status: 401 }) }) })
-    expect(unknown.find((c) => c.name === 'Auth: confirm e-mail')?.status).toBe('warn')
+    expect(unknown.filter((c) => c.name.startsWith('Auth:')).map((c) => c.status)).toEqual(['fail', 'fail'])
+  })
+  it('fails closed for unknown, malformed and error responses', async () => {
+    const signup = await preflight('https://h.in', { fetch: fakeFetch({
+      'POST abc.supabase.co/rest/v1/rpc/platform_signup_info': Response.json({ enabled: true, mode: 'unknown', trialDays: -1 }),
+    }) })
+    expect(signup.find((c) => c.name === 'Database up to date')?.status).toBe('fail')
+    expect(signup.find((c) => c.name === 'Free-trial sign-up')?.status).toBe('fail')
+
+    const auth = await preflight('https://h.in', { fetch: fakeFetch({
+      'GET abc.supabase.co/auth/v1/settings': Response.json(null),
+      'GET abc.supabase.co/rest/v1/patients': new Response('unavailable', { status: 503 }),
+      'OPTIONS abc.supabase.co/functions/v1/notify': new Response('unavailable', { status: 503 }),
+    }) })
+    expect(auth.filter((c) => c.name.startsWith('Auth:')).map((c) => c.status)).toEqual(['fail', 'fail'])
+    expect(auth.find((c) => c.name === 'Patients hidden from visitors')?.status).toBe('fail')
+    expect(auth.find((c) => c.name === 'Function notify')?.status).toBe('fail')
+  })
+  it('never probes an invalid/insecure Supabase URL and does not require REQUIRE_BACKEND', async () => {
+    const optionalEnv = ENV.replace(', "REQUIRE_BACKEND": "true"', '')
+    const optional = await preflight('https://h.in', { fetch: fakeFetch({ 'GET h.in/env.js': new Response(optionalEnv) }) })
+    expect(optional.find((c) => c.name === 'Backend configured')?.status).toBe('ok')
+    expect(optional.find((c) => c.name === 'Backend fallback disabled')?.status).toBe('ok')
+
+    let backendRequests = 0
+    const insecureEnv = optionalEnv.replace('https://abc.supabase.co', 'http://abc.supabase.co')
+    const insecure = await preflight('https://h.in', { fetch: async (url, init) => {
+      if (new URL(url).host === 'abc.supabase.co') backendRequests++
+      if (new URL(url).pathname === '/env.js') return new Response(insecureEnv)
+      return fakeFetch()(url, init)
+    } })
+    expect(insecure.find((c) => c.name === 'Backend configured')?.status).toBe('fail')
+    expect(insecure.find((c) => c.name === 'Database up to date')?.status).toBe('fail')
+    expect(insecure.filter((c) => c.name.startsWith('Auth:') || c.name.startsWith('Function '))).toEqual([])
+    expect(backendRequests).toBe(0)
+  })
+  it('stops before any request when the public site address is unsafe', async () => {
+    for (const base of ['http://h.in', 'https://user:pass@h.in', 'https://h.in/?x=1', 'https://h.in/#frag']) {
+      let calls = 0
+      const r = await preflight(base, { fetch: async () => { calls++; throw new Error('must not probe') } })
+      expect(r).toHaveLength(1)
+      expect(r[0].status).toBe('fail')
+      expect(calls).toBe(0)
+    }
   })
   it('stops early when the site is down', async () => {
-    const r = await preflight('http://h.in', { fetch: async () => { throw new Error('ECONNREFUSED') } })
-    expect(r.map((c) => c.status)).toEqual(['fail', 'fail'])
+    const r = await preflight('https://h.in', { fetch: async () => { throw new Error('ECONNREFUSED') } })
+    expect(r.map((c) => c.status)).toEqual(['ok', 'fail'])
   })
 })

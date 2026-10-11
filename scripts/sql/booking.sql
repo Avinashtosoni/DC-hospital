@@ -126,24 +126,29 @@ $$;
 
 create or replace function public.public_availability(p_doctor uuid, p_from date, p_to date)
 returns jsonb language sql stable security definer set search_path = public as $$
-  with r as (select p_from as f, least(p_to, p_from + 62) as t)
+  -- Only future availability is public; callers cannot use this RPC to enumerate historical visits.
+  with r as (
+    select greatest(coalesce(p_from, public.today_ist()), public.today_ist()) as f,
+           least(coalesce(p_to, coalesce(p_from, public.today_ist())),
+                 public.today_ist() + greatest(1, least(90, coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30)))) as t
+  ), bounds as (select f, t from r where f <= t)
   select jsonb_build_object(
     'booked', coalesce((
       select jsonb_agg(jsonb_build_object('doctor_id', a.doctor_id, 'appointment_date', a.appointment_date,
-                                          'appointment_time', a.appointment_time, 'status', a.status))
-      from public.appointments a, r
+                                          'appointment_time', a.appointment_time))
+      from public.appointments a, bounds r
       where a.tenant_id = public.current_tenant() and (p_doctor is null or a.doctor_id = p_doctor) and a.appointment_date between r.f and r.t
         and a.status not in ('cancelled', 'no_show')), '[]'::jsonb),
     'leaves', coalesce((
-      select jsonb_agg(jsonb_build_object('id', l.id, 'doctor_id', l.doctor_id, 'kind', l.kind, 'status', l.status,
+      select jsonb_agg(jsonb_build_object('doctor_id', l.doctor_id, 'kind', l.kind,
                                           'start_date', l.start_date, 'end_date', l.end_date,
                                           'start_time', l.start_time, 'end_time', l.end_time))
-      from public.doctor_leaves l, r
+      from public.doctor_leaves l, bounds r
       where l.tenant_id = public.current_tenant() and (p_doctor is null or l.doctor_id = p_doctor) and l.status = 'approved'
         and l.start_date <= r.t and l.end_date >= r.f), '[]'::jsonb),
     'holidays', coalesce((
-      select jsonb_agg(jsonb_build_object('id', h.id, 'holiday_date', h.holiday_date, 'name', h.name))
-      from public.holidays h, r where h.tenant_id = public.current_tenant() and h.holiday_date between r.f and r.t), '[]'::jsonb))
+      select jsonb_agg(jsonb_build_object('holiday_date', h.holiday_date, 'name', h.name))
+      from public.holidays h, bounds r where h.tenant_id = public.current_tenant() and h.holiday_date between r.f and r.t), '[]'::jsonb))
 $$;
 
 -- p_channel: 'whatsapp', 'sms' or 'email' as picked by the visitor; null / unavailable → every available channel
@@ -172,6 +177,8 @@ begin
   if p_channel = 'email' and v_email is null then
     raise exception 'Enter your email address to get the code by email.';
   end if;
+  -- Serialize the check-and-insert window so concurrent requests cannot overshoot phone/IP/site quotas.
+  perform pg_advisory_xact_lock(hashtext('dch_booking_otp_rate:' || public.current_tenant()::text));
   if exists (select 1 from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before requesting another code.';
   end if;
@@ -402,6 +409,8 @@ begin
     if v_phone !~ '^[6-9][0-9]{9}$' then
       raise exception 'Please enter a valid 10-digit Indian mobile number.';
     end if;
+    -- Same mutex as request_booking_otp(): direct bookings still consume these shared hourly quotas.
+    perform pg_advisory_xact_lock(hashtext('dch_booking_otp_rate:' || public.current_tenant()::text));
     if (select count(*) from public.booking_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '1 hour') >= 5 then
       raise exception 'Too many bookings for this number. Please try again in an hour or call the hospital.';
     end if;
@@ -431,15 +440,35 @@ end $$;
 -- WhatsApp chatbot bookings: the sender's number is already verified by WhatsApp. Service role only
 -- (called by the Edge Function supabase/functions/whatsapp-bot).
 drop function if exists public.whatsapp_book_appointment(text, uuid, date, text, text, text) cascade;
-create function public.whatsapp_book_appointment(p_phone text, p_doctor uuid, p_date date, p_time text, p_name text, p_reason text default null)
+drop function if exists public.whatsapp_book_appointment(text, uuid, date, text, text, text, uuid, bigint) cascade;
+create function public.whatsapp_book_appointment(
+  p_phone text, p_doctor uuid, p_date date, p_time text, p_name text, p_reason text default null,
+  p_event_id uuid default null, p_lease_token bigint default null)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare e record; v_result jsonb;
 begin
   perform set_config('app.actor_name', 'WhatsApp booking', true);
   perform set_config('app.actor_role', 'public', true);
-  return public.book_slot_internal(p_phone, p_doctor, p_date, p_time, p_name, 'other', null, null, p_reason, 'whatsapp');
+  if p_event_id is not null then
+    select * into e from public.wa_webhook_events where id = p_event_id and tenant_id = public.current_tenant() for update;
+    if not found or e.status <> 'processing' or e.lease_token <> p_lease_token then
+      raise exception 'This WhatsApp message is no longer active. Please try again.';
+    end if;
+    perform 1 from public.wa_conversation_locks where tenant_id = e.tenant_id and phone = e.phone
+        and event_id = e.id and lease_token = p_lease_token for update;
+    if not found then raise exception 'This WhatsApp message is no longer active. Please try again.'; end if;
+    if e.booking_result is not null then return e.booking_result; end if;
+  end if;
+  v_result := public.book_slot_internal(p_phone, p_doctor, p_date, p_time, p_name, 'other', null, null, p_reason, 'whatsapp');
+  if p_event_id is not null then
+    update public.wa_webhook_events set booking_result = v_result, updated_at = now()
+      where id = p_event_id and status = 'processing' and lease_token = p_lease_token;
+    if not found then raise exception 'This WhatsApp message is no longer active. Please try again.'; end if;
+  end if;
+  return v_result;
 end $$;
-revoke all on function public.whatsapp_book_appointment(text, uuid, date, text, text, text) from public, anon, authenticated;
-grant execute on function public.whatsapp_book_appointment(text, uuid, date, text, text, text) to service_role;
+revoke all on function public.whatsapp_book_appointment(text, uuid, date, text, text, text, uuid, bigint) from public, anon, authenticated;
+grant execute on function public.whatsapp_book_appointment(text, uuid, date, text, text, text, uuid, bigint) to service_role;
 grant execute on function public.public_doctors() to service_role;
 grant execute on function public.public_availability(uuid, date, date) to service_role;
 

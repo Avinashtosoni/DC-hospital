@@ -4,7 +4,7 @@ import { platformName } from '../lib/supabase'
 import { cn } from '../lib/utils'
 import { signupInfo, signupProblem, trialSignup, type SignupForm, type SignupInfo, type SignupResult } from './api'
 import { LEGAL_VERSION } from './legal'
-import { siteHref as platformHref } from './site/ui'
+import { BrandMark, siteHref as platformHref } from './site/ui'
 import { usePlans } from './planStore'
 import { hospitalUrl } from '../tenancy/urls'
 import { PhoneField, type Verified } from './PhoneVerify'
@@ -55,7 +55,10 @@ export default function SignupPage() {
     <div className="min-h-screen bg-[#f7f7ff] text-slate-700">
       <header className="border-b border-peri-200/60 bg-white/80 backdrop-blur">
         <div className="l-container flex h-16 items-center justify-between gap-4">
-          <a href={platformHref('/')} className="inline-flex items-center gap-2 text-sm font-semibold text-peri-800 hover:text-peri-500"><ArrowLeft className="h-4 w-4" />{platformName}</a>
+          <a href={platformHref('/')} className="flex items-center gap-2.5 font-display text-lg font-extrabold text-peri-900">
+            <BrandMark />{platformName}
+          </a>
+          <a href={platformHref('/')} className="inline-flex items-center gap-1.5 text-sm font-semibold text-peri-700 hover:text-peri-500"><ArrowLeft className="h-4 w-4" /><span className="hidden sm:inline">Back to site</span><span className="sm:hidden">Back</span></a>
         </div>
       </header>
       <main className="l-container grid gap-10 py-12 lg:grid-cols-[1fr_1.1fr] lg:items-start">

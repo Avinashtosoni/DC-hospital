@@ -72,6 +72,8 @@ begin
   if not coalesce((c ->> 'enabled')::boolean, false) then raise exception 'Online sign-up is closed right now — please use the contact form.'; end if;
   if v_phone !~ '^[6-9][0-9]{9}$' then raise exception 'Enter a 10-digit Indian mobile number.'; end if;
   if v_ch is null or not (info -> 'channels' ? v_ch) then raise exception 'A code can''t be sent on % right now — choose another way.', coalesce(v_ch, 'that channel'); end if;
+  -- Serialize number, IP and whole-platform checks before creating the OTP/outbox rows.
+  perform pg_advisory_xact_lock(hashtext('dch_signup_otp_rate'));
   if exists (select 1 from public.platform_signup_otps where phone = v_phone and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before asking for another code.';
   end if;
@@ -205,6 +207,8 @@ begin
   if v_terms = '' or char_length(v_terms) > 20 then raise exception 'Please accept the Terms of Service and the Data Processing Agreement.'; end if;
   if not (b -> 'plans' ? v_plan) or coalesce((b -> 'plans' -> v_plan ->> 'archived')::boolean, false) then v_plan := coalesce(c ->> 'plan', 'clinic'); end if;
 
+  -- Serialize account/phone/IP/global check-and-insert limits and the pending slug allocation.
+  perform pg_advisory_xact_lock(hashtext('dch_platform_signup_rate'));
   -- one account = one hospital
   if exists (select 1 from public.profiles where lower(email) = v_mail and tenant_id is not null and role <> 'patient')
      or exists (select 1 from public.provider_users u join auth.users a on a.id = u.user_id where lower(a.email) = v_mail)
@@ -257,6 +261,51 @@ begin
   get diagnostics n = row_count;
   return n;
 end $$;
+
+-- The scheduler must never dispatch an expired/verified OTP, and a one-time code is never retried.
+-- Remove the plaintext from the queue after delivery or interruption; resend means issuing a fresh code.
+create or replace function public.claim_platform_outbox(p_limit int default 25)
+returns setof public.platform_outbox language plpgsql volatile security definer set search_path = public as $$
+begin
+  update public.platform_outbox set status = 'failed', body = '', vars = '{}'::jsonb,
+      error = 'One-time code expired or delivery was interrupted; request a new code.', next_attempt_at = now()
+   where kind in ('otp', 'signup_otp') and status in ('pending', 'sending')
+     and ((status = 'sending' and next_attempt_at < now() - interval '10 minutes')
+       or (status = 'pending' and
+           ((kind = 'otp' and not exists (select 1 from public.login_otps x where x.id = ref_id and x.expires_at > now() and x.verified_at is null and x.attempts < 5))
+         or (kind = 'signup_otp' and not exists (select 1 from public.platform_signup_otps x where x.id = ref_id and x.expires_at > now() and x.verified_at is null and x.attempts < 5)))));
+  update public.platform_outbox set body = '', vars = '{}'::jsonb
+   where kind in ('otp', 'signup_otp') and status in ('sent', 'failed', 'skipped') and (body <> '' or vars <> '{}'::jsonb);
+  update public.platform_outbox set status = 'pending'
+   where status = 'sending' and kind not in ('otp', 'signup_otp') and next_attempt_at < now() - interval '10 minutes';
+  return query
+    update public.platform_outbox o set status = 'sending', attempts = o.attempts + 1, next_attempt_at = now()
+     where o.id in (
+       select x.id from public.platform_outbox x
+        where x.status = 'pending' and x.next_attempt_at <= now()
+          and (x.kind not in ('otp', 'signup_otp')
+            or (x.kind = 'otp' and exists (select 1 from public.login_otps l where l.id = x.ref_id and l.expires_at > now() and l.verified_at is null and l.attempts < 5))
+            or (x.kind = 'signup_otp' and exists (select 1 from public.platform_signup_otps s where s.id = x.ref_id and s.expires_at > now() and s.verified_at is null and s.attempts < 5)))
+        order by x.created_at limit greatest(1, least(p_limit, 100)) for update skip locked)
+    returning o.*;
+end $$;
+
+-- Atomically reserve direct (immediate) delivery only while its code is live and unused.
+create or replace function public.claim_platform_otp(p_kind text, p_ref uuid, p_user uuid default null)
+returns setof public.platform_outbox language plpgsql volatile security definer set search_path = public as $$
+begin
+  if p_kind not in ('otp', 'signup_otp') then return; end if;
+  return query
+    update public.platform_outbox o set status = 'sending', attempts = o.attempts + 1, next_attempt_at = now()
+     where o.kind = p_kind and o.ref_id = p_ref and o.status = 'pending'
+       and (p_user is null or o.user_id = p_user)
+       and (p_kind <> 'signup_otp' or o.created_at > now() - interval '5 minutes')
+       and ((p_kind = 'otp' and exists (select 1 from public.login_otps x where x.id = o.ref_id and x.expires_at > now() and x.verified_at is null and x.attempts < 5))
+         or (p_kind = 'signup_otp' and exists (select 1 from public.platform_signup_otps x where x.id = o.ref_id and x.expires_at > now() and x.verified_at is null and x.attempts < 5)))
+    returning o.*;
+end $$;
+revoke all on function public.claim_platform_otp(text, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.claim_platform_otp(text, uuid, uuid) to service_role;
 
 revoke all on function public.signup_otp_info(), public.request_signup_otp(text, text), public.verify_signup_otp(text, text),
   public.signup_otp_consume(text, text), public.signup_otp_cleanup() from public;

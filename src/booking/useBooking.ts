@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { format, parseISO } from 'date-fns'
 import type { Service, SiteDoctor, SiteSettings } from '../site/cms/types'
-import { bookingApi, bookingWindow, slotsFor, type Availability, type PublicDoctor } from './api'
+import { addIstDays, bookingApi, bookingWindow, istDateString, slotsFor, type Availability, type PublicDoctor } from './api'
 
 /** A bookable doctor: the real schedule (database) joined with the public profile (CMS) by name. */
 export interface BookDoc {
@@ -58,9 +58,9 @@ export function firstFree(map: Map<string, string[]>): { date: string; time: str
 }
 
 export function whenLabel(date: string, time?: string) {
-  const t = format(new Date(), 'yyyy-MM-dd')
-  const tm = format(new Date(Date.now() + 864e5), 'yyyy-MM-dd')
-  const day = date === t ? 'Today' : date === tm ? 'Tomorrow' : format(parseISO(date), 'EEE, d MMM')
+  const today = istDateString()
+  const tomorrow = addIstDays(today, 1)
+  const day = date === today ? 'Today' : date === tomorrow ? 'Tomorrow' : format(parseISO(date), 'EEE, d MMM')
   if (!time) return day
   const [h, m] = time.split(':').map(Number)
   return `${day}, ${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`

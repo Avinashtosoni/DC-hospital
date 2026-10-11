@@ -1,9 +1,9 @@
-import { ArrowRight, CheckCircle2, Quote, Sparkles, Users, XCircle } from 'lucide-react'
+import { ArrowRight, CheckCircle2, HeartPulse, Quote, Sparkles, Users, XCircle } from 'lucide-react'
 import { platformName as platform } from '../../lib/supabase'
 import { safeUrl } from '../../lib/safeUrl'
-import { A, CtaBand, FaqList, Hi, IconCard, Section, SectionHead, useSeo } from '../site/ui'
+import { A, BrandMark, CtaBand, FaqList, Hi, IconCard, Section, SectionHead, useSeo } from '../site/ui'
 import type { PlatformSite } from '../site/types'
-import { DashboardMock, PlanCards } from './shared'
+import { PlanCards } from './shared'
 
 export default function HomePage({ site }: { site: PlatformSite }) {
   const h = site.home
@@ -26,7 +26,7 @@ export default function HomePage({ site }: { site: PlatformSite }) {
             </div>
             {h.hero.note && <p className="mt-5 text-sm text-slate-500">{h.hero.note}</p>}
           </div>
-          {heroImg ? <img src={heroImg} alt="" className="mx-auto w-full max-w-[560px] rounded-[2rem] shadow-[0_40px_80px_-30px_rgba(41,41,102,.45)]" /> : <DashboardMock />}
+          {heroImg ? <img src={heroImg} alt="" className="mx-auto w-full max-w-[560px] rounded-[2rem] shadow-[0_40px_80px_-30px_rgba(41,41,102,.45)]" /> : <HeroCareVisual />}
         </div>
       </section>
 
@@ -172,18 +172,64 @@ export default function HomePage({ site }: { site: PlatformSite }) {
   )
 }
 
+function HeroCareVisual() {
+  const metrics = [['OPD today', '48'], ['Beds free', '12'], ['Collections', '₹1.8L']]
+  return (
+    <div className="relative mx-auto w-full max-w-[560px]">
+      <figure className="relative isolate overflow-hidden rounded-[2rem] border border-white/80 bg-peri-100 shadow-[0_40px_80px_-30px_rgba(41,41,102,.45)]">
+        <img
+          src="/landing/indian-care-team.jpg"
+          alt="An Indian doctor speaking with a patient in a modern hospital consultation room"
+          className="aspect-[4/3] w-full object-cover object-center"
+          fetchPriority="high"
+        />
+        <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-[#292966]/75 via-[#292966]/5 to-[#292966]/15" />
+        <div className="absolute left-4 top-4 flex items-center gap-2.5 rounded-2xl border border-white/70 bg-white/95 px-3 py-2 shadow-lg backdrop-blur sm:left-5 sm:top-5">
+          <BrandMark />
+          <span>
+            <span className="block font-display text-sm font-extrabold leading-tight text-peri-900">{platform}</span>
+            <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Made for Indian hospitals</span>
+          </span>
+        </div>
+        <figcaption className="absolute bottom-16 left-5 right-5 text-white drop-shadow-sm sm:bottom-20 sm:left-7">
+          <span className="text-[10px] font-bold uppercase tracking-[.2em] text-[#E0E0FF]">Care, connected</span>
+          <p className="mt-1 max-w-sm font-display text-xl font-extrabold leading-tight sm:text-2xl">More time with patients. Less time chasing paperwork.</p>
+        </figcaption>
+      </figure>
+      <div className="relative z-10 mx-3 -mt-8 rounded-2xl border border-white/80 bg-white/95 p-4 shadow-[0_24px_60px_-24px_rgba(41,41,102,.5)] backdrop-blur-xl sm:mx-6 sm:p-5">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-peri-800 text-white"><HeartPulse className="h-5 w-5" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block font-display text-sm font-bold text-peri-900">Hospital overview</span>
+            <span className="block text-[11px] text-slate-500">Illustrative dashboard preview</span>
+          </span>
+          <span className="rounded-full bg-peri-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-peri-700">Sample</span>
+        </div>
+        <dl className="mt-3 grid grid-cols-3 gap-2">
+          {metrics.map(([label, value]) => (
+            <div key={label} className="rounded-xl bg-peri-50/80 px-3 py-2.5">
+              <dt className="truncate text-[10px] font-medium text-slate-500">{label}</dt>
+              <dd className="mt-0.5 font-display text-lg font-extrabold leading-none text-peri-900">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  )
+}
+
 /** illustrative hospital website (pure CSS) */
 function SiteMock() {
   return (
     <div aria-hidden="true" className="relative mx-auto w-full max-w-[520px] rounded-[2rem] border border-white bg-white/90 p-4 shadow-[0_40px_80px_-30px_rgba(41,41,102,.45)]">
-      <div className="flex items-center gap-2 rounded-xl bg-peri-50 px-3 py-2 text-[11px] text-slate-500"><span className="h-2 w-2 rounded-full bg-emerald-400" />https://www.yourhospital.in</div>
+      <div className="flex items-center gap-2 rounded-xl bg-peri-50 px-3 py-2 text-[11px] text-slate-500"><span className="h-2 w-2 rounded-full bg-emerald-400" />Example preview · yourhospital.in</div>
       <div className="mt-3 rounded-2xl bg-gradient-to-br from-[#292966] to-[#5C5C99] p-5 text-white">
-        <p className="font-display text-lg font-extrabold">City Care Hospital</p>
-        <p className="mt-1 text-xs text-[#CCCCFF]">Multi-speciality care, 24×7 emergency</p>
+        <p className="font-display text-lg font-extrabold">Your Hospital</p>
+        <p className="mt-1 text-xs text-[#CCCCFF]">Multi-speciality care, shaped around your team</p>
         <span className="mt-3 inline-block rounded-full bg-white px-3 py-1 text-[11px] font-bold text-[#292966]">Book appointment</span>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2">
-        {['Dr. Rao · Cardiology', 'Dr. Sen · Paediatrics', 'Dr. Iyer · Ortho'].map((d) => (
+        {['Cardiology', 'Paediatrics', 'Orthopaedics'].map((d) => (
           <div key={d} className="rounded-xl border border-peri-100 p-2 text-center">
             <span className="mx-auto block h-9 w-9 rounded-full bg-[#CCCCFF]" />
             <p className="mt-1.5 text-[10px] font-semibold text-peri-900">{d}</p>

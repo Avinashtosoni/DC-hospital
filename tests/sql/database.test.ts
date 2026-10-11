@@ -45,6 +45,19 @@ describe('row level security', () => {
 })
 
 describe('online booking API', () => {
+  test('anonymous availability contains only future slot blockers within the configured window', async () => {
+    const today = (await db.one<{ d: string }>(null, `select public.today_ist()::text d`)).d
+    const [availability] = await db.as<{ r: { booked: any[]; leaves: any[]; holidays: any[] } }>('anon',
+      `select public.public_availability(null, $1::date - 365, $1::date + 500) r`, [today])
+    const end = (await db.one<{ d: string }>(null, `select (public.today_ist() + greatest(1, least(90, coalesce(nullif(public.booking_setting('advanceDays', '30'), '')::int, 30))))::text d`)).d
+    expect(availability.r.booked.every((x) => x.appointment_date >= today && x.appointment_date <= end)).toBe(true)
+    expect(availability.r.booked.every((x) => Object.keys(x).sort().join(',') === 'appointment_date,appointment_time,doctor_id')).toBe(true)
+    expect(availability.r.leaves.every((x) => Object.keys(x).sort().join(',') === 'doctor_id,end_date,end_time,kind,start_date,start_time')).toBe(true)
+    expect(availability.r.holidays.every((x) => Object.keys(x).sort().join(',') === 'holiday_date,name')).toBe(true)
+    const outside = await db.one<{ r: { booked: any[] } }>('anon', `select public.public_availability(null, $1::date + 500, $1::date + 510) r`, [today])
+    expect(outside.r.booked).toEqual([])
+  })
+
   test('OTP → verify → book creates patient, appointment and unpaid invoice; token is single use', async () => {
     const phone = '9876501234'
     const otp = await db.one<{ r: { ref: string; demo_code?: string } }>('anon', 'select public.request_booking_otp($1) r', [phone])

@@ -1,13 +1,23 @@
-import { ArrowRight, Building2, CheckCircle2, ClipboardList, Clock, Eye, Handshake, HeartHandshake, HeartPulse, Mail, MapPin, MessageCircle, Phone, Quote, ShieldCheck, Stethoscope, Target, Users, Wallet, XCircle } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Clock, Eye, Handshake, Mail, MapPin, MessageCircle, Phone, Quote, ShieldCheck, Target, XCircle } from 'lucide-react'
+import { platformName } from '../../lib/supabase'
 import { safeUrl } from '../../lib/safeUrl'
 import { cn } from '../../lib/utils'
 import { iconFor } from '../../site/cms/icons'
 import { usePlans } from '../planStore'
-import { A, CtaBand, FaqList, Hi, IconCard, PageHero, Section, SectionHead, StepsTimeline, useSeo } from '../site/ui'
+import { A, BrandMark, CtaBand, FaqList, Hi, IconCard, PageHero, Section, SectionHead, StepsTimeline, useSeo } from '../site/ui'
 import type { PlatformSite } from '../site/types'
 import { ContactForm, PlanCards } from './shared'
 
 type P = { site: PlatformSite }
+
+const solutionImages: Record<string, string> = {
+  Stethoscope: '/landing/doc-ananya.webp',
+  Building2: '/landing/indian-care-team.jpg',
+  Bed: '/landing/care.webp',
+  Award: '/landing/doc-aditya.webp',
+  Microscope: '/landing/doc-meera.webp',
+  Video: '/landing/doc-arjun.webp',
+}
 
 export function FeaturesPage({ site }: P) {
   const c = site.features
@@ -164,7 +174,7 @@ export function SolutionsPage({ site }: P) {
         {c.items.map((s) => {
           const Icon = iconFor(s.icon)
           const plan = plans.find((p) => p.id === s.plan && !p.archived)
-          const img = safeUrl(s.image, 'image')
+          const img = safeUrl(s.image, 'image') || solutionImages[s.icon]
           return (
             <article key={s.title} className="flex flex-col overflow-hidden rounded-[2rem] border border-peri-200/80 bg-white shadow-soft">
               {img && <img src={img} alt="" loading="lazy" className="h-48 w-full object-cover" />}
@@ -477,31 +487,22 @@ export function AboutPage({ site }: P) {
   )
 }
 
-/** decorative hero card shown when no About picture is uploaded */
+/** Indian care-team photo collage shown until the team uploads its own About photo. */
 function AboutArt() {
-  const roles = [[Stethoscope, 'Doctor'], [Users, 'Reception'], [Wallet, 'Accounts'], [Building2, 'Owner'], [HeartPulse, 'Patient'], [ClipboardList, 'Staff']] as const
   return (
-    <div aria-hidden="true" className="relative mx-auto w-full max-w-md">
-      <div className="absolute inset-0 rotate-3 rounded-[2rem] bg-[#A3A3CC]/40" />
-      <div className="relative rounded-[2rem] border border-peri-200/80 bg-white/90 p-6 shadow-lift backdrop-blur sm:p-8">
-        <div className="flex items-center gap-3">
-          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#292966] text-[#CCCCFF]"><HeartHandshake className="h-6 w-6" /></span>
-          <div><p className="font-display font-bold text-peri-900">One hospital, one team</p><p className="text-sm text-slate-500">Everyone on the same page</p></div>
-        </div>
-        <div className="mt-6 grid grid-cols-3 gap-3">
-          {roles.map(([Icon, label]) => (
-            <div key={label} className="rounded-2xl bg-peri-50 p-3 text-center ring-1 ring-peri-100">
-              <Icon className="mx-auto h-6 w-6 text-peri-700" />
-              <p className="mt-2 text-xs font-semibold text-peri-900">{label}</p>
-            </div>
-          ))}
-        </div>
-        <div className="mt-6 space-y-2.5">
-          {[78, 56, 90].map((w, i) => <div key={i} className="h-2.5 rounded-full bg-peri-100"><div className="h-full rounded-full bg-gradient-to-r from-[#5C5C99] to-[#A3A3CC]" style={{ width: `${w}%` }} /></div>)}
+    <div className="relative mx-auto w-full max-w-[560px] pb-8">
+      <div aria-hidden="true" className="absolute -inset-5 rounded-[2.5rem] bg-gradient-to-br from-peri-100/80 via-transparent to-[#A3A3CC]/30 blur-xl" />
+      <div className="relative grid grid-cols-[1.05fr_.95fr] items-center gap-3 sm:gap-4">
+        <img src="/landing/hero.webp" alt="Indian woman doctor in a white coat holding a tablet" className="h-[330px] w-full rounded-[1.6rem] object-cover object-[50%_20%] shadow-soft sm:h-[390px]" />
+        <div className="grid gap-3 sm:gap-4">
+          <img src="/landing/care.webp" alt="A bright, modern hospital room" className="h-[155px] w-full rounded-2xl object-cover shadow-soft sm:h-[185px]" />
+          <img src="/landing/indian-care-team.jpg" alt="An Indian doctor consulting with a patient" className="h-[165px] w-full rounded-2xl object-cover object-center shadow-soft sm:h-[190px]" />
         </div>
       </div>
-      <div className="absolute -bottom-5 -left-4 flex items-center gap-2 rounded-2xl bg-white px-4 py-3 shadow-lift ring-1 ring-peri-100">
-        <ShieldCheck className="h-5 w-5 text-peri-600" /><span className="text-sm font-semibold text-peri-900">Private by design</span>
+      <div className="absolute -bottom-1 left-3 flex max-w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-2xl border border-white/80 bg-white/95 px-3 py-2.5 shadow-lift sm:left-5 sm:px-4">
+        <BrandMark />
+        <span className="min-w-0"><span className="block font-display text-sm font-extrabold text-peri-900">{platformName}</span><span className="block truncate text-[11px] text-slate-500">Built for India’s care teams</span></span>
+        <span className="ml-1 hidden items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 sm:inline-flex"><ShieldCheck className="h-3.5 w-3.5" />Privacy built in</span>
       </div>
     </div>
   )

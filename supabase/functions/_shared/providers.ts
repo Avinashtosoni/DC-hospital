@@ -17,7 +17,7 @@ export interface Ctx {
 export interface Result { ok: boolean; ref?: string; error?: string }
 
 /** Errors that will not fix themselves on retry (bad config) → mark failed immediately. */
-export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|needs an approved template|rejected the (API|auth) key|cannot send free-text|allowance .* is used up|wallet balance is too low|session was not found|is missing the (required )?scope|template is malformed|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
+export const isPermanent = (error = '') => /not configured|switched off|Choose an?|must start with|OpenWA URL|needs an approved template|rejected the (API|auth) key|cannot send free-text|allowance .* is used up|wallet balance is too low|session was not found|is missing the (required )?scope|template is malformed|Chat ID format|No devices|no longer registered|service-account JSON/i.test(error)
 /** Wait before retry n (1-based): 2, 4, 8 … minutes. */
 export const retryDelayMs = (attempts: number) => 2 ** Math.max(1, attempts) * 60_000
 
@@ -92,9 +92,13 @@ export function phoneFromChatId(id: string) {
   return digits.length >= 10 ? digits.slice(-10) : ''
 }
 const openwaBase = (url: string) => {
-  const u = (url ?? '').trim().replace(/\/+$/, '').replace(/\/api$/, '')
-  if (!/^https?:\/\//.test(u)) throw new Error('OpenWA URL must start with https:// (e.g. https://wa.example.in/api)')
-  return u
+  let u: URL
+  try { u = new URL(String(url ?? '').trim()) } catch { throw new Error('OpenWA URL must be a valid https:// address (e.g. https://wa.example.in/api)') }
+  if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.search || u.hash) {
+    throw new Error('OpenWA URL must be a valid https:// address without credentials or query parameters (e.g. https://wa.example.in/api)')
+  }
+  const path = u.pathname.replace(/\/+$/, '').replace(/\/api$/, '')
+  return `${u.origin}${path}`
 }
 
 /** Is the OpenWA WhatsApp session connected? Used by the Send-test button for a clear error. */

@@ -3,7 +3,7 @@
  * footer), section headings, call-to-action band and a safe Markdown renderer for blog posts.
  */
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
-import { ArrowRight, Eye, Mail, MapPin, Menu, Phone, Stethoscope, X } from 'lucide-react'
+import { ArrowRight, Eye, Mail, MapPin, Menu, Phone, X } from 'lucide-react'
 import { SocialIcon } from '../../site/parts'
 import { platformCompany, platformDomain, platformName } from '../../lib/supabase'
 import { safeUrl } from '../../lib/safeUrl'
@@ -202,13 +202,24 @@ export function Markdown({ text }: { text: string }) {
 // ------------------------------------------------------------------ layout
 export const NAV: [string, string][] = [['Features', '/features'], ['Solutions', '/solutions'], ['Pricing', '/pricing'], ['Security', '/security'], ['Blog', '/blog'], ['About', '/about']]
 
+export function BrandMark({ className }: { className?: string }) {
+  return (
+    <span aria-hidden="true" className={cn('relative grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-[13px] bg-gradient-to-br from-[#5C5C99] to-[#292966] text-white shadow-glow ring-1 ring-white/80', className)}>
+      <span className="font-display text-[13px] font-black leading-none tracking-[-.08em]"><span>H</span><span className="text-[#CCCCFF]">C</span></span>
+      <svg viewBox="0 0 28 7" fill="none" className="absolute bottom-[5px] left-1/2 h-[7px] w-5 -translate-x-1/2">
+        <path d="M1 4.5h5l2-3L11 6l2-4 2 2.5h11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity=".9" />
+      </svg>
+      <span className="absolute right-[5px] top-[4px] h-1.5 w-1.5 rounded-full bg-[#FFB496] ring-2 ring-[#292966]" />
+    </span>
+  )
+}
+
 function Logo({ site }: { site: PlatformSite }) {
   const logo = safeUrl(site.brand.logo, 'image')
   return (
-    <A to="/" className="flex items-center gap-2.5 font-display text-lg font-extrabold text-peri-900">
-      {logo ? <img src={logo} alt="" className="h-9 w-auto max-w-[140px] object-contain" />
-        : <span className="grid h-9 w-9 place-items-center rounded-xl bg-peri-800 text-white shadow-glow"><Stethoscope className="h-5 w-5" /></span>}
-      {platformName}
+    <A to="/" aria-label={`${platformName} home`} className="flex min-w-0 items-center gap-2.5 font-display text-lg font-extrabold text-peri-900">
+      {logo ? <img src={logo} alt="" className="h-9 w-auto max-w-[140px] object-contain" /> : <BrandMark />}
+      <span className="truncate">{platformName}</span>
     </A>
   )
 }

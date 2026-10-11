@@ -55,17 +55,83 @@ end $$;
 create trigger trg_site_content_revision after update or delete on public.site_content
   for each row execute function public.site_content_revision();
 
--- 8c. row level security
+-- 8c. public CMS read path + row level security
+-- Public site copy is served through a security-definer RPC, not raw table SELECT. Nested hidden items are removed;
+-- tax/payment details in Site settings are not public. A hidden package becomes an empty marker so compare-table
+-- columns remain aligned without disclosing the unpublished package itself.
+create or replace function public.site_content_public_json(p jsonb)
+returns jsonb language plpgsql immutable set search_path = pg_catalog, public as $$
+declare v jsonb;
+begin
+  if jsonb_typeof(p) = 'array' then
+    select coalesce(jsonb_agg(public.site_content_public_json(x.value) order by x.ord), '[]'::jsonb) into v
+      from jsonb_array_elements(p) with ordinality as x(value, ord)
+     where jsonb_typeof(x.value) <> 'object' or not (x.value @> '{"hidden":true}'::jsonb);
+    return v;
+  elsif jsonb_typeof(p) = 'object' then
+    if p @> '{"hidden":true}'::jsonb then return null; end if;
+    select coalesce(jsonb_object_agg(e.key, public.site_content_public_json(e.value)), '{}'::jsonb) into v
+      from jsonb_each(p) e where e.key <> 'hidden' and not (e.value @> '{"hidden":true}'::jsonb);
+    return v;
+  end if;
+  return p;
+end $$;
+
+create or replace function public.site_content_public_data(p_key text, p_data jsonb)
+returns jsonb language plpgsql immutable set search_path = pg_catalog, public as $$
+declare v_items jsonb;
+begin
+  if p_key = 'settings' and jsonb_typeof(p_data) = 'object' then
+    return public.site_content_public_json(p_data - 'billing');
+  elsif p_key = 'packages' and jsonb_typeof(p_data) = 'object' then
+    select coalesce(jsonb_agg(case when x.value @> '{"hidden":true}'::jsonb then '{"hidden":true}'::jsonb
+                                   else public.site_content_public_json(x.value) end order by x.ord), '[]'::jsonb)
+      into v_items
+      from jsonb_array_elements(case when jsonb_typeof(p_data -> 'items') = 'array' then p_data -> 'items' else '[]'::jsonb end)
+           with ordinality as x(value, ord);
+    return jsonb_set(public.site_content_public_json(p_data - 'items'), '{items}', v_items, true);
+  end if;
+  return public.site_content_public_json(p_data);
+end $$;
+
+create or replace function public.public_site_content()
+returns table (key text, data jsonb, updated_at timestamptz, updated_by_name text)
+language plpgsql stable security definer set search_path = public as $$
+declare v_tenant uuid := public.current_tenant();
+begin
+  if v_tenant is null then return; end if;
+  if public.has_role('owner') or public.provider_can(v_tenant) then
+    return query select c.key, c.data, c.updated_at, c.updated_by_name
+      from public.site_content c where c.tenant_id = v_tenant;
+  else
+    return query select c.key, public.site_content_public_data(c.key, c.data), c.updated_at, null::text
+      from public.site_content c where c.tenant_id = v_tenant;
+  end if;
+end $$;
+revoke all on function public.site_content_public_json(jsonb), public.site_content_public_data(text, jsonb) from public, anon, authenticated;
+revoke all on function public.public_site_content() from public, anon, authenticated;
+grant execute on function public.public_site_content() to anon, authenticated;
+
+-- Storage policies may use this safe predicate without exposing the internal primary_tenant() helper.
+create or replace function public.current_tenant_is_primary()
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.current_tenant() is not null and public.current_tenant() = public.primary_tenant()
+$$;
+revoke all on function public.current_tenant_is_primary() from public;
+grant execute on function public.current_tenant_is_primary() to anon, authenticated, service_role;
+
 alter table public.site_content enable row level security;
 alter table public.site_content_revisions enable row level security;
 
 drop policy if exists site_content_public_read on public.site_content;
+drop policy if exists site_content_owner_read on public.site_content;
 drop policy if exists site_content_owner_insert on public.site_content;
 drop policy if exists site_content_owner_update on public.site_content;
 drop policy if exists site_content_owner_delete on public.site_content;
 drop policy if exists site_content_revisions_owner_read on public.site_content_revisions;
 
-create policy site_content_public_read on public.site_content for select to anon, authenticated using (true);
+create policy site_content_owner_read on public.site_content for select to authenticated
+  using (public.has_role('owner') or public.provider_can(public.current_tenant()));
 create policy site_content_owner_insert on public.site_content for insert to authenticated with check (public.has_role('owner'));
 create policy site_content_owner_update on public.site_content for update to authenticated using (public.has_role('owner')) with check (public.has_role('owner'));
 create policy site_content_owner_delete on public.site_content for delete to authenticated using (public.has_role('owner'));
@@ -83,6 +149,8 @@ returns trigger language plpgsql security definer set search_path = public as $$
 declare v_digits text := right(regexp_replace(new.phone, '\D', '', 'g'), 10);
 begin
   if auth.uid() is not null and public.is_staff() then return new; end if;
+  -- The phone and whole-site limits must cover concurrent inserts as well as sequential ones.
+  perform pg_advisory_xact_lock(hashtext('dch_site_enquiry_rate:' || new.tenant_id::text));
   if (select count(*) from public.site_enquiries where tenant_id = new.tenant_id and created_at > now() - interval '1 hour'
         and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits) >= 3 then
     raise exception 'You have already sent us a few messages in the last hour — we will get back to you soon. For anything urgent please call us.';
@@ -98,7 +166,7 @@ create trigger trg_site_enquiries_limit before insert on public.site_enquiries
 revoke all on function public.limit_site_enquiries() from public, anon;
 
 revoke all on public.site_content, public.site_content_revisions from anon;
-grant select on public.site_content to anon;
+revoke all on public.site_content from anon;
 grant select, insert, update, delete on public.site_content to authenticated;
 revoke all on public.site_content_revisions from authenticated;
 grant select on public.site_content_revisions to authenticated;
@@ -113,10 +181,33 @@ drop policy if exists site_media_public_read on storage.objects;
 drop policy if exists site_media_owner_insert on storage.objects;
 drop policy if exists site_media_owner_update on storage.objects;
 drop policy if exists site_media_owner_delete on storage.objects;
-create policy site_media_public_read on storage.objects for select to anon, authenticated using (bucket_id = 'site-media');
-create policy site_media_owner_insert on storage.objects for insert to authenticated with check (bucket_id = 'site-media' and public.has_role('owner'));
-create policy site_media_owner_update on storage.objects for update to authenticated using (bucket_id = 'site-media' and public.has_role('owner'));
-create policy site_media_owner_delete on storage.objects for delete to authenticated using (bucket_id = 'site-media' and public.has_role('owner'));
+drop policy if exists site_media_tenant_read on storage.objects;
+drop policy if exists site_media_tenant_insert on storage.objects;
+drop policy if exists site_media_tenant_update on storage.objects;
+drop policy if exists site_media_tenant_delete on storage.objects;
+-- New uploads live under <tenant UUID>/. Public bucket URLs remain readable, while object listing is tenant-scoped.
+-- Root-level images are legacy primary-hospital media from before tenant folders were introduced.
+create policy site_media_tenant_read on storage.objects for select to anon, authenticated
+  using (bucket_id = 'site-media' and (
+    (storage.foldername(name))[1] = public.current_tenant()::text
+    or (public.current_tenant_is_primary() and position('/' in name) = 0)));
+create policy site_media_tenant_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'site-media' and (storage.foldername(name))[1] = public.current_tenant()::text
+    and (public.has_role('owner') or public.provider_can(public.current_tenant())));
+create policy site_media_tenant_update on storage.objects for update to authenticated
+  using (bucket_id = 'site-media' and (
+    (storage.foldername(name))[1] = public.current_tenant()::text
+    or (public.current_tenant_is_primary() and position('/' in name) = 0))
+    and (public.has_role('owner') or public.provider_can(public.current_tenant())))
+  with check (bucket_id = 'site-media' and (
+    (storage.foldername(name))[1] = public.current_tenant()::text
+    or (public.current_tenant_is_primary() and position('/' in name) = 0))
+    and (public.has_role('owner') or public.provider_can(public.current_tenant())));
+create policy site_media_tenant_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'site-media' and (
+    (storage.foldername(name))[1] = public.current_tenant()::text
+    or (public.current_tenant_is_primary() and position('/' in name) = 0))
+    and (public.has_role('owner') or public.provider_can(public.current_tenant())));
 
 -- 8e. profile photos: public read; each user writes only inside their own "<user id>/" folder
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

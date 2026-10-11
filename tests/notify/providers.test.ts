@@ -179,6 +179,16 @@ describe('WhatsApp — OpenWA gateway', () => {
     expect(calls[0].url).toBe(`https://wacrm.example.in/api/sessions/${SESSION}/messages/send-text`)
     expect(jsonBody().chatId).toBe('9876543210@s.whatsapp.net')
   })
+  test('rejects HTTP, embedded credentials and query strings before sending the API key', async () => {
+    mockFetch()
+    for (const openwaUrl of ['http://wa.example.in', 'https://user:pass@wa.example.in', 'https://wa.example.in/?next=other']) {
+      const r = await deliver(confirm, wa({ openwaUrl }))
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/OpenWA URL.*https/i)
+      expect(isPermanent(r.error)).toBe(true)
+    }
+    expect(calls).toHaveLength(0)
+  })
   test('missing key / session / URL are permanent config errors, nothing sent', async () => {
     mockFetch()
     for (const c of [ctx({ whatsapp: { enabled: true, provider: 'openwa', openwaUrl: 'https://x.in', openwaSession: SESSION } }),

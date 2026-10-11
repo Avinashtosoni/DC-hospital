@@ -237,6 +237,8 @@ begin
   if pick is null then
     raise exception 'A code can''t be sent on % right now. Choose another way.', coalesce(p_channel, 'any channel');
   end if;
+  -- One shared lock makes the account/IP limits reliable under concurrent requests.
+  perform pg_advisory_xact_lock(hashtext('dch_login_otp_rate'));
   if exists (select 1 from public.login_otps where user_id = uid and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before requesting another code.';
   end if;

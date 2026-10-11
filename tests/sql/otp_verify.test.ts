@@ -147,14 +147,21 @@ describe('sign-in OTP — control-panel team', () => {
     const r = await request(ADMIN, 'email')
     expect(r).toMatchObject({ sent: true, scope: 'team', channel: 'email', to: 'ad•••@hc.in' })
     expect(await db.one(null, `select kind, channel, recipient from public.platform_outbox where ref_id = $1`, [r.ref])).toEqual({ kind: 'otp', channel: 'email', recipient: 'admin@hc.in' })
+    const claimed = await db.one<{ status: string; attempts: number }>('service',
+      `select status, attempts from public.claim_platform_otp('otp', $1::uuid, $2::uuid)`, [r.ref, ADMIN])
+    expect(claimed).toEqual({ status: 'sending', attempts: 1 })
+    expect(await db.as('service', `select * from public.claim_platform_otp('otp', $1::uuid, $2::uuid)`, [r.ref, ADMIN])).toEqual([])
     await knownLoginCode(r.ref)
     expect(await verify(ADMIN, CODE)).toEqual({ ok: true, scope: 'team' })
     const saved = (await db.one<{ r: any }>(ADMIN, `select public.cp_save_security('{"loginOtp":{"enabled":true,"channels":["email"]}}') r`)).r
     expect(saved.loginOtp).toEqual({ enabled: true, channels: ['email'] })
     expect(saved.team).toEqual(expect.arrayContaining([expect.objectContaining({ email: 'admin@hc.in', channels: ['email'] })]))
+    const primary = (await db.one<{ t: string }>(null, 'select public.primary_tenant() t')).t
+    expect((await db.one<{ r: boolean }>(ADMIN, 'select public.provider_can($1) r', [primary])).r).toBe(true)
 
     await session('team-2')   // a new sign-in
     expect((await db.one<{ r: string | null }>(ADMIN, 'select public.provider_role() r')).r).toBeNull()
+    expect((await db.one<{ r: boolean }>(ADMIN, 'select public.provider_can($1) r', [primary])).r).toBe(false)
     await expect(db.as(ADMIN, 'select public.cp_hospitals()')).rejects.toThrow(/Hospital Comrade team/)
     const me = (await db.one<{ r: any }>(ADMIN, 'select public.cp_me() r')).r
     expect(me).toMatchObject({ role: 'admin', otp: { scope: 'team', required: true, verified: false, passed: false, channels: [{ channel: 'email' }] } })

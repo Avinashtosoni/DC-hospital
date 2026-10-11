@@ -4,7 +4,6 @@
  * SECURITY DEFINER RPCs in scripts/sql/booking.sql (anon key; tables stay locked).
  */
 import { flushNotificationsSoon } from '../settings/store'
-import { addDays, format } from 'date-fns'
 import { supabase } from '../lib/supabase'
 import { freeSlots, type ScheduleExt } from '../lib/schedule'
 import type { Appointment, Doctor, DoctorLeave, Holiday, Invoice, Patient } from '../types'
@@ -22,9 +21,10 @@ export interface PublicDoctor {
   status: Doctor['status']
 }
 export interface Availability {
-  booked: Pick<Appointment, 'doctor_id' | 'appointment_date' | 'appointment_time' | 'status'>[]
-  leaves: DoctorLeave[]
-  holidays: Holiday[]
+  /** Minimal public occupancy: no patient identifier or appointment status. */
+  booked: Pick<Appointment, 'doctor_id' | 'appointment_date' | 'appointment_time'>[]
+  leaves: Pick<DoctorLeave, 'doctor_id' | 'kind' | 'start_date' | 'end_date' | 'start_time' | 'end_time'>[]
+  holidays: Pick<Holiday, 'holiday_date' | 'name'>[]
 }
 export interface BookingInput {
   /** from verify_booking_otp; null when the hospital switched the booking code off (then `phone` is needed) */
@@ -70,15 +70,43 @@ const rpc = async <T>(fn: string, args: Record<string, unknown> = {}): Promise<T
   return data as T
 }
 
+/** Date in the hospital's civil timezone, independent of the visitor's device timezone. */
+export function istDateString(from = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(from)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((x) => x.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+export function addIstDays(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00.000Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+function istWallClock(from = new Date()): Date {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(from)
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((x) => x.type === type)?.value ?? 0)
+  // freeSlots reads local Date getters, so construct a wall-clock Date carrying India-local fields.
+  return new Date(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second'), from.getMilliseconds())
+}
+
 /** Free slots for a doctor on a date, from public availability data. */
 export function slotsFor(doc: PublicDoctor, date: string, av: Availability | undefined, cfg: Cfg, now = new Date()): string[] {
   if (!av) return []
-  const ext: ScheduleExt = { leaves: av.leaves, holidays: av.holidays }
+  const ext: ScheduleExt = {
+    leaves: av.leaves.map((l) => ({ ...l, id: '', created_at: '', updated_at: '', status: 'approved' } as unknown as DoctorLeave)),
+    holidays: av.holidays.map((h) => ({ ...h, id: '', created_at: '', updated_at: '' } as unknown as Holiday)),
+  }
   const asDoctor = { ...doc, department_id: null, profile_id: null } as unknown as Doctor
-  return freeSlots(asDoctor, date, av.booked as Appointment[], ext, { now, minNoticeMinutes: cfg.booking.minNoticeMinutes })
+  const occupied = av.booked.map((a) => ({ ...a, status: 'scheduled' as const }))
+  return freeSlots(asDoctor, date, occupied as Appointment[], ext, { now: istWallClock(now), minNoticeMinutes: cfg.booking.minNoticeMinutes })
 }
-export const bookingWindow = (cfg: Cfg, from = new Date()) =>
-  Array.from({ length: Math.max(1, Math.min(90, cfg.booking.advanceDays)) + 1 }, (_, i) => format(addDays(from, i), 'yyyy-MM-dd'))
+export const bookingWindow = (cfg: Cfg, from = new Date()) => {
+  const count = Math.max(1, Math.min(90, cfg.booking.advanceDays)) + 1
+  const today = istDateString(from)
+  return Array.from({ length: count }, (_, i) => addIstDays(today, i))
+}
 
 // ------------------------------------------------------------------ one-time code
 export type OtpChannel = 'whatsapp' | 'sms' | 'email'

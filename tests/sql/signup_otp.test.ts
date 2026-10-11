@@ -56,6 +56,10 @@ describe('sign-up mobile verification', () => {
     const row = await db.one<any>(null, `select kind, channel, recipient, status, body from public.platform_outbox where ref_id = $1`, [r.ref])
     expect(row).toMatchObject({ kind: 'signup_otp', channel: 'whatsapp', recipient: '9811122334', status: 'pending' })
     expect(row.body).toMatch(/^\d{6} is your verification code/)
+    const claimed = await db.one<{ status: string; attempts: number }>('service',
+      `select status, attempts from public.claim_platform_otp('signup_otp', $1::uuid, null::uuid)`, [r.ref])
+    expect(claimed).toEqual({ status: 'sending', attempts: 1 })
+    expect(await db.as('service', `select * from public.claim_platform_otp('signup_otp', $1::uuid, null::uuid)`, [r.ref])).toEqual([])
     await fails(request('9811122334'), /wait 30 seconds/)
 
     const code = await lastCode(r.ref)

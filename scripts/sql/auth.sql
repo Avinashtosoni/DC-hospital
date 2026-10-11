@@ -81,6 +81,8 @@ begin
   if cardinality(v_avail) = 0 then
     raise exception 'MOBILE_RESET_OFF: Reset by mobile is not set up at this hospital yet. Please use the e-mail link.';
   end if;
+  -- Serialize check-and-insert so concurrent requests cannot bypass the hourly limits.
+  perform pg_advisory_xact_lock(hashtext('dch_password_otp_rate:' || public.current_tenant()::text));
   if exists (select 1 from public.password_reset_otps where tenant_id = public.current_tenant() and phone = v_phone and created_at > now() - interval '30 seconds') then
     raise exception 'Please wait 30 seconds before requesting another code.';
   end if;

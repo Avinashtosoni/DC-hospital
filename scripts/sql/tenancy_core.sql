@@ -126,7 +126,8 @@ end $$;
 -- may the signed-in provider manage this hospital?
 create or replace function public.provider_can(p_tenant uuid)
 returns boolean language sql stable security definer set search_path = public as $$
-  select p_tenant is not null and exists (
+  -- provider_role() is OTP-gated; do not duplicate this lookup without the completed-session check.
+  select p_tenant is not null and public.provider_role() is not null and exists (
     select 1 from public.provider_users u
      where u.user_id = auth.uid() and u.active
        and (u.role = 'admin' or exists (select 1 from public.provider_assignments a where a.user_id = u.user_id and a.tenant_id = p_tenant)))
