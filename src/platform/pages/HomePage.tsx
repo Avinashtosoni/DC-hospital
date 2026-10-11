@@ -1,4 +1,4 @@
-import { ArrowRight, CheckCircle2, HeartPulse, Quote, Sparkles, Users, XCircle } from 'lucide-react'
+import { ArrowRight, Building2, CalendarCheck, CheckCircle2, ClipboardList, HeartPulse, Quote, Sparkles, Stethoscope, Users, Wallet, XCircle } from 'lucide-react'
 import { platformName as platform } from '../../lib/supabase'
 import { safeUrl } from '../../lib/safeUrl'
 import { A, BrandMark, CtaBand, FaqList, Hi, IconCard, Section, SectionHead, useSeo } from '../site/ui'
@@ -51,13 +51,18 @@ export default function HomePage({ site }: { site: PlatformSite }) {
           <div className="l-container">
             <p className="text-center text-xs font-semibold uppercase tracking-[.2em] text-peri-500">{h.roles.title}</p>
             <ul className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              {h.roles.items.map((r) => (
-                <li key={r.name} className="rounded-2xl border border-peri-200/80 bg-white/80 p-4 text-center shadow-soft">
-                  <Users className="mx-auto h-5 w-5 text-peri-600" />
-                  <p className="mt-2 font-display font-bold text-peri-900">{r.name}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">{r.text}</p>
-                </li>
-              ))}
+              {h.roles.items.map((r) => {
+                const Icon = roleIcon(r.name)
+                return (
+                  <li key={r.name} className="group rounded-2xl border border-peri-200/80 bg-white/90 p-4 text-center shadow-soft transition duration-300 hover:-translate-y-1 hover:border-peri-300 hover:shadow-glow">
+                    <span className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-peri-50 text-peri-700 transition group-hover:bg-peri-800 group-hover:text-white">
+                      <Icon className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                    <p className="mt-2 font-display font-bold text-peri-900">{r.name}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{r.text}</p>
+                  </li>
+                )
+              })}
             </ul>
           </div>
         </section>
@@ -101,10 +106,29 @@ export default function HomePage({ site }: { site: PlatformSite }) {
       )}
 
       {h.india.items.length > 0 && (
-        <Section>
-          <SectionHead h={h.india} />
-          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{h.india.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
-        </Section>
+        <section className="relative overflow-hidden bg-gradient-to-b from-white via-peri-50/70 to-white py-16 sm:py-20">
+          <div aria-hidden="true" className="absolute -left-32 top-1/4 h-80 w-80 rounded-full bg-[#CCCCFF] opacity-30 blur-3xl" />
+          <div className="l-container relative grid items-center gap-10 lg:grid-cols-[.9fr_1.1fr]">
+            <figure className="mx-auto w-full max-w-[560px]">
+              <div className="relative aspect-video overflow-hidden rounded-[2rem] border border-white/80 bg-peri-50 shadow-[0_32px_72px_-32px_rgba(41,41,102,.42)]">
+                <img src="/landing/feature-staff-team.jpg" alt="Indian hospital doctors and staff working together as a care team" loading="lazy" className="h-full w-full object-contain" />
+                <div className="absolute left-4 top-4 flex items-center gap-2.5 rounded-2xl border border-white/70 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+                  <BrandMark className="h-8 w-8" />
+                  <span><span className="block font-display text-xs font-extrabold text-peri-900">{platform}</span><span className="block text-[10px] text-slate-500">Made for Indian care teams</span></span>
+                </div>
+              </div>
+              <figcaption className="mt-4 flex items-center gap-3 rounded-2xl border border-peri-200/80 bg-white p-4 shadow-soft">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-peri-800 text-white"><HeartPulse className="h-5 w-5" /></span>
+                <span className="min-w-0"><span className="block font-display text-sm font-bold text-peri-900">Care that fits your day</span><span className="block text-xs text-slate-500">From a neighbourhood clinic to a busy hospital</span></span>
+                <span className="ml-auto hidden shrink-0 rounded-full bg-peri-50 px-3 py-1.5 text-[10px] font-bold text-peri-700 sm:inline-flex">UPI · GST · WhatsApp</span>
+              </figcaption>
+            </figure>
+            <div className="min-w-0">
+              <SectionHead h={h.india} className="!mx-0 !text-left" />
+              <div className="mt-8 grid gap-3 sm:grid-cols-2">{h.india.items.map((it) => <IconCard key={it.title} item={it} />)}</div>
+            </div>
+          </div>
+        </section>
       )}
 
       {h.integrations.items.length > 0 && (
@@ -170,6 +194,17 @@ export default function HomePage({ site }: { site: PlatformSite }) {
       <CtaBand cta={h.cta} />
     </>
   )
+}
+
+function roleIcon(name: string) {
+  const role = name.toLowerCase()
+  if (role.includes('owner')) return Building2
+  if (role.includes('doctor')) return Stethoscope
+  if (role.includes('reception')) return CalendarCheck
+  if (role.includes('account')) return Wallet
+  if (role.includes('staff')) return ClipboardList
+  if (role.includes('patient')) return HeartPulse
+  return Users
 }
 
 function HeroCareVisual() {
