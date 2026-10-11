@@ -11,12 +11,12 @@ import { ContactForm, PlanCards } from './shared'
 type P = { site: PlatformSite }
 
 const solutionImages: Record<string, string> = {
-  Stethoscope: '/landing/doc-ananya.webp',
-  Building2: '/landing/indian-care-team.jpg',
-  Bed: '/landing/care.webp',
-  Award: '/landing/doc-aditya.webp',
-  Microscope: '/landing/doc-meera.webp',
-  Video: '/landing/doc-arjun.webp',
+  Stethoscope: '/landing/solution-clinic.jpg',
+  Building2: '/landing/solution-hospital.jpg',
+  Bed: '/landing/solution-maternity.jpg',
+  Award: '/landing/solution-hospital-group.jpg',
+  Microscope: '/landing/solution-diagnostics.jpg',
+  Video: '/landing/solution-daycare.jpg',
 }
 
 export function FeaturesPage({ site }: P) {
@@ -177,7 +177,11 @@ export function SolutionsPage({ site }: P) {
           const img = safeUrl(s.image, 'image') || solutionImages[s.icon]
           return (
             <article key={s.title} className="flex flex-col overflow-hidden rounded-[2rem] border border-peri-200/80 bg-white shadow-soft">
-              {img && <img src={img} alt="" loading="lazy" className="h-48 w-full object-cover" />}
+              {img && (
+                <div className="aspect-video w-full overflow-hidden bg-peri-100">
+                  <img src={img} alt="" loading="lazy" className="h-full w-full object-cover" />
+                </div>
+              )}
               <div className="flex flex-1 flex-col p-6 sm:p-8">
                 <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#CCCCFF] text-peri-900"><Icon className="h-6 w-6" /></span>
                 <h2 className="mt-5 font-display text-2xl font-extrabold text-peri-900">{s.title}</h2>
