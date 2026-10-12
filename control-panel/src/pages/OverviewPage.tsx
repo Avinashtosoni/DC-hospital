@@ -1,16 +1,22 @@
+import { lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, AlertTriangle, ArrowUpRight, Bell, Building2, CheckCircle2, CreditCard, IndianRupee, Inbox, MessageSquare, RefreshCw, UserPlus, Wallet } from 'lucide-react'
-import { Badge, Button, Card, PageHeader, Skeleton, StatCard } from '../../../src/components/ui'
+import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, StatCard } from '../../../src/components/ui'
 import { cp } from '../api'
-import { date, dateTime, ErrorBox, inr, LicenseBadge, paise, planLabel, relDays, Section, useMe } from '../ui'
+import { date, dateTime, ErrorBox, inr, LicenseBadge, paise, planLabel, relDays, Section, STATUS, useMe } from '../ui'
+import { COLOR, Donut, Legend, type Slice } from './health/visuals'
 
-const STATUS_BAR: Record<string, string> = {
-  trial: 'bg-sky-500',
-  active: 'bg-emerald-500',
-  grace: 'bg-amber-500',
-  read_only: 'bg-rose-500',
-  suspended: 'bg-slate-400',
+const PlanMixChart = lazy(() => import('./overview/OverviewCharts').then((m) => ({ default: m.PlanMixChart })))
+const ChannelMixChart = lazy(() => import('./overview/OverviewCharts').then((m) => ({ default: m.ChannelMixChart })))
+const RevenueSnapshotChart = lazy(() => import('./overview/OverviewCharts').then((m) => ({ default: m.RevenueSnapshotChart })))
+
+const STATUS_COLOR: Record<string, string> = {
+  trial: '#0ea5e9',
+  active: '#10b981',
+  grace: '#f59e0b',
+  read_only: '#f43f5e',
+  suspended: '#64748b',
 }
 
 export function OverviewPage() {
@@ -18,6 +24,20 @@ export function OverviewPage() {
   const q = useQuery({ queryKey: ['cp-overview'], queryFn: () => cp.overview() })
   const o = q.data
   const customerCount = o ? Object.values(o.by_status).reduce((a, b) => a + b, 0) : 0
+  const statusSlices: Slice[] = Object.entries(STATUS).map(([status, meta]) => ({
+    key: status, label: meta.label, value: o?.by_status[status] ?? 0, color: STATUS_COLOR[status] ?? COLOR.off,
+  }))
+  const planMix = Object.entries(o?.by_plan ?? {}).map(([plan, hospitals]) => ({ plan: planLabel(plan), hospitals }))
+  const channelMix = [
+    { channel: 'WhatsApp', messages: o?.messages.whatsapp ?? 0 },
+    { channel: 'SMS', messages: o?.messages.sms ?? 0 },
+    { channel: 'E-mail', messages: o?.messages.email ?? 0 },
+  ]
+  const totalMessages = channelMix.reduce((sum, channel) => sum + channel.messages, 0)
+  const revenueSnapshot = o?.payments_30d_paise == null ? [] : [
+    { period: 'MRR', rupees: o.mrr },
+    { period: 'Received · 30d', rupees: Math.round(o.payments_30d_paise / 100) },
+  ]
   const shortcuts = [
     { to: '/hospitals', title: 'Hospitals', description: `${o?.hospitals ?? 'All'} hospitals, licences and billing`, icon: <Building2 className="h-4 w-4" />, tone: 'bg-brand-100 text-brand-800' },
     ...(me.role === 'admin' ? [{ to: '/signups', title: 'Sign-ups', description: 'Review new account requests', icon: <UserPlus className="h-4 w-4" />, tone: 'bg-violet-100 text-violet-700' }] : []),
@@ -106,25 +126,12 @@ export function OverviewPage() {
 
         <div className="space-y-4">
           <Section title="Customers by status" subtitle={customerCount ? `${customerCount} customer${customerCount === 1 ? '' : 's'} across all licences` : undefined}>
-            {q.isLoading ? <Skeleton className="h-28" /> : (
-              <div className="space-y-3">
-                {Object.keys(STATUS_BAR).map((status) => {
-                  const count = o?.by_status[status] ?? 0
-                  const percent = customerCount ? (count / customerCount) * 100 : 0
-                  const width = count ? Math.max(percent, 3) : 0
-                  return (
-                    <div key={status} className="flex items-center gap-3 text-sm">
-                      <span className="w-28 shrink-0"><LicenseBadge status={status} /></span>
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
-                        <div className={`h-full rounded-full transition-[width] duration-500 ${STATUS_BAR[status]}`} style={{ width: `${width}%` }} />
-                      </div>
-                      <span className="w-6 text-right font-semibold tabular-nums text-slate-700">{count}</span>
-                    </div>
-                  )
-                })}
-                {o && Object.keys(o.by_plan).length > 0 && (
-                  <p className="border-t border-slate-100 pt-3 text-xs leading-5 text-slate-500">Plans: {Object.entries(o.by_plan).map(([plan, count]) => `${planLabel(plan)} ${count}`).join(' · ')}</p>
-                )}
+            {q.isLoading ? <Skeleton className="h-36" /> : (
+              <div className="flex flex-col items-center gap-5 sm:flex-row sm:justify-center">
+                <Donut slices={statusSlices} size={132} stroke={17} label="Customers by licence status">
+                  <div><p className="font-display text-xl font-bold tabular-nums text-brand-950">{customerCount}</p><p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">customers</p></div>
+                </Donut>
+                <Legend slices={statusSlices} total={customerCount} className="w-full min-w-0 sm:flex-1" />
               </div>
             )}
           </Section>
@@ -154,6 +161,42 @@ export function OverviewPage() {
           )}
         </div>
       </div>
+
+      {o && (
+        <section className="mt-7" aria-labelledby="overview-analytics-title">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 id="overview-analytics-title" className="font-display text-base font-semibold text-brand-950">Platform analytics</h2>
+              <p className="mt-0.5 text-xs text-slate-500">A quick visual breakdown of plans, messaging and revenue.</p>
+            </div>
+            <span className="text-xs text-slate-400">Current snapshot</span>
+          </div>
+          <div className={`grid gap-4 ${o.payments_30d_paise == null ? 'lg:grid-cols-2' : 'lg:grid-cols-2 xl:grid-cols-3'}`}>
+            <Section title="Plan distribution" subtitle="Customer accounts by subscribed plan.">
+              {planMix.length ? (
+                <Suspense fallback={<Skeleton className="h-52" />}><PlanMixChart data={planMix} /></Suspense>
+              ) : <EmptyState icon={<Building2 className="h-5 w-5" />} title="No plan data yet" description="Hospital plan counts will appear here." className="py-8" />}
+            </Section>
+
+            <Section title="Messages by channel" subtitle="Shared-account messages sent this month.">
+              <Suspense fallback={<Skeleton className="h-52" />}><ChannelMixChart data={channelMix} /></Suspense>
+              <p className="mt-1 text-center text-xs text-slate-500">
+                {totalMessages ? `${totalMessages.toLocaleString('en-IN')} total messages sent` : 'No shared-account messages sent this month yet'}
+              </p>
+            </Section>
+
+            {o.payments_30d_paise != null && (
+              <Section title="Revenue snapshot" subtitle="MRR before GST vs payments received in the last 30 days, with GST.">
+                <Suspense fallback={<Skeleton className="h-52" />}><RevenueSnapshotChart data={revenueSnapshot} /></Suspense>
+                <div className="mt-1 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-slate-500">
+                  <span>MRR <strong className="font-semibold text-brand-950">{inr(o.mrr)}</strong></span>
+                  <span>Received <strong className="font-semibold text-brand-950">{paise(o.payments_30d_paise)}</strong></span>
+                </div>
+              </Section>
+            )}
+          </div>
+        </section>
+      )}
     </>
   )
 }
