@@ -14,7 +14,7 @@ async function call<T = any>(who: string | null, fn: string, args: unknown[] = [
   return r.r
 }
 const fails = (p: Promise<unknown>, re: RegExp) => expect(p).rejects.toThrow(re)
-const form = (o: Record<string, unknown> = {}) => ({ organisation: 'Kosi Care Clinic', name: 'Dr. Asha Rai', email: 'asha@kosi.in', phone: '98111 22334', city: 'Saharsa', terms_version: '2026-10-02', ...o })
+const form = (o: Record<string, unknown> = {}) => ({ organisation: 'Kosi Care Clinic', name: 'Dr. Asha Rai', email: 'asha@kosi.in', phone: '98111 22334', city: 'Saharsa', terms_version: '2026-10-02', terms_accepted: true, ...o })
 const signup = (o: Record<string, unknown> = {}) => call('anon', 'platform_trial_signup', [form(o)], ['jsonb'])
 const request = (phone: string, channel: string | null = null) => call('anon', 'request_signup_otp', [phone, channel], ['text', 'text'])
 const verify = (phone: string, code: string) => call('anon', 'verify_signup_otp', [phone, code], ['text', 'text'])

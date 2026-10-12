@@ -49,7 +49,7 @@ export function fillTokens<T>(value: T, tokens: Record<string, string>): T {
 }
 
 /** Public view: hidden items removed, compare-table columns kept in sync with visible packages. */
-export function toPublic(c: SiteContent): SiteContent {
+export function toPublic(c: SiteContent, includeDrafts = false): SiteContent {
   const visible = <T extends { hidden?: boolean }>(a: T[]) => a.filter((x) => !x.hidden)
   const s = c.settings
   const tokens = { name: s.name, phone: s.phone, appointments: s.appointmentsPhone, whatsapp: s.whatsapp, email: s.email, address: s.address }
@@ -61,7 +61,8 @@ export function toPublic(c: SiteContent): SiteContent {
     ...s,
     map: { embedUrl: safeUrl(s.map?.embedUrl, 'web'), directionsUrl: safeUrl(s.map?.directionsUrl, 'web') },
     socials: (s.socials ?? []).map((x) => ({ ...x, url: safeUrl(x.url, 'web') })),
-    brand: { ...s.brand, logoUrl: safeUrl(s.brand?.logoUrl, 'image'), faviconUrl: safeUrl(s.brand?.faviconUrl, 'image') },
+    brand: { ...s.brand, logoUrl: safeUrl(s.brand?.logoUrl, 'image'), faviconUrl: safeUrl(s.brand?.faviconUrl, 'image'),
+      primaryColor: /^#[0-9a-f]{6}$/i.test(s.brand?.primaryColor ?? '') ? s.brand.primaryColor : '#5c5c99' },
   }
   const pub: SiteContent = {
     ...c,
@@ -75,6 +76,11 @@ export function toPublic(c: SiteContent): SiteContent {
       compare: c.packages.compare.map((g) => ({ ...g, rows: g.rows.map((r) => ({ ...r, cells: keepCols.map((i) => r.cells[i] ?? '') })) })),
     },
     faqs: c.faqs.map((g) => ({ ...g, items: g.items.filter((i) => i.q.trim()) })).filter((g) => g.items.length),
+    customPages: { items: (c.customPages?.items ?? []).filter((p) => includeDrafts || p.status === 'published').map((p) => ({
+      ...p, blocks: (p.blocks ?? []).map((b) => b.type === 'image' || b.type === 'hero' || b.type === 'text'
+        ? { ...b, ...(b.type === 'image' || b.imageUrl ? { imageUrl: safeUrl(b.imageUrl, 'image') } : {}) }
+        : b.type === 'cta' ? { ...b, buttonUrl: safeUrl(b.buttonUrl, 'link') } : b),
+    })) },
   }
   return fillTokens(pub, tokens)
 }
@@ -123,7 +129,7 @@ function usePreviewDrafts() {
 export function SiteContentProvider({ children, fallback }: { children: ReactNode; fallback?: ReactNode }) {
   const q = useContentRows()
   const { preview, drafts } = usePreviewDrafts()
-  const content = useMemo(() => toPublic(mergeRows(q.data, drafts)), [q.data, drafts])
+  const content = useMemo(() => toPublic(mergeRows(q.data, drafts), preview), [q.data, drafts, preview])
   // First visit with no cache: wait briefly for real content instead of flashing the defaults.
   if (q.isPending && !q.data) return <>{fallback}</>
   return <Ctx.Provider value={{ content, preview }}>{children}</Ctx.Provider>

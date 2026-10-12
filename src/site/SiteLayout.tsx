@@ -1,5 +1,5 @@
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ArrowRight, ArrowUpRight, ChevronDown, Mail, MapPin, Menu, Phone, Siren, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -12,6 +12,7 @@ import { LandingLogo, SocialIcon } from './parts'
 import NotFound from './pages/NotFound'
 import { useBookHref, useHomeHref } from './ui'
 import { LanguageSwitch, useT } from '../i18n'
+import { paletteFromHex } from '../settings/types'
 
 type PageKey = keyof SiteSettings['pages']
 const NAV_LINKS: { to: string; label: string; page: PageKey; mega?: boolean }[] = [
@@ -43,11 +44,20 @@ function Shell({ children }: { children?: ReactNode }) {
   useRevealAll(root)
   useScrollManager()
   const { pathname } = useLocation()
+  const { settings } = useSite()
   const pageOn = usePageOn()
   const preview = useIsPreview()
   const hidden = !pageOn(pathname) && !preview
+  const shades = paletteFromHex(settings.brand?.primaryColor ?? '#5c5c99')
+  const paletteStyle = Object.fromEntries(Object.entries(shades).map(([shade, rgb]) => [`--peri-${shade}`, rgb])) as CSSProperties
+  useEffect(() => {
+    const icon = settings.brand?.faviconUrl || settings.brand?.logoUrl
+    let link = document.querySelector<HTMLLinkElement>('link[rel~="icon"]')
+    if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link) }
+    link.href = icon || '/favicon.ico'
+  }, [settings.brand?.faviconUrl, settings.brand?.logoUrl])
   return (
-    <div ref={root} className="relative min-h-screen overflow-x-clip bg-[#fbfbff] font-sans text-slate-700 antialiased selection:bg-peri-300 selection:text-peri-950">
+    <div ref={root} style={paletteStyle} className="relative min-h-screen overflow-x-clip bg-[#fbfbff] font-sans text-slate-700 antialiased selection:bg-peri-300 selection:text-peri-950">
       <a href="#main" className="sr-only z-[100] rounded-full bg-peri-800 px-4 py-2 text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Skip to content</a>
       <Navbar />
       <main id="main">
@@ -91,10 +101,13 @@ function Navbar() {
   const home = useHomeHref()
   const { pathname } = useLocation()
   const megaTimer = useRef<ReturnType<typeof setTimeout>>()
-  const { services } = useSite()
+  const { services, customPages } = useSite()
   const c = useContact()
   const pageOn = usePageOn()
-  const links = NAV_LINKS.filter((l) => pageOn(l.to))
+  const links = [
+    ...NAV_LINKS.filter((l) => pageOn(l.to)),
+    ...(customPages?.items ?? []).filter((p) => p.status === 'published' && p.showInNavigation).map((p) => ({ to: `/pages/${p.slug}`, label: p.title, page: 'about' as PageKey, mega: false })),
+  ]
 
   useEffect(() => { setOpen(false); setMega(false) }, [pathname])
   useEffect(() => {
@@ -216,14 +229,14 @@ function Navbar() {
 function Footer() {
   const book = useBookHref()
   const home = useHomeHref()
-  const { services } = useSite()
+  const { services, customPages } = useSite()
   const c = useContact()
   const pageOn = usePageOn()
   const socials = c.socials.filter((x) => x.url.trim())
   const cols: { title: string; links: [string, string][] }[] = [
     { title: 'Patients', links: [['Book appointment', book], ['Find a doctor', '/find-a-doctor'], ['Health packages', '/packages'], ['Patient portal', '/login'], ['FAQ', '/faq']] },
     { title: 'Specialities', links: pageOn('/services') ? services.slice(0, 6).map((s) => [s.name, `/services/${s.slug}`]) : [] },
-    { title: 'Hospital', links: [['About us', '/about'], ['All services', '/services'], ['Contact us', '/contact'], ['Home', home], ['Staff login', '/login']] },
+    { title: 'Hospital', links: [['About us', '/about'], ['All services', '/services'], ['Contact us', '/contact'], ['Home', home], ['Staff login', '/login'], ...(customPages?.items ?? []).filter((p) => p.status === 'published').map((p) => [p.title, `/pages/${p.slug}`] as [string, string])] },
   ].map((col) => ({ ...col, links: col.links.filter(([, to]) => pageOn(to)) as [string, string][] })).filter((col) => col.links.length)
   return (
     <footer className="relative border-t border-peri-200/70 bg-white pb-28 pt-16 sm:pb-10">

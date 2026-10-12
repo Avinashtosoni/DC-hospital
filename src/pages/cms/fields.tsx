@@ -61,6 +61,10 @@ function FieldView({ f, value, saved, onChange, ctx, depth }: { f: FieldDef; val
       )
     case 'number':
       return <div><Label f={f} htmlFor={id} /><Input id={id} type="number" inputMode="decimal" step={f.step ?? 1} min={f.min} max={f.max} value={value ?? ''} onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))} /><Hint f={f} /></div>
+    case 'color': {
+      const color = /^#[0-9a-f]{6}$/i.test(String(value ?? '')) ? String(value) : '#5c5c99'
+      return <div><Label f={f} htmlFor={id} /><div className="flex items-center gap-3"><input id={id} type="color" value={color} onChange={(e) => onChange(e.target.value)} className="h-10 w-14 cursor-pointer rounded-lg border border-slate-200 bg-white p-1" aria-label={f.label} /><Input aria-label={`${f.label} hex value`} value={value ?? color} maxLength={7} placeholder="#5c5c99" onChange={(e) => onChange(e.target.value)} className="max-w-36 font-mono" /><span className="h-8 flex-1 rounded-lg border border-slate-200" style={{ backgroundColor: color }} /></div><Hint f={f} /></div>
+    }
     case 'toggle':
       return <Toggle label={f.label} hint={f.hint} checked={!!value} onChange={onChange} />
     case 'select': {

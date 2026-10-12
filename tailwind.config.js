@@ -12,10 +12,8 @@ export default {
         // Values live in CSS variables (src/index.css) so Settings → Appearance can switch the theme at runtime.
         brand: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((s) => [s, `rgb(var(--brand-${s}) / <alpha-value>)`])),
         // Landing palette: #CCCCFF periwinkle → #A3A3CC → #5C5C99 → #292966 deep blue
-        peri: {
-          50: '#f7f7ff', 100: '#eeeeff', 200: '#e0e0ff', 300: '#ccccff', 400: '#a3a3cc',
-          500: '#7d7db8', 600: '#5c5c99', 700: '#46467f', 800: '#292966', 900: '#1d1d4d', 950: '#121233',
-        },
+        // Public website colours are scoped on SiteLayout, so each hospital can use its own CMS accent.
+        peri: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((s) => [s, `rgb(var(--peri-${s}, var(--peri-default-${s})) / <alpha-value>)`])),
       },
       boxShadow: {
         card: '0 1px 2px rgba(41,41,102,.04), 0 2px 8px -2px rgba(41,41,102,.07)',

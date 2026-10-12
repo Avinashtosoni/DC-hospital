@@ -40,7 +40,7 @@ export const validId = (id: string) => /^[a-z][a-z0-9-]{1,31}$/.test(id) && id !
 /** the fields of a plan the editor sends */
 export function fieldsOf(p: Plan): PlanFields {
   return { name: p.name, price: p.price, suffix: p.suffix ?? '', tagline: p.tagline, features: [...p.features], highlight: !!p.highlight, cta: p.cta,
-    included: { ...p.included }, public: p.public !== false, archived: !!p.archived, signup: !!p.signup, order: p.order ?? 0 }
+    included: { ...p.included }, public: p.public !== false, archived: !!p.archived, signup: !!p.signup, aiAssistance: !!p.aiAssistance, order: p.order ?? 0 }
 }
 
 /** problems with an edited plan (empty = fine) */
@@ -74,6 +74,7 @@ export function changeLines(before: Partial<PlanFields> | null | undefined, afte
     if (a !== b) other.push(`${CH[ch]} messages included each month: ${a.toLocaleString('en-IN')} → ${b.toLocaleString('en-IN')}.`)
   }
   if (before.name !== undefined && after.name !== undefined && before.name !== after.name) other.push(`The plan is now called ${after.name}.`)
+  if (!!before.aiAssistance !== !!after.aiAssistance) other.push(after.aiAssistance ? 'AI page assistance is now included.' : 'AI page assistance is no longer included.')
   if (after.archived && !before.archived) other.push('It is no longer offered to new hospitals — you can stay on it.')
   return { price, other }
 }

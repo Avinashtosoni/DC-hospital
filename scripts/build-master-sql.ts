@@ -238,12 +238,13 @@ if (plansSql.includes('@@PLAN_DEFAULTS@@')) throw new Error('plan defaults place
 if (JSON.stringify(BILLING_DEFAULTS.plans).includes('$json$')) throw new Error('plan defaults contain $json$')
 // free-trial sign-up: verify the mobile number (after the platform outbox and the OTP module)
 const signupOtpSql = readFileSync(resolve(root, 'scripts/sql/signup_otp.sql'), 'utf8')
+const whiteLabelBuilderSql = readFileSync(resolve(root, 'scripts/sql/white_label_builder.sql'), 'utf8')
 const demoSql = readFileSync(resolve(root, 'scripts/sql/demo.sql'), 'utf8')
 const formsSql = readFileSync(resolve(root, 'scripts/sql/forms.sql'), 'utf8').replace('-- @@DEFAULT_FORMS@@',
   `insert into public.site_forms (id, slug, name, description, kind, enabled, fields, settings, sort) values\n${formRows}\non conflict do nothing;`)
 
 // default wording for the messaging events added in section 18 — merged into a saved Settings row (saved values win)
-const NEW_EVENTS: NotifyEvent[] = ['account_created', 'account_updated', 'account_deleted', 'password_changed', 'notice_published', 'login_otp']
+const NEW_EVENTS: NotifyEvent[] = ['account_created', 'account_updated', 'account_deleted', 'password_changed', 'notice_published', 'login_otp', 'onboarding_reminder']
 const nd = DEFAULT_APP_SETTINGS.notifications
 const notifyDefaults = JSON.stringify({
   events: Object.fromEntries(NEW_EVENTS.map((e) => [e, nd.events[e]])),
@@ -329,6 +330,8 @@ ${notifySql}
 ${plansSql}
 
 ${signupOtpSql}
+
+${whiteLabelBuilderSql}
 
 ${demoSql}
 commit;
@@ -418,6 +421,8 @@ ${plansSql}
 
 ${signupOtpSql}
 
+${whiteLabelBuilderSql}
+
 ${demoSql}
 
 -- =====================================================================================================
@@ -456,6 +461,7 @@ for (const [name, file, body] of [['tenant-core', 'tenancy_core.sql', tenancyCor
   ['notify-catalog', 'notify_catalog.sql', notifySql],
   ['plans', 'plans.sql', plansSql],
   ['signup-otp', 'signup_otp.sql', signupOtpSql],
+  ['white-label-builder', 'white_label_builder.sql', whiteLabelBuilderSql],
   ['demo', 'demo.sql', demoSql],
   ['rbac', 'permissions.ts → policies', `-- role policies from src/auth/permissions.ts${policies(true)}`]] as const) {
   const block = `-- >>> ${name} (generated from ${file.endsWith('.sql') ? `scripts/sql/${file}` : file} — do not edit here)\n${body.trim()}\n-- <<< ${name}`

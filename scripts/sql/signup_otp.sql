@@ -36,6 +36,9 @@ grant all on public.platform_signup_otps to service_role;
 
 alter table public.platform_signups add column if not exists phone_verified_at timestamptz;
 alter table public.platform_signups add column if not exists phone_verified_via text;
+alter table public.platform_signups add column if not exists followup_consent boolean not null default false;
+alter table public.platform_signups add column if not exists onboarding_step text not null default 'review';
+alter table public.platform_signups add column if not exists reached_steps text[] not null default array['hospital','contact','review'];
 
 do $$ begin
   if to_regclass('public.platform_outbox') is not null then
@@ -196,10 +199,26 @@ declare
   v_id    uuid;
   v_slug  text;
   v_otp   public.platform_signup_otps;
+  v_consent boolean := false;
+  v_step text := 'review';
+  v_reached text[] := array['hospital','contact','review'];
+  v_draft uuid;
   r       jsonb;
 begin
   if not coalesce((c ->> 'enabled')::boolean, false) then raise exception 'Online sign-up is closed right now — please use the contact form and we will set you up.'; end if;
   if coalesce(p ->> 'website', '') <> '' then raise exception 'Could not sign up.'; end if;
+  if p ? 'terms_accepted' and jsonb_typeof(p -> 'terms_accepted') <> 'boolean' then raise exception 'Terms acceptance must be true or false.'; end if;
+  if not coalesce((p ->> 'terms_accepted')::boolean, false) then raise exception 'Please accept the Terms of Service and the Data Processing Agreement.'; end if;
+  if p ? 'followup_consent' and jsonb_typeof(p -> 'followup_consent') <> 'boolean' then raise exception 'Follow-up consent must be true or false.'; end if;
+  v_consent := coalesce((p ->> 'followup_consent')::boolean, false);
+  if p ? 'onboarding_step' and p ->> 'onboarding_step' <> 'review' then raise exception 'Finish each sign-up step before submitting.'; end if;
+  if p ? 'reached_steps' then
+    if jsonb_typeof(p -> 'reached_steps') <> 'array' or jsonb_array_length(p -> 'reached_steps') > 3
+       or exists (select 1 from jsonb_array_elements_text(p -> 'reached_steps') x where x not in ('hospital','contact','review')) then raise exception 'Invalid sign-up progress.'; end if;
+    select coalesce(array_agg(distinct x),'{}') into v_reached from jsonb_array_elements_text(p -> 'reached_steps') x;
+    if not ('hospital'=any(v_reached) and 'contact'=any(v_reached) and 'review'=any(v_reached)) then raise exception 'Complete all sign-up steps before submitting.'; end if;
+  end if;
+  if p ? 'draft_id' then begin v_draft := (p ->> 'draft_id')::uuid; exception when others then raise exception 'Sign-up draft is invalid.'; end; end if;
   if char_length(v_org) not between 2 and 120 then raise exception 'Enter your hospital or clinic''s name.'; end if;
   if char_length(v_name) not between 2 and 100 then raise exception 'Enter your name.'; end if;
   if v_mail !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]{2,}$' or char_length(v_mail) > 150 then raise exception 'Enter a valid e-mail — you will sign in with it.'; end if;
@@ -240,10 +259,11 @@ begin
 
   v_slug := public.signup_slug(v_org);
   insert into public.platform_signups (organisation, contact_name, email, phone, city, plan, trial_days, slug, code, terms_version, ip_hash,
-                                       phone_verified_at, phone_verified_via)
+                                       phone_verified_at, phone_verified_via, followup_consent, onboarding_step, reached_steps)
   values (v_org, v_name, v_mail, v_phone, v_city, v_plan, greatest(1, least(90, coalesce((c ->> 'trialDays')::int, 14))), v_slug, public.signup_code(v_org), v_terms, v_hash,
-          v_otp.verified_at, v_otp.channel)
+          v_otp.verified_at, v_otp.channel, v_consent, v_step, v_reached)
   returning id into v_id;
+  if v_draft is not null then delete from public.platform_signup_drafts where id=v_draft; end if;
 
   if c ->> 'mode' = 'instant' then
     r := public.signup_activate(v_id);

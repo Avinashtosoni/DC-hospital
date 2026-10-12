@@ -32,6 +32,7 @@ const PUBLIC_PAGES: [string, React.LazyExoticComponent<() => JSX.Element>][] = [
   ['/book', lazy(() => import('./site/pages/Book'))],
   ['/feedback/:id', lazy(() => import('./site/pages/Feedback'))],
   ['/forms/:slug', lazy(() => import('./site/pages/FormPage'))],
+  ['/pages/:slug', lazy(() => import('./site/pages/CustomPage'))],
 ]
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'))
 const PatientDetail = lazy(() => import('./pages/PatientDetail'))
@@ -43,6 +44,7 @@ const Reports = lazy(() => import('./pages/Reports'))
 const Settings = lazy(() => import('./pages/settings/SettingsPage'))
 const BillingPage = lazy(() => import('./pages/billing/BillingPage'))
 const CmsPage = lazy(() => import('./pages/cms/CmsPage'))
+const CmsPagesPage = lazy(() => import('./pages/cms/CustomPagesPage'))
 const AppointmentsPage = lazy(() => import('./pages/appointments/AppointmentsPage'))
 const SchedulePage = lazy(() => import('./pages/SchedulePage'))
 const AuditPage = lazy(() => import('./pages/AuditPage'))
@@ -97,6 +99,7 @@ export default function App() {
           <Route path="/beds" element={<RequireNav path="/beds"><Suspense fallback={<PageLoader />}><BedsPage /></Suspense></RequireNav>} />
           <Route path="/reports" element={<RequireNav path="/reports"><Suspense fallback={<PageLoader />}><Reports /></Suspense></RequireNav>} />
           <Route path="/cms" element={<RequireNav path="/cms"><Suspense fallback={<PageLoader />}><CmsPage /></Suspense></RequireNav>} />
+          <Route path="/cms/pages" element={<RequireNav path="/cms"><Suspense fallback={<PageLoader />}><CmsPagesPage /></Suspense></RequireNav>} />
           <Route path="/schedule" element={<RequireNav path="/schedule"><Suspense fallback={<PageLoader />}><SchedulePage /></Suspense></RequireNav>} />
           <Route path="/audit" element={<RequireNav path="/audit"><Suspense fallback={<PageLoader />}><AuditPage /></Suspense></RequireNav>} />
           <Route path="/ratings" element={<RequireNav path="/ratings"><Suspense fallback={<PageLoader />}><RatingsPage /></Suspense></RequireNav>} />

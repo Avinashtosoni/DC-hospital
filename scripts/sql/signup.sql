@@ -93,7 +93,8 @@ begin
     update public.platform_signups set slug = public.signup_slug(s.organisation) where id = p_id returning * into s;
   end if;
   r := public.hospital_create(jsonb_build_object('slug', s.slug, 'name', s.organisation, 'code', s.code, 'plan', s.plan,
-         'owner_email', s.email, 'status', 'trial', 'trial_days', s.trial_days,
+         'owner_email', s.email, 'owner_name', s.contact_name, 'owner_phone', s.phone, 'city', s.city, 'followup_consent', s.followup_consent, 'consent_source', 'signup',
+         'status', 'trial', 'trial_days', s.trial_days,
          'notes', 'Self-service sign-up · ' || s.contact_name || ' · ' || s.phone || coalesce(' · ' || nullif(s.city, ''), '') || ' · Terms ' || s.terms_version));
   update public.platform_signups set status = 'created', hospital_id = (r ->> 'id')::uuid where id = p_id;
   -- welcome e-mail (Hospital Comrade messaging; best effort — the sign-up page shows the same link)

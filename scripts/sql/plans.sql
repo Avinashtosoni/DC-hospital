@@ -2,7 +2,7 @@
 --  PLANS CATALOGUE — Control Panel → Plans & billing
 -- =====================================================================================================
 --  Plans live in platform_settings 'billing' → plans: { id: { name, price, suffix, tagline, features[], highlight, cta,
---  included{sms,whatsapp,email}, public, archived, signup, order, notice } }. The product site, sign-up, the hospital's
+--  included{sms,whatsapp,email}, aiAssistance, public, archived, signup, order, notice } }. The product site, sign-up, the hospital's
 --  Billing page and invoices all read them from here (platform_plans()), so a change shows everywhere at once.
 --  • cp_save_plan()      add / edit one plan. A price change asks what happens to hospitals already on the plan:
 --                        'apply' (new price from their next renewal) or 'keep' (they keep today's price as their own).
@@ -21,7 +21,8 @@ update public.platform_settings s
        updated_at = now()
   from d
  where s.key = 'billing' and jsonb_typeof(s.data -> 'plans') = 'object'
-   and exists (select 1 from jsonb_each(s.data -> 'plans') e where not (e.value ? 'name') or not (e.value ? 'order'));
+   and exists (select 1 from jsonb_each(s.data -> 'plans') e where not (e.value ? 'name') or not (e.value ? 'order')
+     or ((d.j -> e.key) ? 'aiAssistance' and not (e.value ? 'aiAssistance')));
 
 -- ------------------------------------------------------------------ read (anyone)
 -- visitors and hospitals: plans on the website + the caller's own hospital's plan; the platform team: every plan
@@ -57,7 +58,7 @@ declare k text; out jsonb := '{}'::jsonb; f jsonb;
 begin
   if jsonb_typeof(p) <> 'object' then raise exception 'A plan must be an object.'; end if;
   for k in select jsonb_object_keys(p) loop
-    if k not in ('name', 'price', 'suffix', 'tagline', 'features', 'highlight', 'cta', 'included', 'public', 'archived', 'signup', 'order') then
+    if k not in ('name', 'price', 'suffix', 'tagline', 'features', 'highlight', 'cta', 'included', 'aiAssistance', 'public', 'archived', 'signup', 'order') then
       raise exception 'Unknown plan field %', k;
     end if;
   end loop;
@@ -99,7 +100,7 @@ begin
     end if;
     out := out || jsonb_build_object('included', jsonb_build_object('sms', coalesce((f ->> 'sms')::int, 0), 'whatsapp', coalesce((f ->> 'whatsapp')::int, 0), 'email', coalesce((f ->> 'email')::int, 0)));
   end if;
-  foreach k in array array['highlight', 'public', 'archived', 'signup'] loop
+  foreach k in array array['highlight', 'public', 'archived', 'signup', 'aiAssistance'] loop
     if p ? k then
       if jsonb_typeof(p -> k) <> 'boolean' then raise exception '%: true or false', k; end if;
       out := out || jsonb_build_object(k, p -> k);
@@ -143,8 +144,8 @@ begin
     if (select count(*) from jsonb_object_keys(coalesce(cfg -> 'plans', '{}'::jsonb))) >= 20 then raise exception 'Up to 20 plans.'; end if;
     if not (clean ? 'name') then raise exception 'Give the plan a name.'; end if;
     v := jsonb_build_object('price', null, 'suffix', '', 'tagline', '', 'features', '[]'::jsonb, 'highlight', false, 'cta', 'Get started',
-                            'included', jsonb_build_object('sms', 0, 'whatsapp', 0, 'email', 0), 'public', true, 'archived', false, 'signup', false,
-                            'order', coalesce((select max((e.value ->> 'order')::int) + 1 from jsonb_each(cfg -> 'plans') e), 0))
+                            'included', jsonb_build_object('sms', 0, 'whatsapp', 0, 'email', 0), 'aiAssistance', false,
+                            'public', true, 'archived', false, 'signup', false, 'order', coalesce((select max((e.value ->> 'order')::int) + 1 from jsonb_each(cfg -> 'plans') e), 0))
          || clean;
   else
     v := old || clean;
@@ -167,6 +168,10 @@ begin
                  || trim(to_char(coalesce((v -> 'included' ->> ch)::int, 0), 'FM99,99,99,990')) || '.';
       end if;
     end loop;
+    if coalesce((old ->> 'aiAssistance')::boolean, false) is distinct from coalesce((v ->> 'aiAssistance')::boolean, false) then
+      other_ln := other_ln || case when other_ln = '' then '' else ' ' end ||
+        case when coalesce((v ->> 'aiAssistance')::boolean, false) then 'AI page assistance is now included.' else 'AI page assistance is no longer included.' end;
+    end if;
     if (old ->> 'name') is distinct from (v ->> 'name') then
       other_ln := other_ln || case when other_ln = '' then '' else ' ' end || 'The plan is now called ' || (v ->> 'name') || '.';
     end if;

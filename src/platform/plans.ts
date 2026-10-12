@@ -22,6 +22,8 @@ export interface Plan {
   public?: boolean
   /** no longer offered: kept for hospitals already on it, can't be chosen any more */
   archived?: boolean
+  /** AI-assisted CMS/page-builder entitlement included with this plan. */
+  aiAssistance?: boolean
   /** hospitals can start a free trial on it from the sign-up page (otherwise the button asks for a call back) */
   signup?: boolean
   /** position on the pricing page, lowest first */
@@ -67,7 +69,9 @@ export const PLANS: Plan[] = [
       'WhatsApp booking bot',
       'Priority support & onboarding help',
       'Data import from your old software',
+      'AI-assisted website page builder',
     ],
+    aiAssistance: true,
     cta: 'Talk to sales',
     included: { sms: 2000, whatsapp: 5000, email: 20000 },
   },
@@ -101,6 +105,7 @@ export function normalisePlan(id: string, saved: Partial<Plan> | null | undefine
     public: s.public ?? true,
     archived: !!s.archived,
     signup: s.signup ?? base?.signup ?? false,
+    aiAssistance: s.aiAssistance ?? base?.aiAssistance ?? false,
     order: typeof s.order === 'number' ? s.order : base ? PLANS.indexOf(base) : i,
     notice: s.notice ?? null,
   }

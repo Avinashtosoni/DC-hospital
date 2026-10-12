@@ -14,6 +14,18 @@ export interface Seo { title: string; description: string }
 export interface Heading { eyebrow: string; title: string; lead: string }
 export interface IconItem { icon: string; title: string; text: string }
 export interface Cta { badge: string; title: string; lead: string }
+export type BuilderBlockType = 'hero' | 'text' | 'features' | 'faq' | 'image' | 'cta'
+export type BuilderBlock =
+  | { id: string; type: 'hero' | 'text'; title: string; body: string; imageUrl?: string }
+  | { id: string; type: 'features'; title: string; items: { title: string; body: string }[] }
+  | { id: string; type: 'faq'; title: string; items: { question: string; answer: string }[] }
+  | { id: string; type: 'image'; imageUrl: string; alt: string; caption: string }
+  | { id: string; type: 'cta'; title: string; body: string; buttonText: string; buttonUrl: string }
+export interface CustomSitePage {
+  id: string; slug: string; title: string; seoTitle: string; seoDescription: string
+  status: 'draft' | 'published'; showInNavigation: boolean; blocks: BuilderBlock[]
+}
+export interface CustomPagesContent { items: CustomSitePage[] }
 export interface FaqItem { q: string; a: string }
 export interface Stat { value: number; suffix: string; label: string; format: 'plain' | 'lakh'; decimals: number }
 
@@ -48,6 +60,8 @@ export interface SiteSettings {
     logoUrl: string
     /** browser-tab icon. Empty = logo */
     faviconUrl: string
+    /** Primary accent used by all peri-* colors on this tenant's public website. */
+    primaryColor: string
     /** show the hospital name next to the logo (turn off if the logo already contains the name) */
     showName: boolean
   }
@@ -239,10 +253,11 @@ export interface SiteContent {
   packages: PackagesContent
   faqs: FaqGroup[]
   testimonials: Testimonial[]
+  customPages: CustomPagesContent
 }
 
 export type ContentKey = keyof SiteContent
 export const CONTENT_KEYS: ContentKey[] = [
   'settings', 'home', 'about', 'servicesPage', 'doctorsPage', 'packagesPage', 'contactPage', 'faqPage', 'legal',
-  'services', 'support', 'doctors', 'packages', 'faqs', 'testimonials',
+  'services', 'support', 'doctors', 'packages', 'faqs', 'testimonials', 'customPages',
 ]

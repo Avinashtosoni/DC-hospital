@@ -19,6 +19,7 @@ export type FieldDef =
   | (Base & { t: 'textarea'; rows?: number })
   | (Base & { t: 'rich'; multiline?: boolean })
   | (Base & { t: 'number'; step?: number; min?: number; max?: number })
+  | (Base & { t: 'color' })
   | (Base & { t: 'toggle' })
   | (Base & { t: 'image' })
   | (Base & { t: 'icon' })
@@ -111,6 +112,15 @@ export const SECTIONS: Section[] = [
           { k: 'tagline', t: 'text', label: 'Logo tagline', placeholder: 'Care · 24×7' },
           { k: 'about', t: 'textarea', label: 'Short description (footer)', rows: 2, full: true },
           { k: 'seoDescription', t: 'textarea', label: 'Default meta description', rows: 2, full: true },
+        ],
+      },
+      {
+        k: 'brand', t: 'group', label: 'Website branding', fields: [
+          { k: 'primaryColor', t: 'color', label: 'Website accent colour', hint: 'Applies across buttons, links, highlights and page accents on the public website.' },
+          { k: 'logoUrl', t: 'image', label: 'Hospital logo' },
+          { k: 'faviconUrl', t: 'image', label: 'Browser tab icon', hint: 'Leave empty to use the logo.' },
+          { k: 'shortName', t: 'text', label: 'Short name', hint: 'Used in tight spaces such as mobile headers and message signatures.' },
+          { k: 'showName', t: 'toggle', label: 'Show hospital name beside the logo' },
         ],
       },
       {

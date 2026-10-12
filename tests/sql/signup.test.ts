@@ -18,7 +18,7 @@ async function call<T = any>(who: string | null, fn: string, args: unknown[] = [
   return r.r
 }
 const fails = (p: Promise<unknown>, re: RegExp) => expect(p).rejects.toThrow(re)
-const form = (o: Record<string, unknown> = {}) => ({ organisation: 'Sunrise Care Clinic', name: 'Dr. Meera Jha', email: 'meera@sunrise.in', phone: '98765 43210', city: 'Purnia', terms_version: '2026-10-02', ...o })
+const form = (o: Record<string, unknown> = {}) => ({ organisation: 'Sunrise Care Clinic', name: 'Dr. Meera Jha', email: 'meera@sunrise.in', phone: '98765 43210', city: 'Purnia', terms_version: '2026-10-02', terms_accepted: true, ...o })
 const signup = (o: Record<string, unknown> = {}) => call('anon', 'platform_trial_signup', [form(o)], ['jsonb'])
 const settings = (p: object) => call(P_ADMIN, 'cp_save_signup_settings', [p], ['jsonb'])
 
@@ -57,6 +57,7 @@ describe('self-service sign-up', () => {
     await fails(signup({ email: 'nope' }), /valid e-mail/)
     await fails(signup({ phone: '12345' }), /10-digit/)
     await fails(signup({ terms_version: '' }), /Terms of Service/)
+    await fails(signup({ terms_accepted: false }), /accept the Terms of Service/)
     await fails(signup({ website: 'spam.example' }), /Could not sign up/)
     await fails(signup({ email: 'owner@dchospital.com' }), /already belongs/)
   })

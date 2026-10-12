@@ -6,6 +6,9 @@
 :root {
   --brand-50: 245 245 255; --brand-100: 235 235 255; --brand-200: 220 220 250; --brand-300: 204 204 255; --brand-400: 163 163 204;
   --brand-500: 122 122 179; --brand-600: 92 92 153; --brand-700: 72 72 133; --brand-800: 54 54 115; --brand-900: 41 41 102; --brand-950: 27 27 71;
+  --peri-default-50: 247 247 255; --peri-default-100: 238 238 255; --peri-default-200: 224 224 255; --peri-default-300: 204 204 255;
+  --peri-default-400: 163 163 204; --peri-default-500: 125 125 184; --peri-default-600: 92 92 153; --peri-default-700: 70 70 127;
+  --peri-default-800: 41 41 102; --peri-default-900: 29 29 77; --peri-default-950: 18 18 51;
 }
 /* Settings → Appearance → Interface size (dashboard only; everything is rem-based) */
 html[data-app-size='compact'] { font-size: 15px; }

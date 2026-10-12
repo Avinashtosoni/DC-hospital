@@ -37,7 +37,7 @@ export const BILLING_DEFAULTS: BillingConfig = {
   ratesPaise: { sms: 30, whatsapp: 40, email: 2 },
   plans: Object.fromEntries(PLANS.map((p, i) => {
     const { id, ...rest } = p
-    return [id, { ...rest, suffix: rest.suffix ?? '', highlight: !!rest.highlight, signup: !!rest.signup, public: true, archived: false, order: i }]
+    return [id, { ...rest, suffix: rest.suffix ?? '', highlight: !!rest.highlight, signup: !!rest.signup, aiAssistance: !!rest.aiAssistance, public: true, archived: false, order: i }]
   })),
   seller: { name: 'Digital Comrade', gstin: '', address: '', state: 'Bihar', email: '', sac: '998315' },
 }

@@ -80,7 +80,7 @@ export type NewHospitalEvent =
   | 'admission_created' | 'bed_transferred' | 'patient_discharged' | 'doctor_new_admission'
   | 'prescription_issued' | 'lab_test_ordered' | 'lab_result_doctor'
   | 'invoice_balance_due' | 'invoice_cancelled' | 'invoice_overdue'
-  | 'privacy_request_resolved' | 'owner_daily_digest'
+  | 'privacy_request_resolved' | 'owner_daily_digest' | 'onboarding_reminder'
 
 const P: EvChannel[] = ['sms', 'whatsapp', 'email', 'push', 'inapp']    // a patient / any person
 const TEAM: EvChannel[] = ['whatsapp', 'email', 'push', 'inapp']           // hospital staff (no SMS cost by default)
@@ -253,6 +253,13 @@ export const NEW_HOSPITAL_EVENTS: (CatalogEntry & { id: NewHospitalEvent })[] = 
       text: 'Good evening {name}, here is {hospital} on {date}:\n• Appointments: {appointments} ({completed} completed, {cancelled} cancelled, {no_show} no-show)\n• New patients: {new_patients}\n• Admissions: {admissions} · Discharges: {discharges}\n• Collected: {collected} · Outstanding: {outstanding}\nDashboard: {link}',
       waText: '📊 *{hospital} — {date}*\n\n🗓 Appointments: *{appointments}* ({completed} done, {cancelled} cancelled, {no_show} no-show)\n🧑 New patients: {new_patients}\n🛏 Admitted {admissions} · Discharged {discharges}\n💰 Collected *{collected}* · Due {outstanding}\n\n{link}',
       pushText: '{appointments} visits · {collected} collected · {outstanding} due', waParams: 'name,date,appointments,collected' } },
+  { id: 'onboarding_reminder', code: 'TEN-008', group: 'TEN', scope: 'hospital', audience: 'owner', label: 'Hospital setup reminder',
+    hint: 'A short reminder while the hospital setup checklist is incomplete (external channels require consent)', channels: ['whatsapp', 'email', 'push', 'inapp'], defaults: on('whatsapp', 'email', 'push', 'inapp'),
+    tokens: ['name', 'hospital', 'step', 'link', 'days'], waCategory: 'UTILITY',
+    copy: { subject: 'Your {hospital} setup is ready for the next step',
+      text: 'Hi {name}, continue setting up {hospital}. Next: {step}. Your progress is saved — open your dashboard: {link}.',
+      waText: '🏥 *Continue setting up {hospital}*\n\nHi {name}, your progress is saved. Next up: *{step}*.\n\nOpen your dashboard: {link}',
+      pushText: 'Next setup step: {step}. Tap to continue.', waParams: 'name,hospital,step' } },
 ]
 
 /** sent by the platform to a hospital's owner — wording edited only in the control panel */

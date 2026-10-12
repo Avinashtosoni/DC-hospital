@@ -10,6 +10,7 @@ import type {
   SiteState, SitePageRow, SiteRevision, CpPost, PostSave, PlanFields, PlanSaveResult, PlanHistoryRow,
   MessagingSetup, PlatformTemplateIds, CpAlert, CpAlertPrefs, AlertChannel, OpsSettings, Broadcast, BroadcastSave, BroadcastPreview, BroadcastChannel, BroadcastAudience,
   DeliveryRow, DeliveryFilter, LiveHealth, PushConfig, HealthStatus, OtpChannelId, CpSecurity, CpHospitalOtp, CpDemo, CpTemplates, PlatformTemplate,
+  CpOnboarding, AiBuilderSettings,
 } from './types'
 import { encodeImpersonation } from '../../src/auth/impersonation'
 import { hospitalUrl } from '../../src/tenancy/urls'
@@ -55,6 +56,10 @@ export interface CpApi {
   decideSignup(id: string, action: 'approve' | 'reject', reason?: string): Promise<CpSignup>
   signupSettings(): Promise<SignupSettings>
   saveSignupSettings(p: Partial<SignupSettings>): Promise<SignupSettings>
+  onboarding(): Promise<CpOnboarding>
+  updateOnboardingHelp(id: string, status: 'open' | 'handled'): Promise<{ id: string; status: 'open' | 'handled'; handled_at: string | null }>
+  aiAssistance(id: string): Promise<{ tenant_id: string; plan: string; plan_includes: boolean; override: boolean | null; enabled: boolean }>
+  setAiAssistance(id: string, override: boolean | null): Promise<{ tenant_id: string; plan: string; plan_includes: boolean; override: boolean | null; enabled: boolean }>
   // phase 8.3
   launchCheck(): Promise<LaunchReport>
   // hospital operations (control_panel_ops.sql)
@@ -98,6 +103,8 @@ export interface CpApi {
   saveDemoBaseline(): Promise<CpDemo>
   // messaging & alerts, broadcasts, live health (cp_notify.sql + the ops Edge Function)
   messagingSetup(): Promise<MessagingSetup>
+  aiBuilderSettings(): Promise<AiBuilderSettings>
+  saveAiBuilderSettings(p: Partial<Pick<AiBuilderSettings, 'enabled' | 'dailyLimit' | 'maxOutputTokens' | 'providers'>>): Promise<AiBuilderSettings>
   /** API keys need the admin's password again (the database wants a sign-in from the last 10 minutes) */
   saveMessagingSetup(settings: Record<string, string>, secrets: Record<string, string>, password?: string): Promise<MessagingSetup>
   saveTemplates(t: Record<string, PlatformTemplateIds>): Promise<Record<string, PlatformTemplateIds>>
@@ -242,6 +249,10 @@ const db: CpApi = {
   decideSignup: (id, action, reason) => rpc('cp_signup_decide', { p_id: id, p_action: action, p_reason: reason ?? null }),
   signupSettings: () => rpc('cp_signup_settings'),
   saveSignupSettings: (p) => rpc('cp_save_signup_settings', { p }),
+  onboarding: () => rpc<CpOnboarding>('cp_onboarding'),
+  updateOnboardingHelp: (id, status) => rpc('cp_onboarding_help_update', { p_id: id, p_status: status }),
+  aiAssistance: (id) => rpc('cp_ai_assistance', { p_tenant: id }),
+  setAiAssistance: (id, override) => rpc('cp_set_ai_assistance', { p_tenant: id, p_override: override }),
   launchCheck: () => rpc('cp_launch_check'),
   profile: (id) => rpc('cp_hospital_profile', { p_id: id }),
   saveProfile: (id, patch) => rpc('cp_save_hospital_profile', { p_id: id, p: patch }),
@@ -288,6 +299,8 @@ const db: CpApi = {
   resetDemo: () => rpc('cp_demo_reset'),
   saveDemoBaseline: () => rpc('cp_demo_save_baseline'),
   messagingSetup: () => rpc('cp_messaging_setup'),
+  aiBuilderSettings: () => rpc<AiBuilderSettings>('cp_ai_builder_settings'),
+  saveAiBuilderSettings: (p) => rpc<AiBuilderSettings>('cp_save_ai_builder_settings', { p }),
   async saveMessagingSetup(settings, secrets, password) {
     if (Object.keys(secrets).length) {
       if (!password) throw new Error('Confirm your password to change API keys.')

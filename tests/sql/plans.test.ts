@@ -47,20 +47,25 @@ describe('catalogue', () => {
   test('a fresh install has the four built-in plans with every field', async () => {
     const p = await plans()
     expect(Object.keys(p).sort()).toEqual(['clinic', 'custom', 'enterprise', 'hospital'])
-    expect(p.hospital).toMatchObject({ name: 'Hospital', price: 2999, highlight: true, public: true, archived: false, signup: true, order: 1 })
+    expect(p.hospital).toMatchObject({ name: 'Hospital', price: 2999, highlight: true, public: true, archived: false, signup: true, aiAssistance: false, order: 1 })
+    expect(p.enterprise.aiAssistance).toBe(true)
     expect(p.hospital.features.length).toBeGreaterThan(3)
   })
 
   test('older databases ({ price, included } only) get the rest filled in, saved values kept', async () => {
     const old = await plans()
-    await db.as(null, `update public.platform_settings set data = jsonb_set(data, '{plans}', $1::jsonb) where key = 'billing'`,
-      [JSON.stringify({ clinic: { price: 1111, included: { sms: 1, whatsapp: 2, email: 3 } }, multi: { price: 5000, included: { sms: 0, whatsapp: 0, email: 0 } } })])
+    const legacy = structuredClone(old)
+    legacy.clinic = { price: 1111, included: { sms: 1, whatsapp: 2, email: 3 } }
+    delete legacy.enterprise.aiAssistance // existing plan row predates the entitlement field
+    legacy.multi = { price: 5000, included: { sms: 0, whatsapp: 0, email: 0 } }
+    await db.as(null, `update public.platform_settings set data = jsonb_set(data, '{plans}', $1::jsonb) where key = 'billing'`, [JSON.stringify(legacy)])
     const sql = (await import('node:fs')).readFileSync('scripts/sql/plans.sql', 'utf8')
     const backfill = sql.slice(sql.indexOf('with d as'), sql.indexOf('-- ------------------------------------------------------------------ read'))
     const { BILLING_DEFAULTS } = await import('../../src/platform/billing')
     await db.as(null, backfill.replace('@@PLAN_DEFAULTS@@', JSON.stringify(BILLING_DEFAULTS.plans)))
     const p = await plans()
-    expect(p.clinic).toMatchObject({ name: 'Clinic', price: 1111, included: { sms: 1 }, public: true, order: 0 })
+    expect(p.clinic).toMatchObject({ name: 'Clinic', price: 1111, included: { sms: 1 }, public: true, aiAssistance: false, order: 0 })
+    expect(p.enterprise.aiAssistance).toBe(true) // an upgrade adds the new entitlement flag without replacing saved plan fields
     expect(p.multi).toMatchObject({ name: 'Multi', price: 5000, public: true, archived: false })
     await db.as(null, `update public.platform_settings set data = jsonb_set(data, '{plans}', $1::jsonb) where key = 'billing'`, [JSON.stringify(old)])
   })
@@ -87,10 +92,17 @@ describe('editing', () => {
     await expect(call(P_ADMIN, 'cp_save_plan', ['brand-new', { price: 10 }], ['text', 'jsonb'])).rejects.toThrow(/name/)
   })
 
+  test('AI assistance can be included explicitly and defaults off for a new plan', async () => {
+    await call(P_ADMIN, 'cp_save_plan', ['hospital', { aiAssistance: true }], ['text', 'jsonb'])
+    expect((await plans()).hospital.aiAssistance).toBe(true)
+    await call(P_ADMIN, 'cp_save_plan', ['hospital', { aiAssistance: false }], ['text', 'jsonb'])
+    expect((await plans()).hospital.aiAssistance).toBe(false)
+  })
+
   test('a new plan gets defaults, goes last, and "most popular" moves to it', async () => {
     const r = await call<{ billing: { plans: Record<string, any> } }>(P_ADMIN, 'cp_save_plan',
       ['multi-branch', { name: 'Multi-branch', price: 14999, features: ['Up to 5 branches'], highlight: true, signup: true }], ['text', 'jsonb'])
-    expect(r.billing.plans['multi-branch']).toMatchObject({ name: 'Multi-branch', price: 14999, public: true, archived: false, order: 4, cta: 'Get started' })
+    expect(r.billing.plans['multi-branch']).toMatchObject({ name: 'Multi-branch', price: 14999, public: true, archived: false, aiAssistance: false, order: 4, cta: 'Get started' })
     expect(r.billing.plans.hospital.highlight).toBe(false)
     const audit = await db.one<{ n: number }>(null, `select count(*)::int n from public.provider_audit where action = 'plan:create' and target = 'multi-branch'`)
     expect(audit.n).toBe(1)

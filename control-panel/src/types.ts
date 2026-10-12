@@ -131,12 +131,35 @@ export interface NewHospital {
   code: string
   plan: string
   owner_email: string
+  owner_name?: string
+  owner_phone?: string
+  city?: string
+  followup_consent?: boolean
+  ai_assistance_override?: boolean | null
   domain: string
   status: 'trial' | 'active'
   trial_days: number
   months: number
   modules: ModuleMap
   notes: string
+}
+
+export interface CpOnboardingHospital {
+  id: string; slug: string; name: string; plan: string; created_at: string; owner_joined: boolean
+  owner_name: string; owner_email: string | null; owner_phone: string; city: string
+  current_step: string; completed_steps: string[]; followup_consent: boolean; reminder_count: number
+  last_activity_at: string; next_followup_at: string | null; ai_assistance_override: boolean | null; ai_assistance_enabled: boolean
+}
+export interface CpOnboardingHelp {
+  id: string; hospital_id: string; hospital: string; owner_name: string; owner_email: string; message: string
+  status: 'open' | 'handled'; created_at: string
+}
+export interface CpOnboarding { hospitals: CpOnboardingHospital[]; help: CpOnboardingHelp[] }
+export interface AiProviderSetting { id: 'openai' | 'anthropic' | 'gemini'; model: string; enabled: boolean }
+export interface AiBuilderSettings {
+  enabled: boolean; dailyLimit: number; maxOutputTokens: number; providers: AiProviderSetting[]
+  secrets: { key: string; hint: string | null; updated_at: string; updated_by_name: string | null }[]
+  usage: { requests: number; tokens: number; failures: number }
 }
 
 export interface HospitalEdit { name?: string; code?: string; notes?: string; modules?: ModuleMap; owner_email?: string }
@@ -230,6 +253,9 @@ export interface CpSignup {
   /** mobile number checked by a code (signup_otp.sql) */
   phone_verified_at?: string | null
   phone_verified_via?: 'whatsapp' | 'sms' | null
+  followup_consent?: boolean
+  onboarding_step?: 'hospital' | 'contact' | 'review'
+  reached_steps?: string[]
 }
 export interface SignupSettings {
   /** mobile verification on /signup (default on, WhatsApp then SMS) */

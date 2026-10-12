@@ -128,7 +128,13 @@ begin
   returning id into v_id;
   perform set_config('app.tenant_id', v_id::text, true);   -- everything below (and its audit trail) belongs to the new hospital
   if v_dom <> '' then insert into public.tenant_domains (domain, tenant_id, is_primary) values (v_dom, v_id, true); end if;
-  insert into public.app_settings (tenant_id, key, data) values (v_id, 'bootstrap', jsonb_build_object('owner_email', v_owner));
+  insert into public.app_settings (tenant_id, key, data) values (v_id, 'bootstrap', jsonb_strip_nulls(jsonb_build_object(
+    'owner_email', v_owner, 'owner_name', nullif(trim(coalesce(p ->> 'owner_name','')),''),
+    'owner_phone', nullif(regexp_replace(coalesce(p ->> 'owner_phone',''), '[^0-9+]', '', 'g'),''),
+    'city', nullif(trim(coalesce(p ->> 'city','')),''),
+    'followup_consent', case when jsonb_typeof(p -> 'followup_consent')='boolean' then p -> 'followup_consent' else 'false'::jsonb end,
+    'consent_source', coalesce(nullif(p ->> 'consent_source',''),'control_panel'),
+    'ai_assistance_override', case when jsonb_typeof(p -> 'ai_assistance_override')='boolean' then p -> 'ai_assistance_override' else 'null'::jsonb end)));
   perform public.seed_hospital_defaults(v_id);
   perform public.provider_log('hospital:create', v_slug, jsonb_build_object('plan', v_plan, 'status', v_stat, 'owner', v_owner, 'domain', nullif(v_dom, '')));
   return jsonb_build_object('id', v_id, 'slug', v_slug, 'domain', nullif(v_dom, ''), 'owner_email', v_owner);

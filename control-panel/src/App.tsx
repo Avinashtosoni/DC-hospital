@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Bell, Building2, ClipboardList, CreditCard, ExternalLink, Gauge, Globe, Inbox, Layers, LogOut, Megaphone, Menu, MessageSquare, Radio, Settings, ShieldAlert, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
+import { Activity, Bell, Building2, ClipboardCheck, ClipboardList, CreditCard, ExternalLink, Gauge, Globe, Inbox, Layers, LogOut, Megaphone, Menu, MessageSquare, Radio, Settings, ShieldAlert, ShieldCheck, Sparkles, UserPlus, Users, X } from 'lucide-react'
 import { Avatar, Badge, Spinner } from '../../src/components/ui'
 import { cn } from '../../src/lib/utils'
 import { ErrorBoundary } from '../../src/components/ErrorBoundary'
@@ -27,6 +27,8 @@ import { WebsitePage } from './pages/WebsitePage'
 import { MessagingPage } from './pages/MessagingPage'
 import { BroadcastsPage } from './pages/BroadcastsPage'
 import { AlertsPage } from './pages/AlertsPage'
+import { OnboardingPage } from './pages/OnboardingPage'
+import { AiBuilderPage } from './pages/AiBuilderPage'
 import { AlertBell } from './AlertBell'
 
 const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }[] = [
@@ -35,6 +37,8 @@ const NAV: { to: string; label: string; icon: ReactNode; roles: ProviderRole[] }
   { to: '/payments', label: 'Payments', icon: <CreditCard className="h-4 w-4" />, roles: ['admin', 'finance'] },
   { to: '/plans', label: 'Plans & billing', icon: <Layers className="h-4 w-4" />, roles: ['admin'] },
   { to: '/signups', label: 'Sign-ups', icon: <UserPlus className="h-4 w-4" />, roles: ['admin'] },
+  { to: '/onboarding', label: 'Onboarding', icon: <ClipboardCheck className="h-4 w-4" />, roles: ['admin', 'support'] },
+  { to: '/ai-builder', label: 'AI page builder', icon: <Sparkles className="h-4 w-4" />, roles: ['admin'] },
   { to: '/leads', label: 'Leads', icon: <Inbox className="h-4 w-4" />, roles: ['admin'] },
   { to: '/health', label: 'System health', icon: <Activity className="h-4 w-4" />, roles: ['admin', 'support'] },
   { to: '/website', label: 'Website', icon: <Globe className="h-4 w-4" />, roles: ['admin', 'support'] },
@@ -71,6 +75,8 @@ export function App() {
           <Route path="/hospitals/:id" element={<HospitalPage />} />
           <Route path="/payments" element={<Only roles={['admin', 'finance']}><PaymentsPage /></Only>} />
           <Route path="/signups" element={<Only roles={['admin']}><SignupsPage /></Only>} />
+          <Route path="/onboarding" element={<Only roles={['admin', 'support']}><OnboardingPage /></Only>} />
+          <Route path="/ai-builder" element={<Only roles={['admin']}><AiBuilderPage /></Only>} />
           <Route path="/leads" element={<Only roles={['admin']}><LeadsPage /></Only>} />
           <Route path="/health" element={<Only roles={['admin', 'support']}><HealthPage /></Only>} />
           <Route path="/website" element={<Only roles={['admin', 'support']}><WebsitePage /></Only>} />

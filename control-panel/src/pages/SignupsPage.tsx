@@ -68,6 +68,7 @@ export function SignupsPage() {
                     {s.city && <span className="inline-flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />{s.city}</span>}
                   </div>
                   <p className="mt-2 text-xs text-slate-500">Short name <span className="font-mono">{s.hospital_slug ?? s.slug}</span> · prefix <span className="font-mono">{s.code}</span> · accepted Terms {s.terms_version}</p>
+                  <p className="mt-1 text-xs text-slate-500">Guided setup reached: {(s.reached_steps ?? ['hospital', 'contact', 'review']).join(' → ')} · external follow-up consent: {s.followup_consent ? 'yes' : 'no'}</p>
                   {s.reason && <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{s.reason}</p>}
                   {s.status === 'pending' ? (
                     <div className="mt-4 flex flex-wrap gap-2">

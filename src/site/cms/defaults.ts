@@ -52,7 +52,7 @@ export const DEFAULT_CONTENT: SiteContent = {
     },
     pages: { about: true, services: true, doctors: true, packages: true, contact: true, faq: true },
     seoDescription: 'DC Hospital — multi-speciality care in New Delhi. Book appointments with top specialists in 30 seconds, get digital prescriptions & lab reports online, 24×7 emergency.',
-    brand: { shortName: 'DC Hospital', appSubtitle: 'Management System', logoUrl: '', faviconUrl: '', showName: true },
+    brand: { shortName: 'DC Hospital', appSubtitle: 'Management System', logoUrl: '', faviconUrl: '', primaryColor: '#5c5c99', showName: true },
     portal: { allowSignup: true, loginNotice: '' },
     booking: {
       enabled: true,
@@ -392,6 +392,7 @@ export const DEFAULT_CONTENT: SiteContent = {
       { q: 'How do I call an ambulance?', a: 'Call {phone} and choose option 1. Our GPS-tracked ALS ambulances cover Delhi NCR, and paramedics share your vitals with the ER team on the way.' },
     ] },
   ],
+  customPages: { items: [] },
   testimonials: [
     { name: 'Sunita Agarwal', place: 'Patna', text: 'Booked a cardiology slot on my phone in under a minute. No queue at the counter, the doctor already had my old reports. Felt genuinely looked after.', tag: 'Cardiology' },
     { name: 'Rakesh Yadav', place: 'Dwarka, Delhi', text: 'My father was admitted at 2 AM. The emergency team was calm and quick, and the cashless approval came through before morning.', tag: 'Emergency' },

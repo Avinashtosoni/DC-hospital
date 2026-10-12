@@ -25,6 +25,7 @@ function summary(k: ContentKey, v: any): string | null {
     }
     case 'packages': return `${v.items?.length ?? 0} packages · ${v.compare?.length ?? 0} compare groups`
     case 'faqs': return `${v.length} groups · ${v.reduce((n: number, g: any) => n + (g.items?.length ?? 0), 0)} questions`
+    case 'customPages': return `${v.items?.length ?? 0} custom page${v.items?.length === 1 ? '' : 's'} · ${v.items?.filter((p: any) => p.status === 'published').length ?? 0} published`
     case 'home': return `${Object.values(v.sections ?? {}).filter(Boolean).length} of ${Object.keys(v.sections ?? {}).length} blocks shown`
     case 'settings': return `${v.hours?.length ?? 0} opening-hour rows · ${v.socials?.length ?? 0} social links`
     default: return null
@@ -64,9 +65,10 @@ export function CmsOverview({ rows, loading, site, dirtyKeys, onOpen, onPublishA
               <Sparkles className="h-3 w-3" />Website CMS
             </p>
             <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight sm:text-3xl">Manage every page of your website</h1>
-            <p className="mt-2 text-sm leading-relaxed text-brand-200">Edit texts, images, doctors, specialities and packages. Changes stay as drafts, with a live preview, until you publish them.</p>
+            <p className="mt-2 text-sm leading-relaxed text-brand-200">Edit texts, images, doctors, specialities and packages. Build additional tenant pages in the custom page builder. Changes stay as drafts until you publish them.</p>
             <div className="mt-5 flex flex-wrap gap-2">
               <Button variant="outline" className="border-white/20 bg-white text-brand-900 hover:bg-brand-50" icon={<Layers className="h-4 w-4" />} onClick={() => onOpen('home')}>Edit home page</Button>
+              <Link to="/cms/pages" className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-medium text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/10"><FilePenLine className="h-4 w-4" />Custom page builder</Link>
               <a href="/welcome" target="_blank" rel="noreferrer" className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-medium text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/10">
                 <ExternalLink className="h-4 w-4" />View website
               </a>

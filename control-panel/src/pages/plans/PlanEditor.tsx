@@ -15,7 +15,7 @@ import { changeLines, planProblems, slugFor, type PlanStats } from './model'
 export interface SaveRequest { id: string; fields: PlanFields; existing: 'apply' | 'keep'; notify: boolean }
 
 const BLANK: PlanFields = { name: '', price: null, suffix: '', tagline: '', features: [''], highlight: false, cta: 'Get started',
-  included: { sms: 0, whatsapp: 0, email: 0 }, public: true, archived: false, signup: false, order: 0 }
+  included: { sms: 0, whatsapp: 0, email: 0 }, public: true, archived: false, signup: false, aiAssistance: false, order: 0 }
 
 export function PlanEditor({ plan, start, taken, stats, saving, onSave, onClose }: {
   /** null = new plan */
@@ -136,6 +136,11 @@ export function PlanEditor({ plan, start, taken, stats, saving, onSave, onClose 
                 <Input type="number" inputMode="numeric" min={0} value={f.included[c]} onChange={(e) => set({ included: { ...f.included, [c]: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} />
               </Field>
             ))}
+          </fieldset>
+
+          <fieldset className="grid gap-2 sm:grid-cols-2">
+            <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Plan capability</legend>
+            <Toggle label="AI Assistance" hint="Hospital owners on this plan can use the AI page builder when the platform enables it." checked={!!f.aiAssistance} onChange={(v) => set({ aiAssistance: v })} />
           </fieldset>
 
           <fieldset className="grid gap-2 sm:grid-cols-3">

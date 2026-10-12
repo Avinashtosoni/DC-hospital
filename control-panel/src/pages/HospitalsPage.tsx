@@ -94,7 +94,7 @@ export function HospitalsPage() {
 }
 
 const DEFAULT_MODULES: ModuleMap = { dashboard: 'hospital', forms: 'hospital', notifications: 'hospital', security: 'hospital' }
-const blank = (): NewHospital => ({ slug: '', name: '', code: '', plan: 'clinic', owner_email: '', domain: '', status: 'trial', trial_days: 14, months: 12, modules: { ...DEFAULT_MODULES }, notes: '' })
+const blank = (): NewHospital => ({ slug: '', name: '', code: '', plan: 'clinic', owner_email: '', owner_name: '', owner_phone: '', city: '', followup_consent: false, ai_assistance_override: null, domain: '', status: 'trial', trial_days: 14, months: 12, modules: { ...DEFAULT_MODULES }, notes: '' })
 const slugify = (s: string) => s.toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '')
 const codeFrom = (s: string) => (s.match(/[A-Za-z]+/g) ?? []).map((w) => w[0]).join('').toUpperCase().slice(0, 4).padEnd(2, 'X')
 
@@ -120,7 +120,7 @@ function NewHospitalModal({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <Modal open={open} onClose={onClose} title="Add a hospital" size="max-w-2xl"
-      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button loading={create.isPending} onClick={() => create.mutate()} disabled={!f.name || !f.slug || !f.owner_email}>Create hospital</Button></>}>
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button loading={create.isPending} onClick={() => create.mutate()} disabled={!f.name || !f.slug || !f.owner_email || !f.owner_name?.trim()}>Create hospital</Button></>}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Hospital name" required className="sm:col-span-2">
           <Input id="nh-name" value={f.name} placeholder="e.g. Sunrise Multispeciality Hospital" onChange={(e) => {
@@ -134,15 +134,34 @@ function NewHospitalModal({ open, onClose }: { open: boolean; onClose: () => voi
         <Field label="Record prefix" required hint="Patient numbers look like CCC-100001">
           <Input id="nh-code" value={f.code} maxLength={6} onChange={(e) => { setTouched((t) => ({ ...t, code: true })); set('code', e.target.value.toUpperCase().replace(/[^A-Z]/g, '')) }} />
         </Field>
+        <Field label="Owner’s name" required hint="Used for the setup checklist and help requests.">
+          <Input id="nh-owner-name" value={f.owner_name ?? ''} maxLength={100} onChange={(e) => set('owner_name', e.target.value)} />
+        </Field>
         <Field label="Owner’s e-mail" required hint="The first sign-up with this e-mail on the hospital’s website becomes its owner.">
           <Input id="nh-owner" type="email" value={f.owner_email} onChange={(e) => set('owner_email', e.target.value)} />
         </Field>
+        <Field label="Owner’s mobile" hint="Optional. Used for reminders only if the owner opts in and WhatsApp is configured.">
+          <Input id="nh-owner-phone" type="tel" value={f.owner_phone ?? ''} maxLength={18} placeholder="+91 98765 43210" onChange={(e) => set('owner_phone', e.target.value)} />
+        </Field>
+        <Field label="City"><Input id="nh-city" value={f.city ?? ''} maxLength={80} onChange={(e) => set('city', e.target.value)} /></Field>
+        <label className="flex items-start gap-2.5 rounded-xl border border-slate-100 p-3 text-xs text-slate-600 sm:col-span-2">
+          <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-700" checked={!!f.followup_consent} onChange={(e) => set('followup_consent', e.target.checked)} />
+          <span><b className="text-slate-800">Consent recorded?</b> Check only when the hospital owner has agreed to setup follow-ups via available WhatsApp, e-mail or push channels. Default is off.</span>
+        </label>
         <Field label="Website address" hint="Optional. Their domain, e.g. sunrisehospital.in — point it here later (Domain settings in the app).">
           <Input id="nh-domain" value={f.domain} placeholder="sunrisehospital.in" onChange={(e) => set('domain', e.target.value)} />
         </Field>
         <Field label="Plan">
           <Select id="nh-plan" value={f.plan} onChange={(e) => set('plan', e.target.value)}>
             <PlanOptions withPrice hideArchived />
+          </Select>
+        </Field>
+        <Field label="AI page assistance" hint="Defaults to the selected plan; the platform admin can override this later.">
+          <Select value={f.ai_assistance_override === true ? 'enabled' : f.ai_assistance_override === false ? 'disabled' : 'plan'} onChange={(e) => {
+            const v = e.target.value
+            set('ai_assistance_override', v === 'plan' ? null : v === 'enabled')
+          }}>
+            <option value="plan">Use plan entitlement</option><option value="enabled">Enable for this hospital</option><option value="disabled">Disable for this hospital</option>
           </Select>
         </Field>
         <Field label="Start with">

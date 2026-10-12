@@ -25,6 +25,13 @@ describe('plans page model', () => {
     expect(slugFor('Unsure', [])).toBe('plan-unsure')
   })
 
+  it('carries AI Assistance through the plan editor model and records entitlement changes', () => {
+    const enterprise = planList(undefined).find((p) => p.id === 'enterprise')!
+    expect(fieldsOf(enterprise).aiAssistance).toBe(true)
+    const before = fieldsOf(enterprise), after = { ...before, aiAssistance: false }
+    expect(changeLines(before, after).other).toContain('AI page assistance is no longer included.')
+  })
+
   it('validates an edited plan', () => {
     const base = fieldsOf(planList(undefined)[0])
     expect(planProblems(base, 'x', false, [])).toEqual([])

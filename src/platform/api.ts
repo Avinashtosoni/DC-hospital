@@ -42,7 +42,15 @@ export type OtpChannel = 'whatsapp' | 'sms'
 export interface SignupOtpInfo { required: boolean; channels: OtpChannel[] }
 export interface SignupInfo { enabled: boolean; mode: 'instant' | 'approve'; trialDays: number; plan: string; plans: string[]; otp?: SignupOtpInfo }
 export interface SignupOtpSent { ref: string; channel: OtpChannel; to: string; expires_in: number; resend_in: number }
-export interface SignupForm { organisation: string; name: string; email: string; phone: string; city: string; plan: string; website: string }
+export type SignupStep = 'hospital' | 'contact' | 'review'
+export interface SignupForm {
+  organisation: string; name: string; email: string; phone: string; city: string; plan: string; website: string
+  /** Explicit optional consent; external onboarding reminders are never sent without it. */
+  followup_consent: boolean
+}
+export interface SignupDraft {
+  id: string; data: Partial<SignupForm>; current_step: SignupStep; reached_steps: SignupStep[]; followup_consent: boolean; updated_at: string
+}
 export type SignupResult = { status: 'created'; slug: string; email: string; trial_days: number } | { status: 'pending'; email: string }
 
 
@@ -76,21 +84,43 @@ export async function verifySignupOtp(phone: string, code: string): Promise<stri
   return r.token
 }
 
-export async function trialSignup(f: SignupForm, termsVersion: string, otpToken?: string | null): Promise<SignupResult> {
+export async function getSignupDraft(id: string): Promise<SignupDraft | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase.rpc('get_platform_signup_draft', { p_id: id })
+  if (error) throw new Error(error.message)
+  return data as SignupDraft | null
+}
+
+export async function saveSignupDraft(id: string, f: SignupForm, currentStep: SignupStep, reached: SignupStep[]): Promise<void> {
+  if (!supabase) return
+  const { error } = await supabase.rpc('save_platform_signup_draft', { p_id: id, p: {
+    organisation: f.organisation, name: f.name, email: f.email, phone: f.phone, city: f.city, plan: f.plan,
+    followup_consent: f.followup_consent, current_step: currentStep, reached_steps: reached,
+  } })
+  if (error) throw new Error(error.message)
+}
+
+export async function trialSignup(f: SignupForm, termsVersion: string, otpToken?: string | null,
+  progress?: { draftId: string; reached: SignupStep[]; termsAccepted?: boolean }): Promise<SignupResult> {
   if (supabase) {
-    const { data, error } = await supabase.rpc('platform_trial_signup', { p: { ...f, terms_version: termsVersion, otp_token: otpToken ?? null } })
+    const { data, error } = await supabase.rpc('platform_trial_signup', { p: {
+      ...f, terms_version: termsVersion, terms_accepted: progress?.termsAccepted === true, otp_token: otpToken ?? null, draft_id: progress?.draftId ?? null,
+      onboarding_step: 'review', reached_steps: progress?.reached ?? ['hospital', 'contact', 'review'],
+    } })
     if (error) throw new Error(error.message)
     return data as SignupResult
   }
   throw new Error('Sign-up is not available right now — please try again later.')
 }
 
-/** same checks as platform_trial_signup() */
-export function signupProblem(f: SignupForm, agreed: boolean): string | null {
-  if (f.organisation.trim().length < 2) return 'Please enter your hospital or clinic name.'
-  if (f.name.trim().length < 2) return 'Please enter your name.'
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.email.trim())) return 'Please enter a valid e-mail — you will sign in with it.'
-  if (!/^[6-9]\d{9}$/.test(f.phone.replace(/\D/g, '').slice(-10))) return 'Please enter a 10-digit Indian mobile number.'
-  if (!agreed) return 'Please accept the Terms of Service and the Data Processing Agreement.'
+/** Same checks as platform_trial_signup(), scoped to the guided stage the visitor is on. */
+export function signupProblem(f: SignupForm, agreed: boolean, step: SignupStep = 'review'): string | null {
+  if (step !== 'contact' && f.organisation.trim().length < 2) return 'Please enter your hospital or clinic name.'
+  if (step !== 'hospital') {
+    if (f.name.trim().length < 2) return 'Please enter your name.'
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.email.trim())) return 'Please enter a valid e-mail — you will sign in with it.'
+    if (!/^[6-9]\d{9}$/.test(f.phone.replace(/\D/g, '').slice(-10))) return 'Please enter a 10-digit Indian mobile number.'
+  }
+  if (step === 'review' && !agreed) return 'Please accept the Terms of Service and the Data Processing Agreement.'
   return null
 }
