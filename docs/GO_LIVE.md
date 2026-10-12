@@ -117,23 +117,60 @@ text changes — every free-trial sign-up records the version it accepted.
 
 ## 8. Backups
 
-Supabase Pro keeps daily backups for 7 days. On top of that, `.github/workflows/backup.yml` keeps an **encrypted,
-off-site** copy every night (02:30 IST):
+Supabase Pro keeps daily database backups for 7 days. On top of that, `.github/workflows/backup.yml` runs nightly at
+02:30 IST and on demand. Database and Storage object sources are independently optional, but every configured source
+is encrypted with the same passphrase before it leaves the runner:
 
-1. GitHub → repository → Settings → Secrets → Actions: `SUPABASE_DB_URL` (session pooler string from step 1.7) and
-   `BACKUP_PASSPHRASE` (long random text — **store a copy offline**; without it the backups cannot be opened).
-   Optional: `BACKUP_S3_URI` + `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` (and `BACKUP_S3_ENDPOINT`
-   for Cloudflare R2) to also copy it to your bucket.
-2. Actions → **Database backup** → **Run workflow** once; the run's artifact is the backup (kept 30 days).
-3. **Test a restore** on a scratch Supabase project before launch:
+1. GitHub → repository → Settings → Secrets → Actions:
+   - **Database source:** `SUPABASE_DB_URL` (session pooler string from step 1.7).
+   - **Required when any source is enabled:** `BACKUP_PASSPHRASE` (long random text — **store a copy offline**;
+     without it the backups cannot be opened).
+   - **Optional Storage object source:** set both `SUPABASE_URL` (the project URL from Supabase → Settings → API) and
+     `SUPABASE_STORAGE_KEY` (a server-side Supabase secret API key or legacy `service_role` key). This is a highly
+     privileged credential that can access objects across buckets; keep it only in GitHub Actions secrets, never in
+     browser code. It is a Storage REST API key, **not** the S3 destination credentials below. The export includes
+     object bytes, bucket IDs, object names, content type and cache-control metadata, with a SHA-256/size manifest.
+     The workflow encrypts the archive with AES-256/GPG before uploading it. Bucket settings and policies are not
+     created or changed by the Storage restore helper; restore database/bucket definitions first.
+   - **Optional off-site copy:** `BACKUP_S3_URI` + `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` (and
+     `BACKUP_S3_ENDPOINT` for Cloudflare R2 or another S3-compatible service). Both encrypted backup files and their
+     `SHA256SUMS` are copied to that destination.
+2. Actions → **Database and Storage backup** → **Run workflow** once. Encrypted artifacts are kept for 30 days;
+   configure the optional S3/R2 copy if that retention is not sufficient as your off-site recovery copy.
+3. **Test a restore on a scratch Supabase project before launch.** Download the artifact, then check the encrypted
+   files before decrypting:
 
 ```bash
-gpg --decrypt hospital-comrade-<date>.dump.gpg > db.dump          # asks for BACKUP_PASSPHRASE
+sha256sum -c SHA256SUMS
+gpg --decrypt hospital-comrade-<date>.dump.gpg > db.dump
 pg_restore --no-owner --no-privileges --clean --if-exists -d "<scratch project connection string>" db.dump
 ```
 
-Uploaded files (logos, photos, reports) live in Supabase Storage, which is not in the dump — download the buckets
-monthly or sync them with `rclone`.
+If the Storage archive is present, restore its objects **after** restoring the database and confirming the target
+buckets exist. The helper does not create buckets, refuses a missing-bucket target, and uses upsert—objects with the
+same bucket/path on the target will be replaced, while unrelated extra target objects are not deleted. Review the
+project URL carefully before confirming:
+
+```bash
+mkdir -p restore
+set -o pipefail
+gpg --decrypt hospital-comrade-<date>.storage.tar.gz.gpg | tar -xz -C restore
+npm ci
+npx tsx scripts/storage-archive.ts verify restore/storage-export
+export SUPABASE_URL='https://<scratch-project-ref>.supabase.co'
+read -rsp 'Scratch project server-side Storage key: ' SUPABASE_STORAGE_KEY; echo
+export SUPABASE_STORAGE_KEY
+STORAGE_RESTORE_CONFIRM=YES npx tsx scripts/storage-archive.ts restore restore/storage-export
+unset SUPABASE_STORAGE_KEY
+```
+
+The confirmation variable is an explicit write guard; set it only for a restore after checking `SUPABASE_URL`.
+Restore preserves object bytes, names, content type and cache-control, but it does not restore exact timestamps or
+arbitrary custom metadata. The export streams objects after listing them and is not a transactionally consistent
+snapshot with the database dump; an upload during a run could be omitted or captured at a different moment. For a
+strict point-in-time recovery copy, pause uploads or coordinate a maintenance window across the database and Storage
+backup steps. A SHA-256 check proves each archived object file matches its manifest; retain the encrypted
+archive/checksum alongside the passphrase offline or in a separately secured S3/R2 destination.
 
 ## 9. Preflight and the launch checklist
 
@@ -166,5 +203,5 @@ only. For a sales demo, create a hospital on the database (or a separate staging
 
 Coolify → the application → Deployments → redeploy the previous one. Database changes are additive and
 `upgrade-2026-10.sql` is safe to run again (an older app build keeps working against the newer schema); restore from a
-backup (step 8) only for data loss. Always take a manual backup (Actions → Database backup → Run workflow, or Supabase →
+backup (step 8) only for data loss. Always take a manual backup (Actions → Database and Storage backup → Run workflow, or Supabase →
 Database → Backups) right before running an upgrade script.

@@ -1,14 +1,17 @@
-# Off-site database backup (phase 8.3) — on top of Supabase's own daily backups.
-# Every night at 02:30 IST (and on demand) it dumps the database, encrypts it with your passphrase and keeps it as a
-# private workflow artifact for 30 days — optionally also in your own S3 / R2 bucket.
-#
-# Repository → Settings → Secrets and variables → Actions:
-#   SUPABASE_DB_URL     required  Supabase → Connect → Session pooler URI (postgresql://postgres.xxx:PASSWORD@aws-0-ap-south-1.pooler.supabase.com:5432/postgres)
-#   BACKUP_PASSPHRASE   required  long random text — keep a copy offline; without it the backups cannot be opened
-#   BACKUP_S3_URI       optional  s3://bucket/path   (+ AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION; BACKUP_S3_ENDPOINT for R2 / other S3)
-# Nothing set → the job just says so and succeeds. Restore steps: docs/GO_LIVE.md → "Backups".
-# (Scheduled runs only happen on the default branch.)
-name: Database backup
+# Nightly encrypted recovery backup for the database and (optionally) Supabase Storage objects.
+# Database source:
+#   SUPABASE_DB_URL     Supabase → Connect → Session pooler URI
+# Required whenever any source is configured:
+#   BACKUP_PASSPHRASE   long random text — keep an offline copy; without it the backups cannot be opened
+# Optional Storage-object source (set BOTH):
+#   SUPABASE_URL          project URL from Supabase → Settings → API
+#   SUPABASE_STORAGE_KEY  server-side Supabase secret API key or legacy service_role key (highly privileged)
+# Optional off-site destination:
+#   BACKUP_S3_URI s3://bucket/path (+ AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION;
+#   BACKUP_S3_ENDPOINT for R2 / another S3-compatible endpoint)
+# If no source is configured, the workflow succeeds with a notice. Object archives are GPG-encrypted before
+# artifacts/S3 upload; restore guidance is in docs/GO_LIVE.md → "Backups". Scheduled runs use the default branch.
+name: Database and Storage backup
 
 on:
   schedule:
@@ -19,65 +22,140 @@ permissions:
   contents: read
 
 concurrency:
-  group: db-backup
+  group: recovery-backup
   cancel-in-progress: false
 
 jobs:
   backup:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
-      S3_URI: ${{ secrets.BACKUP_S3_URI }}
-      S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
+    timeout-minutes: 60
     steps:
-      - name: Not configured
-        if: env.DB_URL == ''
-        run: echo "::notice::SUPABASE_DB_URL is not set — no backup taken. See the comments at the top of .github/workflows/backup.yml."
-
-      - name: Refuse unencrypted backups
-        if: env.DB_URL != '' && env.PASSPHRASE == ''
-        run: |
-          echo "::error::BACKUP_PASSPHRASE is not set — backups contain patient data and are never stored unencrypted."
-          exit 1
-
-      - name: Dump (pg_dump 17, custom format)
-        if: env.DB_URL != '' && env.PASSPHRASE != ''
+      - name: Validate backup configuration
+        id: config
+        shell: bash
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          STORAGE_URL: ${{ secrets.SUPABASE_URL }}
+          STORAGE_KEY: ${{ secrets.SUPABASE_STORAGE_KEY }}
+          S3_URI: ${{ secrets.BACKUP_S3_URI }}
         run: |
           set -euo pipefail
-          STAMP=$(date -u +%Y-%m-%dT%H%MZ)
+          DB_ENABLED=false
+          STORAGE_ENABLED=false
+          if [[ -n "$DB_URL" ]]; then DB_ENABLED=true; fi
+          if [[ -n "$STORAGE_URL" || -n "$STORAGE_KEY" ]]; then
+            if [[ -z "$STORAGE_URL" || -z "$STORAGE_KEY" ]]; then
+              echo "::error::Set both SUPABASE_URL and SUPABASE_STORAGE_KEY to enable the Storage-object backup."
+              exit 1
+            fi
+            STORAGE_ENABLED=true
+          fi
+          if [[ "$DB_ENABLED" == true || "$STORAGE_ENABLED" == true ]]; then
+            if [[ -z "$PASSPHRASE" ]]; then
+              echo "::error::BACKUP_PASSPHRASE is required; patient data is never uploaded unencrypted."
+              exit 1
+            fi
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No database or Storage source is configured; no backup was taken. See the comments at the top of .github/workflows/backup.yml."
+          fi
+          echo "database=$DB_ENABLED" >> "$GITHUB_OUTPUT"
+          echo "storage=$STORAGE_ENABLED" >> "$GITHUB_OUTPUT"
+          S3_ENABLED=false
+          if [[ -n "$S3_URI" ]]; then S3_ENABLED=true; fi
+          echo "s3=$S3_ENABLED" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        if: steps.config.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set backup timestamp
+        id: timestamp
+        if: steps.config.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          STAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
           echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
+
+      - name: Dump database (pg_dump 17, custom format)
+        if: steps.config.outputs.database == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
           mkdir -p out
-          # public = all hospital data; auth = sign-in accounts; storage = file metadata (the files live in Storage)
+          # public = hospital data; auth = sign-in accounts; storage = file metadata (object bytes are archived separately)
           docker run --rm -e PGURL="$DB_URL" -v "$PWD/out:/out" postgres:17-alpine \
             sh -c 'pg_dump "$PGURL" --format=custom --compress=9 --no-owner --no-privileges --schema=public --schema=auth --schema=storage --file=/out/db.dump'
           ls -lh out/db.dump
           test "$(stat -c %s out/db.dump)" -gt 10000
 
-      - name: Encrypt (AES-256)
-        if: env.DB_URL != '' && env.PASSPHRASE != ''
+      - name: Set up Node for Storage archive
+        if: steps.config.outputs.storage == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked project dependencies
+        if: steps.config.outputs.storage == 'true'
+        run: npm ci
+
+      - name: Export and verify Storage objects
+        if: steps.config.outputs.storage == 'true'
+        run: npx tsx scripts/storage-archive.ts backup out/storage-export
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_STORAGE_KEY: ${{ secrets.SUPABASE_STORAGE_KEY }}
+
+      - name: Encrypt backups and write checksums
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -euo pipefail
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$PASSPHRASE" --symmetric --cipher-algo AES256 \
-            --output "out/hospital-comrade-$STAMP.dump.gpg" out/db.dump
-          shred -u out/db.dump
-          sha256sum out/*.gpg | tee out/SHA256SUMS
+          mkdir -p out
+          if [[ -f out/db.dump ]]; then
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$PASSPHRASE" --symmetric --cipher-algo AES256 \
+              --output "out/hospital-comrade-$STAMP.dump.gpg" out/db.dump
+            shred -u out/db.dump
+          fi
+          if [[ -f out/storage-export/manifest.json ]]; then
+            tar -C out -czf - storage-export | \
+              gpg --batch --yes --pinentry-mode loopback --passphrase "$PASSPHRASE" --symmetric --cipher-algo AES256 \
+                --output "out/hospital-comrade-$STAMP.storage.tar.gz.gpg"
+            find out/storage-export -type f -exec shred -u {} +
+            find out/storage-export -depth -type d -empty -delete
+          fi
+          sha256sum out/*.gpg > out/SHA256SUMS
+          ls -lh out/*.gpg out/SHA256SUMS
 
-      - name: Keep as artifact (30 days)
-        if: env.DB_URL != '' && env.PASSPHRASE != ''
+      - name: Keep encrypted artifacts (30 days)
+        if: steps.config.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: db-backup-${{ env.STAMP }}
-          path: out/
+          name: recovery-backup-${{ steps.timestamp.outputs.stamp }}
+          path: |
+            out/*.gpg
+            out/SHA256SUMS
           retention-days: 30
           if-no-files-found: error
 
-      - name: Copy to S3 / R2 (optional)
-        if: env.DB_URL != '' && env.PASSPHRASE != '' && env.S3_URI != ''
+      - name: Copy encrypted backups to S3 / R2 (optional)
+        if: steps.config.outputs.enabled == 'true' && steps.config.outputs.s3 == 'true'
+        env:
+          S3_URI: ${{ secrets.BACKUP_S3_URI }}
+          S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
-          aws s3 cp out/ "${S3_URI%/}/" --recursive ${S3_ENDPOINT:+--endpoint-url "$S3_ENDPOINT"}
+          if [[ -n "$S3_ENDPOINT" ]]; then
+            aws s3 cp out/ "${S3_URI%/}/" --recursive --endpoint-url "$S3_ENDPOINT"
+          else
+            aws s3 cp out/ "${S3_URI%/}/" --recursive
+          fi

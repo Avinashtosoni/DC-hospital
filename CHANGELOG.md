@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased: production-readiness remediation PRA-03–05
+## Unreleased: production-readiness remediation PRA-03–06
 
 - **PRA-03:** shared Edge Function inventory/policy manifest and fail-closed preflight checks, with regression coverage.
 - **PRA-04:** signed Meta webhooks also require the tenant's configured Meta provider and a matching receiving phone-number ID on every callback change.
 - **PRA-05:** accountant clinical reads and assigned provider-support chart access remain unchanged. Provider chart opens emit best-effort entries through the existing provider audit; accountant app routes emit optional low-data Sentry signals. These UI signals do not capture direct database/API reads and are not a complete access audit. No production configuration or access policy was changed.
+- **PRA-06:** scheduled recovery backups can include an encrypted Supabase Storage-object archive; a streaming export/verify/explicit-restore helper, tests, and DB/object restore runbooks are added. No production credentials, buckets, or data were changed.
 
 ## Unreleased: verified mobile number on free-trial sign-up
 

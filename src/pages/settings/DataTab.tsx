@@ -106,7 +106,7 @@ export function DataTab({ ctx, exportOnly }: { ctx: TabCtx; exportOnly?: boolean
       </Section>
 
       <Section title="Data storage" icon={<Database className="h-4 w-4" />}>
-        <p className="text-sm text-slate-600">Data is stored in your Supabase Postgres database and protected with Row Level Security. Use Supabase's daily backups or <code className="rounded bg-slate-100 px-1 text-xs">pg_dump</code> for full database backups.</p>
+        <p className="text-sm text-slate-600">Patient and clinical data is stored in your Supabase Postgres database and protected with Row Level Security. Use Supabase's daily backups or <code className="rounded bg-slate-100 px-1 text-xs">pg_dump</code> for database recovery. Uploaded files (such as logos and reports) live separately in Supabase Storage and need a separate object backup; see the operator's <code className="rounded bg-slate-100 px-1 text-xs">docs/GO_LIVE.md</code> recovery guide.</p>
       </Section>
 
       <Section title="System information" icon={<Info className="h-4 w-4" />}>

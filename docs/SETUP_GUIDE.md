@@ -35,7 +35,7 @@ Dusri baar 1–2 ghante lagenge.
 | C1 | Project URL `https://<ref>.supabase.co` | Supabase → Project Settings → **API** (Data API) | Coolify `VITE_SUPABASE_URL` | Nahi |
 | C2 | Project ref (URL ka `<ref>` hissa) | Wahi | `supabase link` | Nahi |
 | C3 | **anon** key (lambi `eyJ…` wali) | Project Settings → **API Keys** → *Legacy API keys* tab → `anon` `public` | Coolify `VITE_SUPABASE_ANON_KEY` | Nahi (browser mein jaati hai; RLS data ki raksha karta hai) |
-| C4 | `service_role` key | Wahi tab | **Kahin nahi.** Edge Functions ko yeh apne aap mil jaati hai | **HAAN, sabse zaroori** |
+| C4 | Legacy `service_role` key | Wahi tab | Edge Functions ko automatically milti hai; optional Storage backup key ke roop mein sirf C16 ki tarah Actions secret mein | **HAAN, bahut privileged** |
 | C5 | Database password | Project banate waqt | Backup connection string | **HAAN** |
 | C6 | Session pooler connection string | Project → **Connect** → *Session pooler* | GitHub secret `SUPABASE_DB_URL` (backup) | **HAAN** (password hota hai) |
 | C7 | SMTP (Resend / Zoho / SES): host, port, user, password, from-address | Email provider ka dashboard | Supabase → Auth → SMTP | **HAAN** |
@@ -46,8 +46,11 @@ Dusri baar 1–2 ghante lagenge.
 | C12 | WhatsApp: AiSensy / Meta / MSG91 / OpenWA keys | Provider dashboard | Edge Function secrets (`notify`) | **HAAN** |
 | C13 | Cloudflare API token + Zone ID (hospitals ke apne domain ke liye) | Cloudflare → My Profile → API Tokens | Edge Function secrets (`domains`) | **HAAN** |
 | C14 | `BACKUP_PASSPHRASE` (lambi random string, **offline copy bhi rakhiye**) | Khud banayein | GitHub Actions secret | **HAAN** |
+| C15 | Supabase Project URL | Project Settings → **API** | GitHub Actions secret `SUPABASE_URL` (Storage-object backup) | Nahi |
+| C16 | Server-side Storage key (`sb_secret_…` ya legacy `service_role`) | Project Settings → **API Keys** | GitHub Actions secret `SUPABASE_STORAGE_KEY` — kabhi browser/client mein nahi | **HAAN, bahut privileged** |
 
 C10–C13 pehle din zaroori nahi hain. Inke bina bhi app chalegi, bas us channel ke messages "not available" dikhayenge.
+C15 aur C16 dono optional hain aur sirf Storage-object backup chalu karte hain; C16 project ke sabhi Storage buckets par broad/elevated access de sakti hai (legacy `service_role` RLS bypass karta hai). Ise sirf GitHub Actions secret mein rakhiye—app/browser config mein kabhi nahi. Database backup ko C6 aur C14 chahiye; Storage backup ko C14–C16 chahiye.
 Staging test ke liye kam se kam **C1–C9 aur C10 (email)** chahiye.
 
 ---
@@ -216,12 +219,12 @@ browser console ka error note kariye.
 - [ ] **E3** System health → failed messages / scheduled jobs → sab theek ho.
 
 ### F. Backup aur restore (sirf ek baar, launch se pehle)
-- [ ] **F1** GitHub billing theek hone ke baad: repo → Settings → Secrets → Actions → `SUPABASE_DB_URL` (**C6**) aur `BACKUP_PASSPHRASE` (**C14**).
-- [ ] **F2** Actions → **Database backup** → *Run workflow* → artifact download kariye.
-- [ ] **F3** Ek **scratch** Supabase project par restore kariye (command [GO_LIVE.md step 8](GO_LIVE.md#8-backups) mein hai) → wahan tables aur data dikhe → scratch project delete kar dijiye.
+- [ ] **F1** GitHub billing theek hone ke baad: repo → Settings → Secrets → Actions → database ke liye `SUPABASE_DB_URL` (**C6**) + `BACKUP_PASSPHRASE` (**C14**). Storage files bhi backup karni hain to dono optional secrets `SUPABASE_URL` (**C15**) + `SUPABASE_STORAGE_KEY` (**C16**) set kariye.
+- [ ] **F2** Actions → **Database and Storage backup** → *Run workflow* → encrypted artifact download kariye.
+- [ ] **F3** Ek **scratch** Supabase project par database restore kariye; agar Storage archive hai to bucket IDs maujood hone ke baad objects restore/verify kariye (commands [GO_LIVE.md step 8](GO_LIVE.md#8-backups) mein). Phir scratch project delete kariye.
 
-> GitHub billing theek hone tak: Supabase Pro ka daily backup chalta rahega. Ek manual dump bhi le sakte hain:
-> `pg_dump "<C6>" -Fc -f backup.dump`.
+> GitHub billing theek hone tak: Supabase Pro ka daily database backup chalta rahega. Ek manual dump bhi le sakte hain:
+> `pg_dump "<C6>" -Fc -f backup.dump`. GitHub secret/bucket ya production setting is guide se khud-ba-khud change nahi hoti.
 
 ---
 

@@ -14,7 +14,7 @@ export const MANUAL_CHECKS: { id: string; title: string; detail: string }[] = [
   { id: 'auth_urls', title: 'Auth Site URL and redirect URLs', detail: 'Site URL = the product domain; add https://*.your-domain and every hospital domain pattern to the redirect list.' },
   { id: 'razorpay', title: 'Razorpay live keys + webhook', detail: 'billing function secrets RAZORPAY_KEY_ID / _SECRET / _WEBHOOK_SECRET; webhook → …/functions/v1/billing?webhook=razorpay. Make a ₹1 test payment.' },
   { id: 'messaging', title: 'Platform messaging sender', detail: 'E-mail, SMS / WhatsApp keys in the notify function; send yourself a test from the main hospital.' },
-  { id: 'backup', title: 'Off-site backup tested', detail: 'GitHub Action “Database backup” has SUPABASE_DB_URL + BACKUP_PASSPHRASE and a restore was tried on a scratch project.' },
+  { id: 'backup', title: 'Off-site backup tested', detail: 'GitHub Action “Database and Storage backup” has its source secrets + BACKUP_PASSPHRASE; database and (when configured) Storage objects were restored on a scratch project.' },
   { id: 'legal', title: 'Company details on the legal pages', detail: 'PLATFORM_LEGAL_NAME / ADDRESS / EMAIL / PHONE / GRIEVANCE_OFFICER set; the texts reviewed by a lawyer.' },
   { id: 'csp', title: 'Security headers enforced', detail: 'CSP_MODE=enforce (default) and no CSP errors in the browser console on the site, dashboard, payment and push.' },
   { id: 'domains', title: 'Custom domains', detail: 'domains function secrets CF_API_TOKEN / CF_ZONE_ID / CF_CNAME_TARGET; connect one test domain end to end.' },

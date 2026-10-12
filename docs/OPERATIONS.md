@@ -61,8 +61,11 @@ Control panel → hospital → **Settings → Close this hospital** (admin only)
    `tenant_purges` (name, counts, who, when, reason) **and the hospital's paid / refunded Hospital Comrade invoices**
    (GST: keep 8 years), deletes every login of the hospital and every row, then the hospital itself.
 
-Backups: deleted data still exists in backups until they expire (Supabase PITR: 7–28 days; your own `pg_dump`s:
-your schedule). Say so in your agreement with hospitals.
+Backups: deleted data still exists until each backup expires. Supabase PITR retention depends on the plan; the Actions
+workflow can retain encrypted database and Storage-object archives as 30-day artifacts, with an optional S3/R2 copy.
+The object archive is separate from the database dump and must be restored after bucket definitions exist. Include
+backup retention and deletion timing in your agreement with hospitals; see [GO_LIVE.md → Backups](GO_LIVE.md#8-backups)
+for verification and scratch-restore steps.
 
 ## 7.4 Incidents & breaches
 
@@ -221,5 +224,5 @@ medico-legal cases) and accounts (8 years).
 
 - **Daily**: System health — late jobs, stuck messages, failures.
 - **Weekly**: open privacy requests across hospitals (Health → Privacy requests open), payments failed/abandoned.
-- **Monthly**: test a restore from backup; review team members and their hospital assignments (Team).
+- **Monthly**: test the database and, when enabled, Storage-object restore on a scratch project; review team members and their hospital assignments (Team). Follow [GO_LIVE.md → Backups](GO_LIVE.md#8-backups).
 - **Every incident**: record → contain → Board within 72 h → notify hospitals → resolve with a note.
