@@ -58,11 +58,9 @@ export function AlertBell() {
   if (q.error) return null
   const unread = q.data?.unread ?? 0
   const openAlert = (a: CpAlert) => {
-    if (!a.read_at) read.mutate([a.id])
     setOpen(false)
-    if (internal(a.link)) nav(a.link!)
-    else if (a.link) window.open(a.link, '_blank', 'noopener')
-    else nav('/alerts')
+    // Show the alert in the inbox detail drawer; its related destination is a separate action there.
+    nav(`/alerts?alert=${encodeURIComponent(a.id)}`)
   }
   return (
     <div className="relative" ref={box}>
