@@ -27,7 +27,7 @@ const profile = (id: string) => db.one<{ role: string; tenant_id: string | null 
 
 beforeAll(async () => {
   db = await freshDb('production')
-  await signUp(ids.mainOwner, 'owner@your-hospital.in')               // production.sql's bootstrap e-mail
+  await signUp(ids.mainOwner, 'owner@your-hospital.in')               // production.sql's private onboarding e-mail
   await db.exec(snippet('add-hospital'))
   CITY = (await db.one<{ id: string }>(null, `select id from public.tenants where slug = 'citycare'`)).id
 }, 120_000)

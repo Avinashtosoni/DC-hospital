@@ -25,13 +25,13 @@ begin
   return v_ts is not null and to_timestamp(v_ts) > now() - make_interval(secs => greatest(coalesce(p_seconds, 600), 60));
 end $$;
 
--- the hospital owner to write to (the first owner account, else the e-mail the owner will sign up with)
+-- the hospital owner to write to (the signed-up profile, else the private onboarding contact)
 create or replace function public.tenant_owner_contact(p_tenant uuid)
 returns table (profile_id uuid, full_name text, email text) language sql stable security definer set search_path = public as $$
   select p.id, p.full_name, p.email from public.profiles p where p.tenant_id = p_tenant and p.role = 'owner'
   union all
-  select null, null, s.data ->> 'owner_email' from public.app_settings s
-   where s.tenant_id = p_tenant and s.key = 'bootstrap' and not exists (select 1 from public.profiles p where p.tenant_id = p_tenant and p.role = 'owner')
+  select null::uuid, nullif(o.owner_name,''), nullif(o.owner_email,'') from public.tenant_onboarding o
+   where o.tenant_id = p_tenant and not exists (select 1 from public.profiles p where p.tenant_id = p_tenant and p.role = 'owner')
   limit 1
 $$;
 

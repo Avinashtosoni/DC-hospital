@@ -18,7 +18,7 @@ the setup and a week of soft launch with one or two friendly hospitals before yo
 1. supabase.com → **New project**: region **South Asia (Mumbai) `ap-south-1`**, a strong database password (keep it in a
    password manager), **Pro plan** (daily backups, no pausing; Point-in-Time Recovery is an optional add-on).
 2. **Database → Extensions**: enable `pg_cron` and `pg_net`.
-3. **SQL editor**: open `supabase/production.sql`, change the owner e-mail on the line marked ✏️ to the e-mail of the
+3. **SQL editor**: open `supabase/production.sql`, change the private onboarding contact e-mail on the line marked ✏️ to the e-mail of the
    person who will own the platform's own (main) hospital, run it. It has no demo data and no demo logins.
 4. **Auth → URL configuration**: Site URL `https://<your-domain>`; redirect URLs `https://<your-domain>/**` and, for
    hospitals on their own domains, each `https://<their-domain>/**` (add them as hospitals connect).
@@ -34,13 +34,17 @@ Verify: SQL editor → `select public.platform_signup_info();` returns `{"enable
 
 ## 2. Edge Functions
 
+The checked-in [function manifest](../supabase/functions/_shared/manifest.ts) is the canonical inventory for deploy security,
+System health and preflight. After linking the project, deploy exactly that inventory (gateway JWT verification stays on
+except the two signed-webhook handlers):
+
 ```bash
 supabase link --project-ref <ref>
-supabase functions deploy notify
-supabase functions deploy whatsapp-bot --no-verify-jwt
-supabase functions deploy domains
-supabase functions deploy billing --no-verify-jwt
+npm run functions:deploy
 ```
+
+`billing` and `whatsapp-bot` use `--no-verify-jwt` because they also receive signed third-party webhooks; their handlers
+must validate payment/provider signatures or the caller's Auth identity. Every manifest function is checked by preflight.
 
 Secrets (Supabase → Edge Functions → Secrets):
 

@@ -98,7 +98,7 @@ begin
   -- 12. the platform's own hospital has its owner
   select count(*) into v_n from public.profiles p join public.tenants t on t.id = p.tenant_id where t.is_primary and p.role = 'owner';
   out := out || jsonb_build_object('id', 'primary_owner', 'title', 'Main hospital owner', 'status', case when v_n > 0 then 'ok' else 'warn' end,
-    'detail', case when v_n > 0 then 'The main hospital has an owner account.' else 'Nobody has signed up as the main hospital''s owner yet (the bootstrap e-mail in production.sql).' end);
+    'detail', case when v_n > 0 then 'The main hospital has an owner account.' else 'Nobody has signed up as the main hospital''s owner yet (the private onboarding contact in production.sql).' end);
 
   return jsonb_build_object('at', now(), 'checks', out);
 end $$;

@@ -76,7 +76,10 @@ describe('a live hospital upgraded to multi-hospital', () => {
   beforeAll(async () => {
     // the release before multi-hospital, with a hospital already running on it
     db = await freshDb({ sql: fixture('5d7a225') })
-    await signUp(OWNER, 'owner@your-hospital.in')                       // the bootstrap e-mail becomes the owner
+    await db.as(null, `insert into public.app_settings (key, data) values ('bootstrap',
+      '{"owner_email":"owner@your-hospital.in","owner_name":"Old Owner","owner_phone":"+919876543210","city":"Patna","followup_consent":true,"consent_source":"signup"}'::jsonb)
+      on conflict (key) do update set data=excluded.data`)
+    await signUp(OWNER, 'owner@your-hospital.in')                       // existing owner and private onboarding contact survive
     await db.as(OWNER, `insert into public.departments (name) values ('Cardiology'), ('Orthopaedics')`)
     await db.as(OWNER, `insert into public.doctors (full_name, email, specialization, consultation_fee, status) values ('Dr. Old Timer', 'old@h.in', 'Cardiology', 500, 'active')`)
     for (let i = 1; i <= 3; i++) await db.as(OWNER, `insert into public.patients (mrn, full_name, phone, gender) values ('', $1, $2, 'male')`, [`Patient ${i}`, `98000000${i}0`])
@@ -88,6 +91,12 @@ describe('a live hospital upgraded to multi-hospital', () => {
     const before = { patients: await count('patients'), doctors: await count('doctors'), outbox: await count('notification_outbox') }
     await db.exec(UPGRADE)
     expect({ patients: await count('patients'), doctors: await count('doctors'), outbox: await count('notification_outbox') }).toEqual(before)
+    expect((await db.one<{ n: number }>(null, `select count(*)::int n from public.app_settings where key='bootstrap'`)).n).toBe(0)
+    expect(await db.one(null, `select owner_email, owner_name, owner_phone, city, followup_consent, consent_source
+      from public.tenant_onboarding where tenant_id=$1`, [PRIMARY])).toMatchObject({
+        owner_email: 'owner@your-hospital.in', owner_name: 'Old Owner', owner_phone: '+919876543210', city: 'Patna',
+        followup_consent: true, consent_source: 'signup',
+      })
   }, 120_000)
 
   test('every existing row now belongs to the primary hospital; numbering and settings carry on', async () => {

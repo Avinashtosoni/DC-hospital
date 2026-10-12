@@ -13,7 +13,11 @@ let db: Db
 beforeAll(async () => { db = await freshDb('master') }, 180_000)
 
 const CODE = '135790'
-const session = (sid: string | null) => db.as(null, `select set_config('request.jwt.claims', $1, false)`, [sid ? JSON.stringify({ session_id: sid }) : ''])
+const session = async (sid: string | null, userId?: string) => {
+  if (sid && userId) await db.as(null, `insert into auth.sessions(id,user_id) values ($1,$2) on conflict (id) do nothing`, [sid, userId])
+  await db.as(null, `select set_config('request.jwt.claims', $1, false)`,
+    [sid && userId ? JSON.stringify({ sub: userId, session_id: sid, role: 'authenticated' }) : ''])
+}
 /** deep-set app_settings 'app' → path (creating the row and every missing level) */
 async function setApp(path: string, value: unknown) {
   await db.as(null, `insert into public.app_settings (key, data) values ('app', '{}') on conflict (tenant_id, key) do nothing`)
@@ -39,7 +43,7 @@ describe('sign-in OTP — hospital', () => {
   })
 
   test('until the code is entered the hospital is invisible; then it is back — for this session only', async () => {
-    await session('sess-1')
+    await session('e1e10000-0000-4000-8000-000000000001', USER.owner)
     const tenant = await db.one<{ t: string }>(null, 'select tenant_id t from public.profiles where id = $1', [USER.owner])
     expect(await tenantOf(USER.owner)).toBeNull()
     expect(await db.as(USER.owner, 'select id from public.patients limit 1')).toEqual([])
@@ -62,18 +66,20 @@ describe('sign-in OTP — hospital', () => {
     expect(await tenantOf(USER.owner)).toBe(tenant.t)
     expect((await db.as(USER.owner, 'select id from public.patients limit 1')).length).toBe(1)
 
-    await session('sess-2')   // signed in somewhere else
+    await session('e1e10000-0000-4000-8000-000000000002', USER.owner)   // signed in somewhere else
     expect(await tenantOf(USER.owner)).toBeNull()
     // "confirm your password" → a new session that carries the verified one over
-    expect((await db.one<{ c: boolean }>(USER.owner, `select public.login_otp_carry('sess-1') c`)).c).toBe(true)
+    expect((await db.one<{ c: boolean }>(USER.owner, `select public.login_otp_carry('e1e10000-0000-4000-8000-000000000001') c`)).c).toBe(true)
     expect(await tenantOf(USER.owner)).toBe(tenant.t)
-    await session('sess-3')
+    await db.as(null, `update auth.sessions set not_after=now()-interval '1 second' where id='e1e10000-0000-4000-8000-000000000001'`)
+    await session('e1e10000-0000-4000-8000-000000000003', USER.owner)
+    expect((await db.one<{ c: boolean }>(USER.owner, `select public.login_otp_carry('e1e10000-0000-4000-8000-000000000001') c`)).c).toBe(false)
     expect((await db.one<{ c: boolean }>(USER.owner, `select public.login_otp_carry('nope') c`)).c).toBe(false)
     expect(await tenantOf(USER.owner)).toBeNull()
   })
 
   test('limits: 30 s between codes, 5 wrong attempts burn the code', async () => {
-    await session('sess-4')
+    await session('e1e10000-0000-4000-8000-000000000004', USER.owner)
     await waitOut()
     const r = await request(USER.owner, 'whatsapp')
     await expect(request(USER.owner, 'whatsapp')).rejects.toThrow(/wait 30 seconds/)
@@ -84,7 +90,7 @@ describe('sign-in OTP — hospital', () => {
   })
 
   test('patients are not asked with roles = staff; are with roles = all', async () => {
-    await session('sess-p')
+    await session('e1e10000-0000-4000-8000-000000000005', USER.patient)
     expect(await tenantOf(USER.patient)).not.toBeNull()
     await db.as(null, `update public.profiles set phone = '9876500006' where id = $1`, [USER.patient])
     await setApp('{security,otp,login,roles}', 'all')
@@ -93,7 +99,7 @@ describe('sign-in OTP — hospital', () => {
   })
 
   test('never locks out: no reachable channel → let in (status says so)', async () => {
-    await session('sess-5')
+    await session('e1e10000-0000-4000-8000-000000000006', USER.doctor)
     await db.as(null, `update public.profiles set phone = null where id = $1`, [USER.doctor])
     await setApp('{security,otp,login,channels}', ['whatsapp'])
     expect(await tenantOf(USER.doctor)).not.toBeNull()
@@ -102,16 +108,16 @@ describe('sign-in OTP — hospital', () => {
   })
 
   test('a control-panel "sign in as user" session counts as verified', async () => {
-    await session('sess-imp')
+    await session('e1e10000-0000-4000-8000-000000000007', USER.owner)
     expect(await tenantOf(USER.owner)).toBeNull()
     await db.as(null, `insert into public.impersonations (admin_id, target_id, hospital_id, reason, expires_at, session_id, bound_at)
-      values ($1, $1, public.primary_tenant(), 'checking a reported problem', now() + interval '20 minutes', 'sess-imp', now())`, [USER.owner])
+      values ($1, $1, public.primary_tenant(), 'checking a reported problem', now() + interval '20 minutes', 'e1e10000-0000-4000-8000-000000000007', now())`, [USER.owner])
     expect(await tenantOf(USER.owner)).not.toBeNull()
   })
 
   test('turning it on needs a verified session; the format is checked', async () => {
     await setApp('{security,otp,login,enabled}', false)
-    await session('sess-6')
+    await session('e1e10000-0000-4000-8000-000000000008', USER.owner)
     const on = `update public.app_settings set data = jsonb_set(data, '{security,otp,login,enabled}', 'true') where key = 'app'`
     await expect(db.as(USER.owner, on)).rejects.toThrow(/OTP_SETUP/)
     await expect(db.as(USER.owner, `update public.app_settings set data = jsonb_set(data, '{security,otp,login,channels}', '["pigeon"]') where key = 'app'`)).rejects.toThrow(/Unknown OTP channel/)
@@ -137,7 +143,7 @@ describe('sign-in OTP — control-panel team', () => {
   test('provider_role() waits for the code; cp_me() still answers with what the screen needs', async () => {
     await db.as(null, `insert into auth.users (id, email, encrypted_password) values ($1, 'admin@hc.in', 'x')`, [ADMIN])
     await db.as(null, `insert into public.provider_users (user_id, role) values ($1, 'admin')`, [ADMIN])
-    await session('team-1')
+    await session('e1e10000-0000-4000-8000-000000000010', ADMIN)
     expect((await db.one<{ r: string }>(ADMIN, 'select public.provider_role() r')).r).toBe('admin')
     // shared e-mail account saved in the panel
     await db.as(null, `insert into public.platform_settings (key, data) values ('messaging_accounts', '{"PLATFORM_EMAIL_PROVIDER":"resend"}')
@@ -159,7 +165,7 @@ describe('sign-in OTP — control-panel team', () => {
     const primary = (await db.one<{ t: string }>(null, 'select public.primary_tenant() t')).t
     expect((await db.one<{ r: boolean }>(ADMIN, 'select public.provider_can($1) r', [primary])).r).toBe(true)
 
-    await session('team-2')   // a new sign-in
+    await session('e1e10000-0000-4000-8000-000000000011', ADMIN)   // a new sign-in
     expect((await db.one<{ r: string | null }>(ADMIN, 'select public.provider_role() r')).r).toBeNull()
     expect((await db.one<{ r: boolean }>(ADMIN, 'select public.provider_can($1) r', [primary])).r).toBe(false)
     await expect(db.as(ADMIN, 'select public.cp_hospitals()')).rejects.toThrow(/Hospital Comrade team/)
@@ -168,7 +174,7 @@ describe('sign-in OTP — control-panel team', () => {
   })
 
   test('the team edits a hospital\'s OTP switches (Hospital → Security)', async () => {
-    await session('team-1')
+    await session('e1e10000-0000-4000-8000-000000000010', ADMIN)
     const t = (await db.one<{ t: string }>(null, 'select public.primary_tenant() t')).t
     const r = (await db.one<{ r: any }>(ADMIN, `select public.cp_set_hospital_otp($1, '{"booking":{"enabled":false},"login":{"enabled":true,"channels":["sms"],"roles":"all"}}') r`, [t])).r
     expect(r.otp).toEqual({ login: { enabled: true, channels: ['sms'], roles: 'all' }, booking: { enabled: false, channels: null } })

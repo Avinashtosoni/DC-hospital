@@ -5,7 +5,7 @@
 --    — the platform admin decides in the control panel (Settings → Free-trial sign-up).
 --  • platform_trial_signup(p) — anyone (anon): validates, rate-limits, records the accepted Terms version and either
 --    creates the hospital right away (instant) or waits for the admin (approve). The person then creates the owner
---    account on the new hospital with the same e-mail (app_settings 'bootstrap', as for panel-created hospitals).
+--    account on the new hospital with the same e-mail (private tenant_onboarding contact, as for panel-created hospitals).
 --  • cp_signups / cp_signup_decide — the admin's list with approve / reject.
 --  • signup_cleanup() (nightly, from run_retention): pending requests expire after 30 days; hospitals nobody claimed
 --    within unclaimedDays are closed (the normal 7-day notice, then the admin may delete them).

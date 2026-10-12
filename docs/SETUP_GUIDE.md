@@ -86,15 +86,13 @@ Laptop par, repo folder ke andar:
 ```bash
 npx supabase login                                   # browser khulega, Supabase account se login kariye
 npx supabase link --project-ref <C2>                 # database password (C5) maangega
-npx supabase functions deploy notify
-npx supabase functions deploy whatsapp-bot --no-verify-jwt
-npx supabase functions deploy domains
-npx supabase functions deploy billing --no-verify-jwt
-npx supabase functions deploy impersonate
-npx supabase functions deploy ops                    # control panel: team alerts, broadcasts, health checks, test sends
+npm run functions:deploy                             # shared manifest se saare functions + sahi JWT flags
 ```
 
-> Docker install nahi hai aur deploy fail ho raha hai, to har command ke aakhir mein `--use-api` jod kar dobara chalaiye.
+`supabase/functions/_shared/manifest.ts` function list aur gateway-JWT settings ka ek hi source hai. Sirf `billing`
+(Razorpay-signed webhooks) aur `whatsapp-bot` (provider-signed webhooks) `--no-verify-jwt` use karte hain; unke handlers
+apni signatures / caller Auth identity validate karte hain. Docker install nahi hai aur deploy fail ho raha hai, to
+Supabase CLI ko `--use-api` ke saath deploy kariye.
 
 **Secrets** (Supabase → Edge Functions → **Secrets** → Add). Staging ke liye sabse pehle yeh daaliye:
 

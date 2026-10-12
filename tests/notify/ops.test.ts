@@ -124,7 +124,7 @@ describe('health checks', () => {
 
   test('runChecks covers the platform, Supabase, every function and the providers', async () => {
     const out = await runChecks({ ...base, siteUrl: 'https://hc.in', self: 'ops', fetch: (async () => res(200, '[]')) as any, domains: [] })
-    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'db', 'auth', 'storage', 'provider:razorpay', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
+    expect(out.map((c) => c.service)).toEqual(expect.arrayContaining(['site', 'db', 'auth', 'storage', 'provider:razorpay', 'fn:notify', 'fn:billing', 'fn:domains', 'fn:impersonate', 'fn:whatsapp-bot', 'fn:ai-page-builder', 'fn:ops', 'provider:email', 'provider:push', 'ssl:domains']))
     expect(out.find((c) => c.service === 'fn:ops')?.status).toBe('ok')
   })
 

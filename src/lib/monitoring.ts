@@ -1,10 +1,11 @@
 /**
- * Optional error reporting (phase 8.3) — off unless SENTRY_DSN is set (runtime env.js or VITE_SENTRY_DSN).
+ * Optional Sentry telemetry (errors plus sparse access signals) — off unless SENTRY_DSN is set (runtime env.js or VITE_SENTRY_DSN).
  * A tiny client for Sentry's envelope endpoint instead of the SDK: no extra dependency, nothing loaded when off.
- * Privacy: hospital data must never leave — messages are scrubbed of e-mails / phone numbers / long numbers, the URL is
- * sent without query string or hash, and no user id, name or e-mail is attached (only the hospital's short name and role).
+ * Error messages are scrubbed of e-mails / phone numbers / long numbers and omit query/hash; access signals use only an
+ * allow-listed screen label plus tenant/role, with no URL, record id, user identity, or clinical payload.
  */
 import { appEnv, sentryDsn } from './supabase'
+import { CLINICAL_ACCESS_SCREENS, type ClinicalAccessScreen } from './accessSignals'
 
 declare const __APP_BUILD__: string
 const build = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
@@ -59,6 +60,40 @@ export function buildEvent(error: unknown, extra: { source?: string } = {}) {
   }
 }
 
+/** A deliberately sparse Sentry event: role, tenant and an allow-listed screen label only. */
+export function buildAccessEvent(screen: ClinicalAccessScreen) {
+  return {
+    event_id: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/-/g, '').slice(0, 32).padEnd(32, '0'),
+    timestamp: Date.now() / 1000,
+    platform: 'javascript',
+    level: 'info',
+    environment: appEnv,
+    release: `hospital-comrade@${build}`,
+    tags: { ...context, source: 'clinical_access_signal', screen },
+    message: 'clinical_access_signal',
+  }
+}
+
+const ACCESS_SCREENS = new Set<string>(CLINICAL_ACCESS_SCREENS)
+let accessSent = 0
+const accessSeen = new Map<ClinicalAccessScreen, number>()
+/** Best-effort UI route signal (no user id, record id, URL, query or clinical content). */
+export function reportAccessSignal(screen: ClinicalAccessScreen, dsn: Dsn | null = parsed) {
+  if (!dsn || !ACCESS_SCREENS.has(screen) || accessSent >= 50) return false
+  const now = Date.now()
+  if (now - (accessSeen.get(screen) ?? 0) < 2_000) return false // suppress immediate duplicate effects
+  accessSeen.set(screen, now)
+  accessSent++
+  sendEvent(buildAccessEvent(screen), dsn)
+  return true
+}
+
+function sendEvent(ev: { event_id: string }, dsn: Dsn) {
+  const body = `${JSON.stringify({ event_id: ev.event_id, sent_at: new Date().toISOString(), dsn: dsn.dsn })}\n${JSON.stringify({ type: 'event' })}\n${JSON.stringify(ev)}\n`
+  const url = `${dsn.endpoint}?sentry_key=${encodeURIComponent(dsn.key)}&sentry_version=7`
+  try { void fetch(url, { method: 'POST', body, keepalive: true, headers: { 'Content-Type': 'text/plain;charset=UTF-8' } }).catch(() => {}) } catch { /* never let reporting break the app */ }
+}
+
 let sent = 0
 const seen = new Set<string>()
 /** report one error (deduplicated, at most 10 per page load); no-op without a DSN */
@@ -68,9 +103,7 @@ export function reportError(error: unknown, extra: { source?: string } = {}, dsn
   const sig = `${ev.exception.values[0].type}:${ev.exception.values[0].value}`
   if (seen.has(sig)) return false
   seen.add(sig); sent++
-  const body = `${JSON.stringify({ event_id: ev.event_id, sent_at: new Date().toISOString(), dsn: dsn.dsn })}\n${JSON.stringify({ type: 'event' })}\n${JSON.stringify(ev)}\n`
-  const url = `${dsn.endpoint}?sentry_key=${encodeURIComponent(dsn.key)}&sentry_version=7`
-  try { void fetch(url, { method: 'POST', body, keepalive: true, headers: { 'Content-Type': 'text/plain;charset=UTF-8' } }).catch(() => {}) } catch { /* never let reporting break the app */ }
+  sendEvent(ev, dsn)
   return true
 }
 

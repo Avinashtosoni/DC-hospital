@@ -89,6 +89,33 @@ create table if not exists public.provider_audit (
 );
 create index if not exists provider_audit_at_idx on public.provider_audit (tenant_id, at desc);
 
+-- Private owner contact / onboarding progress. This is created in the core so sign-up, billing and control-panel
+-- functions can use one non-public source of truth instead of storing contact PII in app_settings.
+create table if not exists public.tenant_onboarding (
+  tenant_id            uuid primary key references public.tenants(id) on delete cascade,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now(),
+  last_activity_at     timestamptz not null default now(),
+  current_step         text not null default 'account' check (current_step in ('account','details','doctors','team','appointment','website','domain','plan','complete')),
+  completed_steps      text[] not null default '{}',
+  owner_name           text not null default '' check (char_length(owner_name) <= 100),
+  owner_email          text not null default '' check (char_length(owner_email) <= 150),
+  owner_phone          text not null default '' check (owner_phone = '' or owner_phone ~ '^\+?[0-9]{10,13}$'),
+  city                 text not null default '' check (char_length(city) <= 80),
+  followup_consent     boolean not null default false,
+  consent_source       text not null default 'system' check (consent_source in ('system','signup','control_panel','hospital_owner')),
+  consent_updated_at   timestamptz,
+  reminder_count       smallint not null default 0 check (reminder_count between 0 and 3),
+  last_reminded_at     timestamptz,
+  next_followup_at     timestamptz,
+  completed_at         timestamptz
+);
+create index if not exists tenant_onboarding_followup_idx on public.tenant_onboarding(next_followup_at)
+  where next_followup_at is not null and completed_at is null;
+alter table public.tenant_onboarding enable row level security;
+revoke all on public.tenant_onboarding from public, anon, authenticated;
+grant all on public.tenant_onboarding to service_role;
+
 -- ------------------------------------------------------------------ request context
 create or replace function public.request_header(p_name text)
 returns text language sql stable set search_path = public as $$
@@ -112,10 +139,44 @@ $$;
 
 -- 'admin' | 'support' | 'finance' | null — the signed-in user's provider role
 -- null until a team member has entered their sign-in code, when Platform settings → Security asks for one (otp_verify.sql)
+-- Access JWTs are accepted by PostgREST until exp even after Auth revokes their refresh session. For authenticated
+-- database requests, require an unbanned auth.users row and the exact session_id still present in auth.sessions. Check
+-- not_after when Auth exposes it. Supabase enforces inactivity/time-box policy at refresh and cleans stale rows later;
+-- this row check does not claim to enforce an inactivity cutoff before Auth removes the row. No auth.sessions means deny.
+create or replace function public.auth_session_active()
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  claims jsonb;
+  sid text;
+  active boolean := false;
+begin
+  if uid is null then return true; end if; -- anonymous/public requests are not user sessions
+  begin claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb; exception when others then claims := null; end;
+  sid := nullif(claims ->> 'session_id', '');
+  if to_regclass('auth.sessions') is not null then
+    if sid is null or sid !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' then return false; end if;
+    begin
+      execute 'select exists (select 1 from auth.sessions s join auth.users u on u.id = s.user_id
+        where s.id::text = $1 and s.user_id = $2 and (u.banned_until is null or u.banned_until <= now())
+          and (s.not_after is null or s.not_after > now()))' into active using sid, uid;
+    exception when undefined_column then
+      -- Older supported Auth schemas may not expose not_after; session existence and account status still apply.
+      execute 'select exists (select 1 from auth.sessions s join auth.users u on u.id = s.user_id
+        where s.id::text = $1 and s.user_id = $2 and (u.banned_until is null or u.banned_until <= now()))' into active using sid, uid;
+    end;
+    return coalesce(active, false);
+  end if;
+  -- No session registry means revocation / expiry cannot be verified. Never treat a valid signature alone as active.
+  return false;
+end $$;
+revoke all on function public.auth_session_active() from public, anon, authenticated;
+
 create or replace function public.provider_role()
 returns text language plpgsql stable security definer set search_path = public as $$
 declare r text;
 begin
+  if auth.uid() is not null and not public.auth_session_active() then return null; end if;
   select role into r from public.provider_users where user_id = auth.uid() and active;
   if r is not null and to_regprocedure('public.login_otp_passed(text,uuid)') is not null and not public.login_otp_passed('team', null) then
     return null;
@@ -147,6 +208,7 @@ create or replace function public.current_tenant()
 returns uuid language plpgsql stable security definer set search_path = public as $$
 declare v uuid; h text; uid uuid := auth.uid();
 begin
+  if uid is not null and not public.auth_session_active() then return null; end if;
   h := nullif(current_setting('app.tenant_id', true), '');
   if h is not null then return h::uuid; end if;
 
@@ -231,7 +293,7 @@ declare
     'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'notification_templates', 'site_enquiries',
     'site_forms', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites', 'wa_sessions', 'booking_otps',
     'password_reset_otps', 'site_content', 'site_content_revisions', 'app_settings', 'app_secrets', 'notification_outbox',
-    'push_tokens'];
+    'push_tokens', 'tenant_onboarding'];
 begin
   foreach t in array tables loop
     continue when to_regclass('public.' || t) is null;

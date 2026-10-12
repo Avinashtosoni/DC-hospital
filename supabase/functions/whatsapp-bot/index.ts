@@ -28,6 +28,7 @@ import { botReply, type BotDeps, type BotState } from '../_shared/bot.ts'
 import { deliver, type Ctx } from '../_shared/providers.ts'
 import { parseOpenwa } from '../_shared/openwa.ts'
 import { parseWacrm, wacrmContactPhone, wacrmRegisterWebhook } from '../_shared/wacrm.ts'
+import { metaReceiverMatches } from '../_shared/meta.ts'
 import { corsHeaders, resolveCaller, webhookTenantRef, webhookUrl, type TenantRow } from '../_shared/tenant.ts'
 
 const cors = corsHeaders('GET, POST, OPTIONS')
@@ -283,6 +284,10 @@ Deno.serve(async (req) => {
   if (!secret) return new Response('meta app secret is not configured', { status: 401 })
   const sig = 'sha256=' + hex(await hmac('SHA-256', secret, raw))
   if (!safeEq(sig, req.headers.get('x-hub-signature-256') ?? '')) return new Response('bad signature', { status: 403 })
+  const wa = setup.ctx.n.whatsapp ?? {}
+  if (wa.provider !== 'meta' || !metaReceiverMatches(body, String(wa.phoneNumberId ?? ''))) {
+    return new Response('wrong WhatsApp receiver', { status: 403 })
+  }
   const messages: any[] = (body.entry ?? []).flatMap((e: any) => (e.changes ?? []).flatMap((c: any) => c.value?.messages ?? []))
   if (!setup.bot || !messages.length) return json({ ok: true })   // status updates etc. — acknowledge
   for (const m of messages) {

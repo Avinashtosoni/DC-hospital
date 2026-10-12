@@ -35,9 +35,13 @@ grant all on public.app_settings to service_role;
 drop policy if exists app_settings_read on public.app_settings;
 drop policy if exists app_settings_owner_insert on public.app_settings;
 drop policy if exists app_settings_owner_update on public.app_settings;
-create policy app_settings_read on public.app_settings for select to authenticated using (true);
-create policy app_settings_owner_insert on public.app_settings for insert to authenticated with check (public.has_role('owner'));
-create policy app_settings_owner_update on public.app_settings for update to authenticated using (public.has_role('owner')) with check (public.has_role('owner'));
+-- `bootstrap` historically held the first owner's contact details. It is never exposed or re-created through this table.
+create policy app_settings_read on public.app_settings for select to authenticated using (key <> 'bootstrap');
+create policy app_settings_owner_insert on public.app_settings for insert to authenticated
+  with check (key <> 'bootstrap' and public.has_role('owner'));
+create policy app_settings_owner_update on public.app_settings for update to authenticated
+  using (key <> 'bootstrap' and public.has_role('owner'))
+  with check (key <> 'bootstrap' and public.has_role('owner'));
 
 drop function if exists public.app_settings_stamp() cascade;
 create function public.app_settings_stamp()

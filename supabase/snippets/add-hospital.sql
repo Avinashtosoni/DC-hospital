@@ -30,7 +30,8 @@ begin
   if coalesce(v_domain, '') <> '' then
     insert into public.tenant_domains (domain, tenant_id, is_primary) values (lower(v_domain), v_id, true);
   end if;
-  insert into public.app_settings (tenant_id, key, data) values (v_id, 'bootstrap', jsonb_build_object('owner_email', lower(v_owner)));
+  insert into public.tenant_onboarding (tenant_id, owner_email) values (v_id, lower(v_owner))
+    on conflict (tenant_id) do update set owner_email=excluded.owner_email, updated_at=now();
   perform public.seed_hospital_defaults(v_id);   -- built-in website forms + the name on its website
   raise notice 'Added % (id %). Owner: sign up at https://% with %', v_name, v_id, coalesce(nullif(v_domain, ''), '<app>/?hospital=' || v_slug), v_owner;
 end $add_hospital$;

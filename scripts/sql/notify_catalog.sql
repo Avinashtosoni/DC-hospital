@@ -369,7 +369,7 @@ begin
   end loop;
   if v = 0 and not exists (select 1 from public.profiles where tenant_id = p_tenant and role = 'owner') then
     v := public.notify_enqueue_raw(p_event, coalesce(cat -> 'copy', '{}'::jsonb), array(select c from unnest(chs) c where c = 'email'), null,
-      (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = p_tenant and s.key = 'bootstrap'), null,
+      (select nullif(o.owner_email,'') from public.tenant_onboarding o where o.tenant_id = p_tenant), null,
       jsonb_build_object('name', 'there', 'hospital', hname) || coalesce(p_vars, '{}'::jsonb), p_related_table, p_related_id, null);
   end if;
   perform set_config('app.tenant_id', coalesce(prev, ''), true);

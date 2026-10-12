@@ -18,7 +18,9 @@ import { toast } from 'sonner'
 import { LanguageSwitch, useT } from '../../i18n'
 import { isFresh, noticeState, sortNotices, useNoticeReads, visibleTo } from '../../notices/board'
 import { PushForeground, PushToggle } from '../PushToggle'
-import { setMonitoringContext } from '../../lib/monitoring'
+import { reportAccessSignal, setMonitoringContext } from '../../lib/monitoring'
+import { classifyClinicalAccess } from '../../lib/accessSignals'
+import { providerLog } from '../../tenancy/session'
 import { siteTenant } from '../../tenancy/state'
 import { ImpersonationBanner } from '../../auth/ImpersonationBanner'
 import { PlatformAnnouncements } from './PlatformAnnouncements'
@@ -226,12 +228,27 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
 export function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const loc = useLocation()
-  const { user } = useAuth()
+  const { user, context } = useAuth()
   const { settings } = useAppSettings()
   const site = useSiteSettings()
   useDashboardChrome()
+  const tenantSlug = siteTenant()?.slug
+  const userRole = user?.role
+  const userId = user?.id
+  const providerRole = context?.provider_role
+  const accessScreen = classifyClinicalAccess(loc.pathname, userRole, context)
   // error reports carry the hospital's short name and the role — never who the person is
-  useEffect(() => { setMonitoringContext({ tenant: siteTenant()?.slug, role: user?.role }) }, [user?.role])
+  useEffect(() => { setMonitoringContext({ tenant: tenantSlug, role: userRole }) }, [tenantSlug, userRole])
+  useEffect(() => {
+    if (!userRole || !accessScreen) return
+    if (providerRole) {
+      // Patient chart views are logged after the row loads, with its internal id and no clinical content.
+      if (accessScreen !== 'patient_chart') void providerLog('view_clinical_screen', accessScreen, { source: 'app_route' })
+    } else if (userRole === 'accountant') {
+      // Optional Sentry signal: only an allow-listed screen, tenant and role; no user or record id.
+      reportAccessSignal(accessScreen)
+    }
+  }, [accessScreen, loc.pathname, userId, userRole, providerRole])
   useEffect(() => {
     const item = NAV.flatMap((s) => s.items).filter((i) => i.path === '/' ? loc.pathname === '/' : loc.pathname.startsWith(i.path)).sort((x, y) => y.path.length - x.path.length)[0]
     const brand = site.brand?.shortName || site.name

@@ -202,8 +202,7 @@ $$;
 revoke all on function public.invite_lookup(text) from public;
 grant execute on function public.invite_lookup(text) to anon, authenticated;
 
--- New auth users: an accepted staff invite gives the invited role; the hospital's bootstrap e-mail (app_settings
--- 'bootstrap' — set by production.sql for the first hospital, by supabase/snippets/add-hospital.sql for later ones)
+-- New auth users: an accepted staff invite gives the invited role; the private tenant_onboarding owner e-mail
 -- becomes that hospital's first owner; everyone else is a patient.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
@@ -221,7 +220,7 @@ begin
     select id into v_tenant from public.tenants where id = v_meta::uuid and status <> 'suspended';
   end if;
   v_tenant := coalesce(v_tenant, public.current_tenant(), public.primary_tenant());
-  select lower(data ->> 'owner_email') into v_owner from public.app_settings where tenant_id = v_tenant and key = 'bootstrap';
+  select lower(nullif(owner_email,'')) into v_owner from public.tenant_onboarding where tenant_id = v_tenant;
 
   select * into v_inv from public.staff_invites
   where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email) and tenant_id = v_tenant

@@ -21,7 +21,17 @@ const signUp = (id: string, email: string, meta: Record<string, unknown>) => db.
   `insert into auth.users (id, email, encrypted_password, raw_user_meta_data) values ($1, $2, 'x', $3::jsonb)`, [id, email, JSON.stringify(meta)])
 async function call<T = any>(who: string | null, fn: string, args: unknown[] = [], types: string[] = [], claims?: Record<string, unknown>): Promise<T> {
   const list = args.map((_, i) => `$${i + 1}${types[i] ? '::' + types[i] : ''}`).join(', ')
-  if (claims) await db.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify(claims)])
+  if (claims) {
+    const jwtClaims = { ...claims }
+    if (who && who !== 'anon' && who !== 'service') {
+      jwtClaims.sub ??= who
+      jwtClaims.session_id ??= who
+      if (jwtClaims.sub === who && typeof jwtClaims.session_id === 'string') {
+        await db.as(null, `insert into auth.sessions(id,user_id) values ($1,$2) on conflict (id) do nothing`, [jwtClaims.session_id, who])
+      }
+    }
+    await db.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify(jwtClaims)])
+  }
   try {
     const r = await db.one<{ r: T }>(who, `select public.${fn}(${list}) as r`, args.map((a) => (a !== null && typeof a === 'object' ? JSON.stringify(a) : a)))
     return r.r
@@ -92,10 +102,9 @@ describe('A · details, owner', () => {
     await fails(call(P_SUPPORT, 'cp_resend_owner_invite', [B]), /already signed up/)
     const D = 'd0000000-0000-4000-8000-000000000004'
     await db.as(null, `insert into public.tenants (id, slug, name, code, plan, status) values ($1, 'newone', 'New One', 'NEW', 'clinic', 'trial')`, [D])
-    await db.as(null, `insert into public.app_settings (tenant_id, key, data) values ($1, 'bootstrap', '{"owner_email":"owner@your-hospital.in"}')
-                       on conflict (tenant_id, key) do update set data = excluded.data`, [D])
+    await db.as(null, `update public.tenant_onboarding set owner_email='owner@your-hospital.in' where tenant_id=$1`, [D])
     await fails(call(P_ADMIN, 'cp_resend_owner_invite', [D]), /owner’s e-mail first/)
-    await db.as(null, `update public.app_settings set data = '{"owner_email":"Boss@NewOne.in"}' where tenant_id = $1 and key = 'bootstrap'`, [D])
+    await db.as(null, `update public.tenant_onboarding set owner_email='Boss@NewOne.in' where tenant_id=$1`, [D])
     // no platform address yet → nothing queued, the panel shows the link to copy
     expect(await call(P_ADMIN, 'cp_resend_owner_invite', [D])).toMatchObject({ email: 'boss@newone.in', path: '/register?hospital=newone', link: null, queued: 0 })
     await db.as(null, `insert into public.platform_settings (key, data) values ('signup', '{"platformUrl":"https://hospital.digitalcomrade.in/"}')
@@ -292,12 +301,12 @@ describe('sign in as user', () => {
     expect(await lastAudit('impersonate:start')).toMatchObject({ user_id: P_ADMIN, tenant_id: B, target: 'dr.mehta@cityhospital.in' })
 
     const sid = '11111111-1111-4111-8111-111111111111'
-    await fails(call(B_OWNER, 'impersonation_bind', [s.id], [], { sub: B_OWNER, session_id: sid }), /expired/)
+    await fails(call(B_OWNER, 'impersonation_bind', [s.id], [], { sub: B_OWNER, session_id: '22222222-2222-4222-8222-222222222222' }), /expired/)
     const b = await call(B_DOCTOR, 'impersonation_bind', [s.id], [], { sub: B_DOCTOR, session_id: sid })
     expect(b).toMatchObject({ admin_name: 'Provider admin', reason: 'Doctor cannot see appointments' })
     await fails(call(B_DOCTOR, 'impersonation_bind', [s.id], [], { sub: B_DOCTOR, session_id: sid }), /expired/)     // once
     expect((await call(B_DOCTOR, 'impersonation_status', [s.id], [], { sub: B_DOCTOR, session_id: sid })).active).toBe(true)
-    expect((await call(B_DOCTOR, 'impersonation_status', [s.id], [], { sub: B_DOCTOR, session_id: 'other' })).active).toBe(false)
+    expect((await call(B_DOCTOR, 'impersonation_status', [s.id], [], { sub: B_DOCTOR, session_id: '33333333-3333-4333-8333-333333333333' })).active).toBe(false)
     expect(await call(B_OWNER, 'impersonation_status', [s.id])).toBeNull()
 
     await fails(call(B_OWNER, 'impersonation_end', [s.id, 'x']), /Not allowed/)

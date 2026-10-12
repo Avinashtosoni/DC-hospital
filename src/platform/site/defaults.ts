@@ -327,7 +327,7 @@ export function defaultSite(): PlatformSite {
           'Patient data access, correction and deletion from the app',
           'Consent records for online booking and forms',
           'Breach notification process and Grievance Officer',
-          'Support access by our team is logged and time-limited',
+          'Support uses assigned access; selected app chart opens emit best-effort signals, not a complete read audit',
         ],
       },
       access: {
@@ -336,15 +336,15 @@ export function defaultSite(): PlatformSite {
           { role: 'Owner', can: 'Everything in the hospital: reports, settings, staff, billing, website', cannot: 'Other hospitals’ data' },
           { role: 'Doctor', can: 'Own schedule, patient records, prescriptions, lab orders', cannot: 'Salaries, settings, other doctors’ prescriptions' },
           { role: 'Reception', can: 'Bookings, patient registration, check-in, beds, unpaid bills', cannot: 'Salaries, staff directory, reports' },
-          { role: 'Accounts', can: 'Bills, payments, expenses, financial reports', cannot: 'Clinical notes, settings' },
+          { role: 'Accounts', can: 'Bills, payments, expenses, financial reports, and read access to shared patient/clinical tables', cannot: 'Clinical writes and owner-only settings' },
           { role: 'Staff', can: 'Lab results, inventory, assigned tasks', cannot: 'Billing, reports, settings' },
           { role: 'Patient', can: 'Own appointments, prescriptions, reports and bills', cannot: 'Anyone else’s records' },
-          { role: '{platform} support', can: 'Help when you ask — every access logged, sign-in sessions limited to 30 minutes', cannot: 'Sell, share or use your data for anything else' },
+          { role: '{platform} support', can: 'Assigned-hospital access in read-only support mode; selected app chart opens emit best-effort signals', cannot: 'Sell, share or use your data for anything else' },
         ],
       },
       faqs: [
         { q: 'Where is our data stored?', a: 'In a managed PostgreSQL database in India (Supabase on AWS, Mumbai region), with encrypted backups.' },
-        { q: 'Can your team see our patients’ records?', a: 'Only when you ask us for help, and every access is recorded in your hospital’s audit log. Support sessions are time-limited and need a written reason.' },
+        { q: 'Can your team see our patients’ records?', a: 'Assigned support staff can access patient charts in read-only support mode. Selected chart opens in the app emit best-effort activity signals, but direct database or API reads are not captured by those signals, so they are not a complete access audit.' },
         { q: 'What happens to our data if we leave?', a: 'You can export everything at any time. When an account is closed you get a notice period to download it; then it is permanently deleted, except invoices the law requires us to keep.' },
         { q: 'Do you sign a data processing agreement?', a: 'Yes — our Data Processing Agreement is part of the Terms of Service for every plan, so it applies automatically.' },
         { q: 'How do you handle a data breach?', a: 'We inform affected hospitals quickly (we aim for within 24 hours) with what we know and what we are doing, so you can meet your own reporting duties under the DPDP Act.' },
@@ -476,7 +476,7 @@ export function defaultSite(): PlatformSite {
         { title: 'Data & security', items: [
           { q: 'Is my hospital’s data separate from other hospitals?', a: 'Yes. Every hospital’s data is isolated in the database itself, each staff member only sees what their role allows, and sensitive actions are logged.' },
           { q: 'Can I export my data?', a: 'Any time, from Settings → Data & backup — including after your plan ends.' },
-          { q: 'Who can see patient records?', a: 'Only your own staff, according to their role. Our support team can look only when you ask for help, and every access is logged.' },
+          { q: 'Who can see patient records?', a: 'Hospital staff can access records according to their assigned roles. Assigned platform support staff can open charts in read-only support mode. Selected application chart opens emit best-effort signals; direct database or API reads are not fully audited.' },
         ] },
         { title: 'Billing', items: [
           { q: 'Is there a free trial?', a: 'Yes, with no card needed.' },

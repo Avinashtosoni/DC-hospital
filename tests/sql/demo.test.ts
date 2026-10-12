@@ -89,7 +89,8 @@ describe('demo hospital', { timeout: 60_000 }, () => {
     await db.as(null, `insert into public.app_settings (tenant_id, key, data) values ($1, 'app', '{}') on conflict (tenant_id, key) do nothing`, [MAIN])
     await db.as(null, `update public.app_settings set data = jsonb_set(data, '{security}', '{"otp": {"login": {"enabled": true, "channels": ["sms"], "roles": "staff"}}}'::jsonb, true) where key = 'app' and tenant_id = $1`, [MAIN])
     expect(await count(`public.app_settings where key = 'app' and tenant_id = $1 and data #>> '{security,otp,login,enabled}' = 'true'`, [MAIN])).toBe(1)
-    await db.as(null, `select set_config('request.jwt.claims', '{"session_id":"demo-1"}', false)`)
+    await db.as(null, `select set_config('request.jwt.claims', $1, false)`,
+      [JSON.stringify({ sub: USER.doctor, session_id: USER.doctor, role: 'authenticated' })])
     try {
     const s = (await db.one<{ s: any }>(USER.doctor, 'select public.login_otp_status() s')).s
     expect(s).toMatchObject({ required: true, verified: false })

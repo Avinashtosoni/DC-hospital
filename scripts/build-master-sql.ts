@@ -346,7 +346,7 @@ const production = `-- =========================================================
 --  DC HOSPITAL — PRODUCTION SQL FOR SUPABASE  (no demo accounts, no demo data)
 --
 --  HOW TO USE
---    1. Change the e-mail on the line marked ✏️ below to the hospital owner's real e-mail.
+--    1. Change the private onboarding contact e-mail on the line marked ✏️ below to the hospital owner's real e-mail.
 --    2. Supabase Dashboard → SQL Editor → New query → paste this whole file → Run.
 --    3. Open the app → Create account with that e-mail → you are the Owner.
 --       Invite the rest of the team from Users & Roles → Invite staff (they get the right role automatically).
@@ -428,13 +428,15 @@ ${demoSql}
 -- =====================================================================================================
 --  14. GO-LIVE DEFAULTS
 -- =====================================================================================================
--- ✏️  The first account created with this e-mail becomes the hospital Owner:
-insert into public.app_settings (key, data) values ('bootstrap', jsonb_build_object('owner_email', '${OWNER_PLACEHOLDER}'))
-on conflict (tenant_id, key) do update set data = excluded.data;
+-- ✏️  The first account created with this private onboarding e-mail becomes the hospital Owner:
+insert into public.tenant_onboarding (tenant_id, owner_email, current_step, completed_steps, next_followup_at)
+values (public.primary_tenant(), '${OWNER_PLACEHOLDER}', 'account', '{}', now() + interval '1 day')
+on conflict (tenant_id) do update set owner_email = excluded.owner_email
+  where public.tenant_onboarding.owner_email = '';
 
 -- an existing account with that e-mail (created before running this file) is promoted right away
 update public.profiles set role = 'owner'
-where lower(email) = lower((select data ->> 'owner_email' from public.app_settings where key = 'bootstrap'))
+where lower(email) = lower((select owner_email from public.tenant_onboarding where tenant_id = public.primary_tenant()))
   and not exists (select 1 from public.profiles where role = 'owner');
 
 commit;

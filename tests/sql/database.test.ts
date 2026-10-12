@@ -289,20 +289,26 @@ describe('go-live helpers', () => {
     expect(await db.one(USER.owner, 'select public.lock_demo_accounts() n')).toEqual({ n: 5 })
     const banned = await db.one<{ n: number }>(null, `select count(*)::int n from auth.users where banned_until = 'infinity'`)
     expect(banned.n).toBe(5)
+    expect(await db.one(USER.receptionist, `select public.auth_session_active() active`)).toEqual({ active: false })
     const cleared = await db.one<{ n: number }>(USER.owner, 'select public.clear_demo_data() n')
     expect(cleared.n).toBeGreaterThan(500)
     // demo patients are gone, except any a real (non-demo) record still points at — those are kept, not cascaded away
     expect((await db.one<{ n: number }>(null, `select count(*)::int n from public.patients p where public.is_demo_id(p.id)
       and not exists (select 1 from public.appointments a where a.patient_id = p.id and not public.is_demo_id(a.id))
       and not exists (select 1 from public.invoices i where i.patient_id = p.id and not public.is_demo_id(i.id))`)).n).toBe(0)
+    // Keep this file's shared demo fixture usable by the following independent tests.
+    await db.as(null, `update auth.users set banned_until = null where id = any($1::uuid[])`,
+      [[USER.doctor, USER.receptionist, USER.accountant, USER.staff, USER.patient]])
   })
 })
 
 describe('production.sql', () => {
-  test('no demo data; bootstrap e-mail becomes owner once', async () => {
+  test('no demo data or bootstrap PII; private onboarding e-mail becomes owner once', async () => {
     const p = await freshDb('production')
     expect((await p.one<{ n: number }>(null, 'select count(*)::int n from auth.users')).n).toBe(0)
     expect((await p.one<{ n: number }>(null, 'select count(*)::int n from public.appointments')).n).toBe(0)
+    expect((await p.one<{ n: number }>(null, `select count(*)::int n from public.app_settings where key='bootstrap'`)).n).toBe(0)
+    expect((await p.one<{ owner_email: string }>(null, `select owner_email from public.tenant_onboarding where tenant_id=public.primary_tenant()`)).owner_email).toBe('owner@your-hospital.in')
     const a = await p.one<{ id: string }>(null, `insert into auth.users (email) values ('OWNER@your-hospital.in') returning id`)
     const b = await p.one<{ id: string }>(null, `insert into auth.users (email) values ('someone@gmail.com') returning id`)
     expect((await p.one<{ role: string }>(null, 'select role from public.profiles where id = $1', [a.id])).role).toBe('owner')

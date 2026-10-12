@@ -1,7 +1,8 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, CalendarPlus, Droplet, FlaskConical, Mail, MapPin, Pencil, Phone, Pill, Receipt, ShieldCheck, UserRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
+import { providerLog } from '../tenancy/session'
 import { can } from '../auth/permissions'
 import { useLookup, useRow, useUpdate, useWindow } from '../hooks/useData'
 import { useMe } from '../hooks/useScope'
@@ -26,7 +27,7 @@ export function MyRecord() {
 
 export default function PatientDetail() {
   const { id } = useParams()
-  const { user } = useAuth()
+  const { user, context } = useAuth()
   const nav = useNavigate()
   // one patient's chart: the record by id and their history by patient_id (indexed) — no whole-table reads
   const patient = useRow('patients', id)
@@ -45,6 +46,11 @@ export default function PatientDetail() {
   const [editOpen, setEditOpen] = useState(false)
 
   const p = patient.data ?? undefined
+  useEffect(() => {
+    if (!p || p.id !== id || !context?.provider_role) return
+    // Existing provider audit stores actor, tenant, time and this internal chart id—not chart contents.
+    void providerLog('view_patient_chart', p.id, { source: 'app_chart_route' })
+  }, [p, id, user?.id, context?.provider_role])
   const role = user!.role
   const data = useMemo(() => ({
     appts: (appts.data ?? []).filter((a) => a.patient_id === id).sort((a, b) => (b.appointment_date + b.appointment_time).localeCompare(a.appointment_date + a.appointment_time)),

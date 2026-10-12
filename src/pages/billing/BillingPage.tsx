@@ -399,7 +399,7 @@ function ProviderTools({ s, admin }: { s: BillingSummary; admin: boolean }) {
   const [plan, setPlan] = useState({ plan: s.plan, price: '' })
   return (
     <Section title={`${platformName} team tools`} icon={<CalendarClock className="h-4 w-4" />} className="border-brand-200 ring-1 ring-brand-100"
-      description="Only visible to the platform team. Every action is logged in the provider audit.">
+      description="Only visible to the platform team. Actions performed in these tools create provider-audit entries; this is not a complete access audit.">
       <div className="grid gap-6 lg:grid-cols-2">
         <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); run.mutate({ action: 'manual_payment', args: { kind: man.kind, plan: man.kind === 'plan' ? man.plan : undefined, months: Number(man.months), amount: Number(man.amount), method: man.method, reference: man.reference }, done: 'Payment recorded' }) }}>
           <p className="text-sm font-semibold text-brand-950">Record a payment received outside the app</p>

@@ -114,6 +114,33 @@ create table if not exists public.provider_audit (
 );
 create index if not exists provider_audit_at_idx on public.provider_audit (tenant_id, at desc);
 
+-- Private owner contact / onboarding progress. This is created in the core so sign-up, billing and control-panel
+-- functions can use one non-public source of truth instead of storing contact PII in app_settings.
+create table if not exists public.tenant_onboarding (
+  tenant_id            uuid primary key references public.tenants(id) on delete cascade,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now(),
+  last_activity_at     timestamptz not null default now(),
+  current_step         text not null default 'account' check (current_step in ('account','details','doctors','team','appointment','website','domain','plan','complete')),
+  completed_steps      text[] not null default '{}',
+  owner_name           text not null default '' check (char_length(owner_name) <= 100),
+  owner_email          text not null default '' check (char_length(owner_email) <= 150),
+  owner_phone          text not null default '' check (owner_phone = '' or owner_phone ~ '^\+?[0-9]{10,13}$'),
+  city                 text not null default '' check (char_length(city) <= 80),
+  followup_consent     boolean not null default false,
+  consent_source       text not null default 'system' check (consent_source in ('system','signup','control_panel','hospital_owner')),
+  consent_updated_at   timestamptz,
+  reminder_count       smallint not null default 0 check (reminder_count between 0 and 3),
+  last_reminded_at     timestamptz,
+  next_followup_at     timestamptz,
+  completed_at         timestamptz
+);
+create index if not exists tenant_onboarding_followup_idx on public.tenant_onboarding(next_followup_at)
+  where next_followup_at is not null and completed_at is null;
+alter table public.tenant_onboarding enable row level security;
+revoke all on public.tenant_onboarding from public, anon, authenticated;
+grant all on public.tenant_onboarding to service_role;
+
 -- ------------------------------------------------------------------ request context
 create or replace function public.request_header(p_name text)
 returns text language sql stable set search_path = public as $$
@@ -137,10 +164,44 @@ $$;
 
 -- 'admin' | 'support' | 'finance' | null — the signed-in user's provider role
 -- null until a team member has entered their sign-in code, when Platform settings → Security asks for one (otp_verify.sql)
+-- Access JWTs are accepted by PostgREST until exp even after Auth revokes their refresh session. For authenticated
+-- database requests, require an unbanned auth.users row and the exact session_id still present in auth.sessions. Check
+-- not_after when Auth exposes it. Supabase enforces inactivity/time-box policy at refresh and cleans stale rows later;
+-- this row check does not claim to enforce an inactivity cutoff before Auth removes the row. No auth.sessions means deny.
+create or replace function public.auth_session_active()
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  claims jsonb;
+  sid text;
+  active boolean := false;
+begin
+  if uid is null then return true; end if; -- anonymous/public requests are not user sessions
+  begin claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb; exception when others then claims := null; end;
+  sid := nullif(claims ->> 'session_id', '');
+  if to_regclass('auth.sessions') is not null then
+    if sid is null or sid !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' then return false; end if;
+    begin
+      execute 'select exists (select 1 from auth.sessions s join auth.users u on u.id = s.user_id
+        where s.id::text = $1 and s.user_id = $2 and (u.banned_until is null or u.banned_until <= now())
+          and (s.not_after is null or s.not_after > now()))' into active using sid, uid;
+    exception when undefined_column then
+      -- Older supported Auth schemas may not expose not_after; session existence and account status still apply.
+      execute 'select exists (select 1 from auth.sessions s join auth.users u on u.id = s.user_id
+        where s.id::text = $1 and s.user_id = $2 and (u.banned_until is null or u.banned_until <= now()))' into active using sid, uid;
+    end;
+    return coalesce(active, false);
+  end if;
+  -- No session registry means revocation / expiry cannot be verified. Never treat a valid signature alone as active.
+  return false;
+end $$;
+revoke all on function public.auth_session_active() from public, anon, authenticated;
+
 create or replace function public.provider_role()
 returns text language plpgsql stable security definer set search_path = public as $$
 declare r text;
 begin
+  if auth.uid() is not null and not public.auth_session_active() then return null; end if;
   select role into r from public.provider_users where user_id = auth.uid() and active;
   if r is not null and to_regprocedure('public.login_otp_passed(text,uuid)') is not null and not public.login_otp_passed('team', null) then
     return null;
@@ -172,6 +233,7 @@ create or replace function public.current_tenant()
 returns uuid language plpgsql stable security definer set search_path = public as $$
 declare v uuid; h text; uid uuid := auth.uid();
 begin
+  if uid is not null and not public.auth_session_active() then return null; end if;
   h := nullif(current_setting('app.tenant_id', true), '');
   if h is not null then return h::uuid; end if;
 
@@ -256,7 +318,7 @@ declare
     'admissions', 'invoices', 'payments', 'expenses', 'inventory', 'notices', 'notification_templates', 'site_enquiries',
     'site_forms', 'doctor_leaves', 'holidays', 'audit_log', 'visit_feedback', 'staff_invites', 'wa_sessions', 'booking_otps',
     'password_reset_otps', 'site_content', 'site_content_revisions', 'app_settings', 'app_secrets', 'notification_outbox',
-    'push_tokens'];
+    'push_tokens', 'tenant_onboarding'];
 begin
   foreach t in array tables loop
     continue when to_regclass('public.' || t) is null;
@@ -778,11 +840,11 @@ drop policy if exists avatars_own_update on storage.objects;
 drop policy if exists avatars_own_delete on storage.objects;
 create policy avatars_public_read on storage.objects for select to anon, authenticated using (bucket_id = 'avatars');
 create policy avatars_own_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+  with check (public.auth_session_active() and bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy avatars_own_update on storage.objects for update to authenticated
-  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (public.auth_session_active() and bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy avatars_own_delete on storage.objects for delete to authenticated
-  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (public.auth_session_active() and bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 -- <<< cms
 
 -- >>> booking (generated from scripts/sql/booking.sql — do not edit here)
@@ -1313,9 +1375,13 @@ grant all on public.app_settings to service_role;
 drop policy if exists app_settings_read on public.app_settings;
 drop policy if exists app_settings_owner_insert on public.app_settings;
 drop policy if exists app_settings_owner_update on public.app_settings;
-create policy app_settings_read on public.app_settings for select to authenticated using (true);
-create policy app_settings_owner_insert on public.app_settings for insert to authenticated with check (public.has_role('owner'));
-create policy app_settings_owner_update on public.app_settings for update to authenticated using (public.has_role('owner')) with check (public.has_role('owner'));
+-- `bootstrap` historically held the first owner's contact details. It is never exposed or re-created through this table.
+create policy app_settings_read on public.app_settings for select to authenticated using (key <> 'bootstrap');
+create policy app_settings_owner_insert on public.app_settings for insert to authenticated
+  with check (key <> 'bootstrap' and public.has_role('owner'));
+create policy app_settings_owner_update on public.app_settings for update to authenticated
+  using (key <> 'bootstrap' and public.has_role('owner'))
+  with check (key <> 'bootstrap' and public.has_role('owner'));
 
 drop function if exists public.app_settings_stamp() cascade;
 create function public.app_settings_stamp()
@@ -1851,8 +1917,7 @@ $$;
 revoke all on function public.invite_lookup(text) from public;
 grant execute on function public.invite_lookup(text) to anon, authenticated;
 
--- New auth users: an accepted staff invite gives the invited role; the hospital's bootstrap e-mail (app_settings
--- 'bootstrap' — set by production.sql for the first hospital, by supabase/snippets/add-hospital.sql for later ones)
+-- New auth users: an accepted staff invite gives the invited role; the private tenant_onboarding owner e-mail
 -- becomes that hospital's first owner; everyone else is a patient.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
@@ -1870,7 +1935,7 @@ begin
     select id into v_tenant from public.tenants where id = v_meta::uuid and status <> 'suspended';
   end if;
   v_tenant := coalesce(v_tenant, public.current_tenant(), public.primary_tenant());
-  select lower(data ->> 'owner_email') into v_owner from public.app_settings where tenant_id = v_tenant and key = 'bootstrap';
+  select lower(nullif(owner_email,'')) into v_owner from public.tenant_onboarding where tenant_id = v_tenant;
 
   select * into v_inv from public.staff_invites
   where token = new.raw_user_meta_data ->> 'invite_token' and email = lower(new.email) and tenant_id = v_tenant
@@ -3493,8 +3558,8 @@ begin
     execute format('drop policy if exists tenant_isolation on public.%I', t);
     if t = 'profiles' then
       execute 'create policy tenant_isolation on public.profiles as restrictive for all to anon, authenticated
-                 using (tenant_id = (select public.current_tenant()) or id = auth.uid())
-                 with check (tenant_id = (select public.current_tenant()) or id = auth.uid())';
+                 using (public.auth_session_active() and (tenant_id = (select public.current_tenant()) or id = auth.uid()))
+                 with check (public.auth_session_active() and (tenant_id = (select public.current_tenant()) or id = auth.uid()))';
     else
       execute format('create policy tenant_isolation on public.%I as restrictive for all to anon, authenticated
                         using (tenant_id = (select public.current_tenant()))
@@ -3779,7 +3844,10 @@ alter table public.provider_users enable row level security;
 alter table public.provider_assignments enable row level security;
 alter table public.provider_audit enable row level security;
 revoke all on public.tenants, public.tenant_domains, public.provider_users, public.provider_assignments, public.provider_audit from anon, authenticated;
-grant select on public.tenants to anon, authenticated;
+-- The public tenant endpoint exposes only the directory fields. Billing, notes, modules, status dates, wallet values,
+-- provider messaging and operational flags are available only through explicitly scoped SECURITY DEFINER RPCs.
+grant select (id, slug, name) on public.tenants to anon;
+grant select (id, slug, name, messaging) on public.tenants to authenticated;
 grant select, insert, update, delete on public.tenant_domains, public.provider_users, public.provider_assignments to authenticated;
 grant update, insert, delete on public.tenants to authenticated;
 grant select on public.provider_audit to authenticated;
@@ -3802,31 +3870,31 @@ create policy tenant_domains_admin on public.tenant_domains for all to authentic
 drop policy if exists provider_users_select on public.provider_users;
 drop policy if exists provider_users_admin on public.provider_users;
 create policy provider_users_select on public.provider_users for select to authenticated
-  using (user_id = auth.uid() or public.provider_mode() = 'admin');
+  using (public.auth_session_active() and (user_id = auth.uid() or public.provider_mode() = 'admin'));
 create policy provider_users_admin on public.provider_users for all to authenticated
   using (public.provider_mode() = 'admin') with check (public.provider_mode() = 'admin' and user_id <> auth.uid());
 
 drop policy if exists provider_assignments_select on public.provider_assignments;
 drop policy if exists provider_assignments_admin on public.provider_assignments;
 create policy provider_assignments_select on public.provider_assignments for select to authenticated
-  using (user_id = auth.uid() or public.provider_mode() = 'admin');
+  using (public.auth_session_active() and (user_id = auth.uid() or public.provider_mode() = 'admin'));
 create policy provider_assignments_admin on public.provider_assignments for all to authenticated
   using (public.provider_mode() = 'admin') with check (public.provider_mode() = 'admin');
 
 drop policy if exists provider_audit_select on public.provider_audit;
 create policy provider_audit_select on public.provider_audit for select to authenticated
-  using (public.provider_mode() = 'admin' or (user_id = auth.uid()));
+  using (public.auth_session_active() and (public.provider_mode() = 'admin' or user_id = auth.uid()));
 
 -- ------------------------------------------------------------------ RPCs
 -- the website asks "which hospital is this domain?" before anything else (multi-tenant mode).
 -- A mapped domain always wins; only hosts without a mapping (preview / staging / localhost) may name a
 -- hospital by slug (?hospital=city), so a hospital's own domain can never be made to show another one.
 drop function if exists public.resolve_tenant(text);
-drop function if exists public.resolve_tenant(text, text);   -- the columns grew (is_demo)
-create or replace function public.resolve_tenant(p_host text, p_slug text default null)
-returns table (id uuid, slug text, name text, status text, modules jsonb, is_primary boolean, is_demo boolean)
+drop function if exists public.resolve_tenant(text, text);   -- return only the browser's tenant bootstrap fields
+create function public.resolve_tenant(p_host text, p_slug text default null)
+returns table (id uuid, slug text, name text, status text, is_primary boolean, is_demo boolean)
 language sql stable security definer set search_path = public as $$
-  select t.id, t.slug, t.name, public.tenant_license(t.id), t.modules, t.is_primary, t.is_demo   -- effective status (licence, phase 4)
+  select t.id, t.slug, t.name, public.tenant_license(t.id), t.is_primary, t.is_demo   -- effective status (licence, phase 4)
     from public.tenants t
    where t.id = coalesce(
            (select d.tenant_id from public.tenant_domains d where d.domain = lower(split_part(trim(coalesce(p_host, '')), ':', 1))),
@@ -3871,7 +3939,7 @@ begin
 end $$;
 
 revoke all on function public.request_header(text), public.client_ip_hash(), public.primary_tenant(), public.keep_tenant(), public.profiles_pick_tenant() from public, anon, authenticated;
-grant execute on function public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
+grant execute on function public.auth_session_active(), public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
   public.has_role(public.app_role[]), public.is_staff(), public.current_app_role(), public.my_doctor_id(), public.my_patient_id()
   to anon, authenticated, service_role;
 grant execute on function public.resolve_tenant(text, text) to anon, authenticated;
@@ -4174,16 +4242,11 @@ begin
   end loop;
 end $rls$;
 
--- the wallet balance and billing overrides are not for visitors or staff (tenants is readable by anon for the website):
--- every other column stays readable, these two only through billing_summary() / my_context()
-do $cols$
-declare v_cols text;
-begin
-  select string_agg(quote_ident(column_name), ', ' order by ordinal_position) into v_cols
-    from information_schema.columns where table_schema = 'public' and table_name = 'tenants' and column_name not in ('wallet_paise', 'billing', 'close_reason');
-  execute 'revoke select on public.tenants from anon, authenticated';
-  execute format('grant select (%s) on public.tenants to anon, authenticated', v_cols);
-end $cols$;
+-- Tenant rows contain operational, billing, provider and contact data. Expose only the public directory fields
+-- to visitors and the one provider-messaging field the hospital app needs; privileged RPCs use SECURITY DEFINER.
+revoke select on public.tenants from anon, authenticated;
+grant select (id, slug, name) on public.tenants to anon;
+grant select (id, slug, name, messaging) on public.tenants to authenticated;
 
 -- ------------------------------------------------------------------ licence guard
 -- Raised for API callers (anon / authenticated — also inside SECURITY DEFINER RPCs, where `role` still names the
@@ -4471,7 +4534,7 @@ begin
     continue when exists (select 1 from public.notification_outbox o where o.tenant_id = r.id and o.event = 'billing_reminder'
                             and o.vars ->> 'milestone' = v_m and o.vars ->> 'until' = to_char(v_end at time zone 'Asia/Kolkata', 'YYYY-MM-DD'));
     select p.id, p.full_name, p.email into v_prof, v_name, v_mail from public.profiles p where p.tenant_id = r.id and p.role = 'owner' order by p.created_at limit 1;
-    v_mail := coalesce(v_mail, (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = r.id and s.key = 'bootstrap'));
+    v_mail := coalesce(v_mail, (select nullif(o.owner_email,'') from public.tenant_onboarding o where o.tenant_id = r.id));
     continue when v_mail is null and v_prof is null;
     v_link := coalesce((select 'https://' || d.domain || '/billing' from public.tenant_domains d where d.tenant_id = r.id order by d.is_primary desc, (d.verified_at is null), d.created_at limit 1),
                        nullif(rtrim(coalesce((select c.data ->> 'siteUrl' from public.site_content c where c.tenant_id = r.id and c.key = 'settings'), ''), '/') || '/billing', '/billing'),
@@ -4650,7 +4713,7 @@ begin
       'patients', (select count(*) from public.patients x where x.tenant_id = t.id),
       'owner_joined', exists (select 1 from public.profiles p where p.tenant_id = t.id and p.role = 'owner'),
       'owner_email', coalesce((select p.email from public.profiles p where p.tenant_id = t.id and p.role = 'owner' order by p.created_at limit 1),
-                              (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = t.id and s.key = 'bootstrap')),
+                              (select nullif(o.owner_email,'') from public.tenant_onboarding o where o.tenant_id = t.id)),
       'messages', (select coalesce(sum(m.sent), 0) from public.message_usage m where m.tenant_id = t.id and m.month = v_month)
     ) h
     from public.tenants t
@@ -4724,13 +4787,18 @@ begin
   returning id into v_id;
   perform set_config('app.tenant_id', v_id::text, true);   -- everything below (and its audit trail) belongs to the new hospital
   if v_dom <> '' then insert into public.tenant_domains (domain, tenant_id, is_primary) values (v_dom, v_id, true); end if;
-  insert into public.app_settings (tenant_id, key, data) values (v_id, 'bootstrap', jsonb_strip_nulls(jsonb_build_object(
-    'owner_email', v_owner, 'owner_name', nullif(trim(coalesce(p ->> 'owner_name','')),''),
-    'owner_phone', nullif(regexp_replace(coalesce(p ->> 'owner_phone',''), '[^0-9+]', '', 'g'),''),
-    'city', nullif(trim(coalesce(p ->> 'city','')),''),
-    'followup_consent', case when jsonb_typeof(p -> 'followup_consent')='boolean' then p -> 'followup_consent' else 'false'::jsonb end,
-    'consent_source', coalesce(nullif(p ->> 'consent_source',''),'control_panel'),
-    'ai_assistance_override', case when jsonb_typeof(p -> 'ai_assistance_override')='boolean' then p -> 'ai_assistance_override' else 'null'::jsonb end)));
+  insert into public.tenant_onboarding (tenant_id, owner_email, owner_name, owner_phone, city, followup_consent, consent_source, consent_updated_at)
+  values (v_id, v_owner, left(trim(coalesce(p ->> 'owner_name','')),100), public.onboarding_normalized_phone(p ->> 'owner_phone'),
+    left(trim(coalesce(p ->> 'city','')),80),
+    case when jsonb_typeof(p -> 'followup_consent')='boolean' then (p ->> 'followup_consent')::boolean else false end,
+    case when p ->> 'consent_source' in ('system','signup','control_panel','hospital_owner') then p ->> 'consent_source' else 'control_panel' end,
+    case when jsonb_typeof(p -> 'followup_consent')='boolean' then now() else null end)
+  on conflict (tenant_id) do update set owner_email=excluded.owner_email, owner_name=excluded.owner_name,
+    owner_phone=excluded.owner_phone, city=excluded.city, followup_consent=excluded.followup_consent,
+    consent_source=excluded.consent_source, consent_updated_at=excluded.consent_updated_at, updated_at=now();
+  if jsonb_typeof(p -> 'ai_assistance_override')='boolean' then
+    update public.tenants set ai_assistance_override=(p ->> 'ai_assistance_override')::boolean where id=v_id;
+  end if;
   perform public.seed_hospital_defaults(v_id);
   perform public.provider_log('hospital:create', v_slug, jsonb_build_object('plan', v_plan, 'status', v_stat, 'owner', v_owner, 'domain', nullif(v_dom, '')));
   return jsonb_build_object('id', v_id, 'slug', v_slug, 'domain', nullif(v_dom, ''), 'owner_email', v_owner);
@@ -4769,8 +4837,8 @@ begin
     v_owner := lower(trim(p ->> 'owner_email'));
     if v_owner !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Enter the owner''s e-mail.'; end if;
     if exists (select 1 from public.profiles where tenant_id = p_id and role = 'owner') then raise exception 'The owner has already signed up — change owners in the hospital''s Users & accounts.'; end if;
-    insert into public.app_settings (tenant_id, key, data) values (p_id, 'bootstrap', jsonb_build_object('owner_email', v_owner))
-    on conflict (tenant_id, key) do update set data = excluded.data;
+    insert into public.tenant_onboarding (tenant_id, owner_email) values (p_id, v_owner)
+    on conflict (tenant_id) do update set owner_email=excluded.owner_email, updated_at=now();
   end if;
   perform public.provider_log('hospital:update', t.slug, p);
   return public.cp_hospitals(p_id) -> 0;
@@ -4971,13 +5039,13 @@ begin
   return v_ts is not null and to_timestamp(v_ts) > now() - make_interval(secs => greatest(coalesce(p_seconds, 600), 60));
 end $$;
 
--- the hospital owner to write to (the first owner account, else the e-mail the owner will sign up with)
+-- the hospital owner to write to (the signed-up profile, else the private onboarding contact)
 create or replace function public.tenant_owner_contact(p_tenant uuid)
 returns table (profile_id uuid, full_name text, email text) language sql stable security definer set search_path = public as $$
   select p.id, p.full_name, p.email from public.profiles p where p.tenant_id = p_tenant and p.role = 'owner'
   union all
-  select null, null, s.data ->> 'owner_email' from public.app_settings s
-   where s.tenant_id = p_tenant and s.key = 'bootstrap' and not exists (select 1 from public.profiles p where p.tenant_id = p_tenant and p.role = 'owner')
+  select null::uuid, nullif(o.owner_name,''), nullif(o.owner_email,'') from public.tenant_onboarding o
+   where o.tenant_id = p_tenant and not exists (select 1 from public.profiles p where p.tenant_id = p_tenant and p.role = 'owner')
   limit 1
 $$;
 
@@ -5545,7 +5613,7 @@ grant execute on function public.my_data_export(), public.set_marketing_consent(
 --    — the platform admin decides in the control panel (Settings → Free-trial sign-up).
 --  • platform_trial_signup(p) — anyone (anon): validates, rate-limits, records the accepted Terms version and either
 --    creates the hospital right away (instant) or waits for the admin (approve). The person then creates the owner
---    account on the new hospital with the same e-mail (app_settings 'bootstrap', as for panel-created hospitals).
+--    account on the new hospital with the same e-mail (private tenant_onboarding contact, as for panel-created hospitals).
 --  • cp_signups / cp_signup_decide — the admin's list with approve / reject.
 --  • signup_cleanup() (nightly, from run_retention): pending requests expire after 30 days; hospitals nobody claimed
 --    within unclaimedDays are closed (the normal 7-day notice, then the admin may delete them).
@@ -5821,7 +5889,7 @@ begin
   -- 12. the platform's own hospital has its owner
   select count(*) into v_n from public.profiles p join public.tenants t on t.id = p.tenant_id where t.is_primary and p.role = 'owner';
   out := out || jsonb_build_object('id', 'primary_owner', 'title', 'Main hospital owner', 'status', case when v_n > 0 then 'ok' else 'warn' end,
-    'detail', case when v_n > 0 then 'The main hospital has an owner account.' else 'Nobody has signed up as the main hospital''s owner yet (the bootstrap e-mail in production.sql).' end);
+    'detail', case when v_n > 0 then 'The main hospital has an owner account.' else 'Nobody has signed up as the main hospital''s owner yet (the private onboarding contact in production.sql).' end);
 
   return jsonb_build_object('at', now(), 'checks', out);
 end $$;
@@ -6635,8 +6703,10 @@ begin
   if p_old_role <> 'owner' then
     update public.profiles set role = p_old_role::public.app_role where tenant_id = p_id and role = 'owner' and id <> p_user;
   end if;
-  insert into public.app_settings (tenant_id, key, data) values (p_id, 'bootstrap', jsonb_build_object('owner_email', lower(v.email)))
-  on conflict (tenant_id, key) do update set data = public.app_settings.data || excluded.data;
+  insert into public.tenant_onboarding (tenant_id, owner_name, owner_email, owner_phone)
+  values (p_id, left(coalesce(v.full_name,''),100), lower(v.email), public.onboarding_normalized_phone(v.phone))
+  on conflict (tenant_id) do update set owner_name=excluded.owner_name, owner_email=excluded.owner_email,
+    owner_phone=excluded.owner_phone, updated_at=now(), last_activity_at=now();
 
   select slug into v_slug from public.tenants where id = p_id;
   perform public.provider_log('hospital:owner', v_slug, jsonb_build_object('new_owner', v.email, 'previous_owner_becomes', p_old_role));
@@ -6653,7 +6723,7 @@ begin
   if exists (select 1 from public.profiles where tenant_id = p_id and role = 'owner') then
     raise exception 'The owner has already signed up — use “Send password reset” in Users instead.';
   end if;
-  select lower(data ->> 'owner_email') into v_email from public.app_settings where tenant_id = p_id and key = 'bootstrap';
+  select lower(nullif(owner_email,'')) into v_email from public.tenant_onboarding where tenant_id = p_id;
   if coalesce(v_email, '') = '' or v_email = 'owner@your-hospital.in' then raise exception 'Set the owner’s e-mail first (Settings → Details).'; end if;
   v_path := '/register?hospital=' || t.slug;
   v_base := rtrim(coalesce(public.signup_config() ->> 'platformUrl', ''), '/');
@@ -7251,6 +7321,7 @@ create or replace function public.impersonation_bind(p_id uuid)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare r public.impersonations; v_sid text := public.jwt_session_id();
 begin
+  if auth.uid() is null or not public.auth_session_active() then raise exception 'This sign-in session is no longer active.' using errcode = '42501'; end if;
   select * into r from public.impersonations where id = p_id for update;
   if not found or r.target_id is distinct from auth.uid() or r.ended_at is not null or r.expires_at <= now()
      or r.bound_at is not null or r.created_at < now() - interval '5 minutes' then
@@ -7268,7 +7339,8 @@ begin
   select * into r from public.impersonations where id = p_id and target_id = auth.uid();
   if not found then return null; end if;
   return jsonb_build_object('id', r.id, 'expires_at', r.expires_at, 'admin_name', r.admin_name,
-                            'active', r.ended_at is null and r.expires_at > now() and r.session_id is not distinct from public.jwt_session_id());
+                            'active', public.auth_session_active() and r.ended_at is null and r.expires_at > now()
+                              and r.session_id is not distinct from public.jwt_session_id());
 end $$;
 
 -- end it: the impersonated tab itself, or the admin who started it
@@ -7276,6 +7348,7 @@ create or replace function public.impersonation_end(p_id uuid, p_reason text def
 returns void language plpgsql volatile security definer set search_path = public as $$
 declare r public.impersonations;
 begin
+  if auth.uid() is null or not public.auth_session_active() then raise exception 'This sign-in session is no longer active.' using errcode = '42501'; end if;
   select * into r from public.impersonations where id = p_id for update;
   if not found then return; end if;
   if r.target_id is distinct from auth.uid() and r.admin_id is distinct from auth.uid() then
@@ -8935,6 +9008,7 @@ returns boolean language plpgsql stable security definer set search_path = publi
 declare uid uuid := auth.uid(); sid text;
 begin
   if uid is null then return true; end if;
+  if not public.auth_session_active() then return false; end if;
   if not public.login_otp_required(p_scope, uid, p_tenant) then return true; end if;
   sid := public.jwt_session_id();
   if sid is not null and exists (select 1 from public.login_otp_sessions where session_id = sid and scope = p_scope and user_id = uid) then
@@ -8967,7 +9041,7 @@ create or replace function public.login_otp_status()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare s record; v_req boolean; v_ok boolean; t jsonb; sid text := public.jwt_session_id();
 begin
-  if auth.uid() is null then return null; end if;
+  if auth.uid() is null or not public.auth_session_active() then return null; end if;
   select * into s from public.login_otp_scope();
   v_req := public.login_otp_required(s.scope, auth.uid(), s.tenant);
   t := public.login_otp_targets(s.scope, auth.uid(), s.tenant, not v_req);
@@ -8995,7 +9069,7 @@ declare
   v_name  text;
   n       int;
 begin
-  if uid is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
+  if uid is null or not public.auth_session_active() then raise exception 'This sign-in session is no longer active. Please sign in again.' using errcode = '42501'; end if;
   if sid is null then raise exception 'This sign-in has no session — please sign in again.'; end if;
   select * into s from public.login_otp_scope();
   v_req := public.login_otp_required(s.scope, uid, s.tenant);
@@ -9051,7 +9125,7 @@ create or replace function public.verify_login_otp(p_code text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare uid uuid := auth.uid(); sid text := public.jwt_session_id(); o public.login_otps;
 begin
-  if uid is null or sid is null then return jsonb_build_object('ok', false, 'error', 'Please sign in again.'); end if;
+  if uid is null or sid is null or not public.auth_session_active() then return jsonb_build_object('ok', false, 'error', 'Please sign in again.'); end if;
   select * into o from public.login_otps where user_id = uid and session_id = sid and verified_at is null
    order by created_at desc limit 1 for update;
   if not found or o.expires_at < now() then
@@ -9080,10 +9154,15 @@ create or replace function public.login_otp_carry(p_from_session text)
 returns boolean language plpgsql volatile security definer set search_path = public as $$
 declare uid uuid := auth.uid(); sid text := public.jwt_session_id(); n int := 0; alive boolean := true;
 begin
-  if uid is null or sid is null or p_from_session is null or p_from_session = sid then return false; end if;
-  if to_regclass('auth.sessions') is not null then
+  if uid is null or not public.auth_session_active() or sid is null or p_from_session is null or p_from_session = sid then return false; end if;
+  if to_regclass('auth.sessions') is null then return false; end if;
+  begin
+    execute 'select exists (select 1 from auth.sessions where id::text = $1 and user_id = $2
+      and (not_after is null or not_after > now()))' into alive using p_from_session, uid;
+  exception when undefined_column then
+    -- Older supported Auth schemas do not expose not_after; row ownership still blocks revoked sessions.
     execute 'select exists (select 1 from auth.sessions where id::text = $1 and user_id = $2)' into alive using p_from_session, uid;
-  end if;
+  end;
   if not alive then return false; end if;
   insert into public.login_otp_sessions (session_id, scope, user_id, channel)
   select sid, scope, uid, channel from public.login_otp_sessions
@@ -9876,7 +9955,7 @@ begin
   end loop;
   if v = 0 and not exists (select 1 from public.profiles where tenant_id = p_tenant and role = 'owner') then
     v := public.notify_enqueue_raw(p_event, coalesce(cat -> 'copy', '{}'::jsonb), array(select c from unnest(chs) c where c = 'email'), null,
-      (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = p_tenant and s.key = 'bootstrap'), null,
+      (select nullif(o.owner_email,'') from public.tenant_onboarding o where o.tenant_id = p_tenant), null,
       jsonb_build_object('name', 'there', 'hospital', hname) || coalesce(p_vars, '{}'::jsonb), p_related_table, p_related_id, null);
   end if;
   perform set_config('app.tenant_id', coalesce(prev, ''), true);
@@ -11150,7 +11229,7 @@ begin
   -- one account = one hospital
   if exists (select 1 from public.profiles where lower(email) = v_mail and tenant_id is not null and role <> 'patient')
      or exists (select 1 from public.provider_users u join auth.users a on a.id = u.user_id where lower(a.email) = v_mail)
-     or exists (select 1 from public.app_settings s where s.key = 'bootstrap' and lower(s.data ->> 'owner_email') = v_mail) then
+     or exists (select 1 from public.tenant_onboarding o where lower(o.owner_email) = v_mail) then
     raise exception 'This e-mail already belongs to a hospital here — sign in there, or use another e-mail.';
   end if;
   if exists (select 1 from public.platform_signups where lower(email) = v_mail and status = 'pending') then
@@ -11378,29 +11457,10 @@ returns text language sql immutable set search_path = pg_catalog as $$
 $$;
 revoke all on function public.onboarding_normalized_phone(text) from public,anon,authenticated;
 
-create table if not exists public.tenant_onboarding (
-  tenant_id            uuid primary key references public.tenants(id) on delete cascade,
-  created_at           timestamptz not null default now(),
-  updated_at           timestamptz not null default now(),
-  last_activity_at     timestamptz not null default now(),
-  current_step         text not null default 'account' check (current_step in ('account','details','doctors','team','appointment','website','domain','plan','complete')),
-  completed_steps      text[] not null default '{}',
-  owner_name           text not null default '' check (char_length(owner_name) <= 100),
-  owner_email          text not null default '' check (char_length(owner_email) <= 150),
-  owner_phone          text not null default '' check (owner_phone = '' or owner_phone ~ '^\+?[0-9]{10,13}$'),
-  city                 text not null default '' check (char_length(city) <= 80),
-  followup_consent     boolean not null default false,
-  consent_source       text not null default 'system' check (consent_source in ('system','signup','control_panel','hospital_owner')),
-  consent_updated_at   timestamptz,
-  reminder_count       smallint not null default 0 check (reminder_count between 0 and 3),
-  last_reminded_at     timestamptz,
-  next_followup_at     timestamptz,
-  completed_at         timestamptz
-);
-create index if not exists tenant_onboarding_followup_idx on public.tenant_onboarding(next_followup_at)
-  where next_followup_at is not null and completed_at is null;
-alter table public.tenant_onboarding enable row level security;
-revoke all on public.tenant_onboarding from anon, authenticated;
+-- The private tenant_onboarding table is created in tenancy_core.sql so role-claim and owner-contact functions can
+-- reference it before this optional onboarding module is loaded. The generated master SQL grants authenticated CRUD
+-- on tables already present at its RLS phase, so restore the private-table boundary here after that blanket grant.
+revoke all on public.tenant_onboarding from public, anon, authenticated;
 grant all on public.tenant_onboarding to service_role;
 
 -- No direct table writes: tenant and platform progress is exposed only through carefully scoped RPCs.
@@ -11418,6 +11478,52 @@ create trigger trg_tenant_onboarding_seed after insert on public.tenants
 insert into public.tenant_onboarding (tenant_id, owner_email, current_step, completed_steps, next_followup_at)
 select t.id, '', 'account', '{}', now() + interval '1 day' from public.tenants t
 on conflict (tenant_id) do nothing;
+
+-- One-time migration of legacy owner contact data out of app_settings. Preserve populated onboarding fields and any
+-- explicit consent decision; no new bootstrap rows or ongoing sync trigger are used after this migration.
+insert into public.tenant_onboarding (tenant_id, owner_name, owner_email, owner_phone, city, followup_consent,
+  consent_source, consent_updated_at, current_step, completed_steps, next_followup_at)
+select s.tenant_id, left(coalesce(s.data ->> 'owner_name',''),100), left(coalesce(s.data ->> 'owner_email',''),150),
+  public.onboarding_normalized_phone(s.data ->> 'owner_phone'), left(coalesce(s.data ->> 'city',''),80),
+  case when jsonb_typeof(s.data -> 'followup_consent')='boolean' then (s.data ->> 'followup_consent')::boolean else false end,
+  case when jsonb_typeof(s.data -> 'followup_consent')='boolean' then
+    case when s.data ->> 'consent_source' in ('system','signup','control_panel','hospital_owner') then s.data ->> 'consent_source' else 'control_panel' end
+    else 'system' end,
+  case when jsonb_typeof(s.data -> 'followup_consent')='boolean' then coalesce(s.updated_at,now()) else null end,
+  'account', '{}', now() + interval '1 day'
+from public.app_settings s where s.key='bootstrap'
+on conflict (tenant_id) do update set
+  owner_name = coalesce(nullif(public.tenant_onboarding.owner_name,''), excluded.owner_name),
+  owner_email = coalesce(nullif(public.tenant_onboarding.owner_email,''), excluded.owner_email),
+  owner_phone = coalesce(nullif(public.tenant_onboarding.owner_phone,''), excluded.owner_phone),
+  city = coalesce(nullif(public.tenant_onboarding.city,''), excluded.city),
+  followup_consent = case when public.tenant_onboarding.consent_updated_at is null then excluded.followup_consent else public.tenant_onboarding.followup_consent end,
+  consent_source = case when public.tenant_onboarding.consent_updated_at is null then excluded.consent_source else public.tenant_onboarding.consent_source end,
+  consent_updated_at = coalesce(public.tenant_onboarding.consent_updated_at, excluded.consent_updated_at),
+  next_followup_at = case when public.tenant_onboarding.completed_at is null then coalesce(public.tenant_onboarding.next_followup_at, excluded.next_followup_at) else null end,
+  updated_at = now();
+
+-- ai_assistance_override is operational tenant configuration, not owner bootstrap data.
+update public.tenants t set ai_assistance_override = case when jsonb_typeof(s.data -> 'ai_assistance_override')='boolean'
+  then (s.data ->> 'ai_assistance_override')::boolean else null end
+from public.app_settings s where s.tenant_id=t.id and s.key='bootstrap' and s.data ? 'ai_assistance_override';
+
+-- Backfill an owner who already joined before tenant_onboarding was introduced.
+insert into public.tenant_onboarding (tenant_id, current_step, completed_steps, owner_name, owner_email, owner_phone, last_activity_at, next_followup_at)
+select p.tenant_id, 'details', array['account'], left(coalesce(p.full_name,''),100), left(coalesce(p.email,''),150),
+  public.onboarding_normalized_phone(p.phone), now(), now() + interval '1 day'
+from public.profiles p where p.tenant_id is not null and p.role='owner'
+on conflict (tenant_id) do update set
+  current_step = case when public.tenant_onboarding.completed_at is null and public.tenant_onboarding.current_step='account' then 'details' else public.tenant_onboarding.current_step end,
+  completed_steps = array(select distinct x from unnest(public.tenant_onboarding.completed_steps || array['account']) x),
+  owner_name = coalesce(nullif(public.tenant_onboarding.owner_name,''), excluded.owner_name),
+  owner_email = coalesce(nullif(public.tenant_onboarding.owner_email,''), excluded.owner_email),
+  owner_phone = coalesce(nullif(public.tenant_onboarding.owner_phone,''), excluded.owner_phone),
+  last_activity_at = now(), updated_at = now();
+
+drop trigger if exists trg_tenant_onboarding_bootstrap on public.app_settings;
+drop function if exists public.tenant_onboarding_sync_bootstrap();
+delete from public.app_settings where key='bootstrap';
 
 create or replace function public.tenant_onboarding_owner_joined()
 returns trigger language plpgsql security definer set search_path = public as $$
@@ -11440,39 +11546,7 @@ drop trigger if exists trg_tenant_onboarding_owner_joined on public.profiles;
 create trigger trg_tenant_onboarding_owner_joined after insert or update of tenant_id, role on public.profiles
   for each row when (new.role = 'owner') execute function public.tenant_onboarding_owner_joined();
 
--- hospital_create() stores the onboarding contact and consent on its bootstrap row. This trigger syncs them to the
--- private onboarding record and handles legacy CP owner-e-mail edits without erasing existing contact/consent fields.
-create or replace function public.tenant_onboarding_sync_bootstrap()
-returns trigger language plpgsql security definer set search_path = public as $$
-declare v_consent boolean;
-begin
-  if new.key <> 'bootstrap' then return new; end if;
-  if jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then v_consent := (new.data ->> 'followup_consent')::boolean; end if;
-  insert into public.tenant_onboarding (tenant_id, owner_name, owner_email, owner_phone, city, followup_consent, consent_source, consent_updated_at,
-    current_step, completed_steps, next_followup_at)
-  values (new.tenant_id, left(coalesce(new.data ->> 'owner_name',''),100), left(coalesce(new.data ->> 'owner_email',''),150),
-    public.onboarding_normalized_phone(new.data ->> 'owner_phone'), left(coalesce(new.data ->> 'city',''),80), coalesce(v_consent,false),
-    case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then coalesce(nullif(new.data ->> 'consent_source',''), 'control_panel') else 'system' end,
-    case when v_consent is null then null else now() end, 'account', '{}', now() + interval '1 day')
-  on conflict (tenant_id) do update set
-    owner_name = coalesce(nullif(left(new.data ->> 'owner_name',100),''), public.tenant_onboarding.owner_name),
-    owner_email = coalesce(nullif(left(new.data ->> 'owner_email',150),''), public.tenant_onboarding.owner_email),
-    owner_phone = coalesce(nullif(public.onboarding_normalized_phone(new.data ->> 'owner_phone'),''), public.tenant_onboarding.owner_phone),
-    city = coalesce(nullif(left(new.data ->> 'city',80),''), public.tenant_onboarding.city),
-    followup_consent = case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then (new.data ->> 'followup_consent')::boolean else public.tenant_onboarding.followup_consent end,
-    consent_source = case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then coalesce(nullif(new.data ->> 'consent_source',''), 'control_panel') else public.tenant_onboarding.consent_source end,
-    consent_updated_at = case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then now() else public.tenant_onboarding.consent_updated_at end,
-    next_followup_at = case when public.tenant_onboarding.completed_at is null then coalesce(public.tenant_onboarding.next_followup_at, now() + interval '1 day') else null end,
-    updated_at = now();
-  if new.data ? 'ai_assistance_override' then
-    update public.tenants set ai_assistance_override = case when jsonb_typeof(new.data -> 'ai_assistance_override') = 'boolean'
-      then (new.data ->> 'ai_assistance_override')::boolean else null end where id = new.tenant_id;
-  end if;
-  return new;
-end $$;
-drop trigger if exists trg_tenant_onboarding_bootstrap on public.app_settings;
-create trigger trg_tenant_onboarding_bootstrap after insert or update of data on public.app_settings
-  for each row when (new.key = 'bootstrap') execute function public.tenant_onboarding_sync_bootstrap();
+-- Owner contact lives only in tenant_onboarding; app_settings is reserved for application preferences.
 
 create or replace function public.my_onboarding()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
@@ -11564,7 +11638,7 @@ begin
     'hospitals', coalesce((select jsonb_agg(jsonb_build_object(
       'id', t.id, 'slug', t.slug, 'name', t.name, 'plan', t.plan, 'created_at', t.created_at,
       'owner_joined', exists(select 1 from public.profiles p where p.tenant_id=t.id and p.role='owner'),
-      'owner_name', o.owner_name, 'owner_email', coalesce(nullif(o.owner_email,''), (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id=t.id and s.key='bootstrap')),
+      'owner_name', o.owner_name, 'owner_email', nullif(o.owner_email,''),
       'owner_phone', o.owner_phone, 'city', o.city, 'current_step', o.current_step, 'completed_steps', to_jsonb(o.completed_steps),
       'followup_consent', o.followup_consent, 'reminder_count', o.reminder_count, 'last_activity_at', o.last_activity_at, 'next_followup_at', o.next_followup_at,
       'ai_assistance_override', t.ai_assistance_override,
@@ -11644,7 +11718,7 @@ begin
         from public.profiles p where p.tenant_id=r.tenant_id and p.role='owner' order by p.created_at limit 1;
       if not found then
         v_profile := null;
-        v_email := coalesce(nullif(r.owner_email,''),(select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id=r.tenant_id and s.key='bootstrap'));
+        v_email := nullif(r.owner_email,'');
         v_phone := r.owner_phone; v_name := r.owner_name;
       end if;
       v_phone := public.onboarding_normalized_phone(v_phone);
@@ -11884,7 +11958,7 @@ end $$;
 
 -- -----------------------------------------------------------------------------------------------------
 -- Internal grants: owner-facing RPCs, Control Panel controls, and service-role-only AI accounting.
-revoke all on function public.tenant_onboarding_seed(), public.tenant_onboarding_owner_joined(), public.tenant_onboarding_sync_bootstrap(),
+revoke all on function public.tenant_onboarding_seed(), public.tenant_onboarding_owner_joined(),
   public.onboarding_external_channels(jsonb), public.ai_builder_tenant_entitled(uuid), public.ai_builder_reserve(uuid,uuid,text),
   public.ai_builder_finish(uuid,text,text,text,int,int,text), public.process_onboarding_reminders() from public,anon,authenticated;
 revoke all on function public.my_onboarding(),public.save_onboarding_progress(jsonb),public.request_onboarding_help(text),public.get_platform_signup_draft(uuid) from public;

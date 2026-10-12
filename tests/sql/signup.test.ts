@@ -62,8 +62,8 @@ describe('self-service sign-up', () => {
     await fails(signup({ email: 'owner@dchospital.com' }), /already belongs/)
   })
 
-  test('approve mode: the request waits; the admin approves → hospital + bootstrap owner + welcome e-mail', async () => {
-    expect(await signup()).toEqual({ status: 'pending', email: 'meera@sunrise.in' })
+  test('approve mode: the request waits; the admin approves → hospital + private owner contact + welcome e-mail', async () => {
+    expect(await signup({ followup_consent: true })).toEqual({ status: 'pending', email: 'meera@sunrise.in' })
     await fails(signup(), /already have a request/)
     const list = await call<any[]>(P_ADMIN, 'cp_signups')
     expect(list[0]).toMatchObject({ organisation: 'Sunrise Care Clinic', slug: 'sunrisecareclinic', code: 'SCC', plan: 'clinic', trial_days: 30, status: 'pending', phone: '9876543210', terms_version: '2026-10-02' })
@@ -72,13 +72,15 @@ describe('self-service sign-up', () => {
     expect(done).toMatchObject({ status: 'created', decided_by_name: 'Provider admin' })
     const t = await db.one<any>(null, `select id, status, plan, round(extract(epoch from trial_ends_at - now()) / 86400)::int as days from public.tenants where slug = 'sunrisecareclinic'`)
     expect(t).toMatchObject({ status: 'trial', plan: 'clinic', days: 30 })
-    expect((await db.one<any>(null, `select data from public.app_settings where tenant_id = $1 and key = 'bootstrap'`, [t.id])).data.owner_email).toBe('meera@sunrise.in')
+    expect((await db.one<any>(null, `select owner_email, owner_name, owner_phone, city, followup_consent from public.tenant_onboarding where tenant_id = $1`, [t.id])))
+      .toMatchObject({ owner_email: 'meera@sunrise.in', owner_name: 'Dr. Meera Jha', owner_phone: '9876543210', city: 'Purnia', followup_consent: true })
+    expect((await db.one<{ n: number }>(null, `select count(*)::int n from public.app_settings where tenant_id=$1 and key='bootstrap'`, [t.id])).n).toBe(0)
     const mail = await db.one<any>(null, `select channel, recipient, subject, body from public.notification_outbox where tenant_id = $1 and event = 'signup_welcome'`, [t.id])
     expect(mail).toMatchObject({ channel: 'email', recipient: 'meera@sunrise.in', subject: 'Your free trial of Sunrise Care Clinic is ready' })
     expect(mail.body).toContain('https://hospital.digitalcomrade.in/register?hospital=sunrisecareclinic')
     expect(mail.body).toContain('Namaste Meera')
     await fails(call(P_ADMIN, 'cp_signup_decide', [list[0].id, 'reject'], ['uuid', 'text']), /already handled/)
-    // the e-mail is now taken (bootstrap) — one account = one hospital
+    // the private onboarding e-mail is now taken — one account = one hospital
     await fails(signup({ phone: '9876500000' }), /already belongs/)
     // signing up with it on that hospital makes the owner
     await signUp(OWNER, 'meera@sunrise.in', { full_name: 'Dr. Meera Jha', tenant_id: t.id })

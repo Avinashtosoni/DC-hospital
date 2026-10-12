@@ -9,6 +9,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "sql:build": "tsx scripts/build-master-sql.ts",
+    "functions:deploy": "tsx scripts/deploy-functions.ts",
     "preflight": "tsx scripts/preflight.ts",
     "test": "vitest run",
     "test:edge": "npx --yes deno@2 test --no-lock --no-config --allow-env --allow-read tests/edge/",

@@ -25,7 +25,7 @@ export function TeamPage() {
   }
   return (
     <>
-      <PageHeader title="Team" description="People at Hospital Comrade who can work on hospitals. Every action they take is logged."
+      <PageHeader title="Team" description="People at Hospital Comrade who can work on assigned hospitals. Selected actions are logged; chart-open signals are best-effort and direct API reads are not audited."
         actions={<Button icon={<Plus className="h-4 w-4" />} onClick={() => open()}>Add member</Button>} />
       {q.error && <ErrorBox error={q.error} onRetry={() => q.refetch()} />}
       <Card className="overflow-hidden">

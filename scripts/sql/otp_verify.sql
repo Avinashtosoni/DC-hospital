@@ -168,6 +168,7 @@ returns boolean language plpgsql stable security definer set search_path = publi
 declare uid uuid := auth.uid(); sid text;
 begin
   if uid is null then return true; end if;
+  if not public.auth_session_active() then return false; end if;
   if not public.login_otp_required(p_scope, uid, p_tenant) then return true; end if;
   sid := public.jwt_session_id();
   if sid is not null and exists (select 1 from public.login_otp_sessions where session_id = sid and scope = p_scope and user_id = uid) then
@@ -200,7 +201,7 @@ create or replace function public.login_otp_status()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare s record; v_req boolean; v_ok boolean; t jsonb; sid text := public.jwt_session_id();
 begin
-  if auth.uid() is null then return null; end if;
+  if auth.uid() is null or not public.auth_session_active() then return null; end if;
   select * into s from public.login_otp_scope();
   v_req := public.login_otp_required(s.scope, auth.uid(), s.tenant);
   t := public.login_otp_targets(s.scope, auth.uid(), s.tenant, not v_req);
@@ -228,7 +229,7 @@ declare
   v_name  text;
   n       int;
 begin
-  if uid is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
+  if uid is null or not public.auth_session_active() then raise exception 'This sign-in session is no longer active. Please sign in again.' using errcode = '42501'; end if;
   if sid is null then raise exception 'This sign-in has no session — please sign in again.'; end if;
   select * into s from public.login_otp_scope();
   v_req := public.login_otp_required(s.scope, uid, s.tenant);
@@ -284,7 +285,7 @@ create or replace function public.verify_login_otp(p_code text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare uid uuid := auth.uid(); sid text := public.jwt_session_id(); o public.login_otps;
 begin
-  if uid is null or sid is null then return jsonb_build_object('ok', false, 'error', 'Please sign in again.'); end if;
+  if uid is null or sid is null or not public.auth_session_active() then return jsonb_build_object('ok', false, 'error', 'Please sign in again.'); end if;
   select * into o from public.login_otps where user_id = uid and session_id = sid and verified_at is null
    order by created_at desc limit 1 for update;
   if not found or o.expires_at < now() then
@@ -313,10 +314,15 @@ create or replace function public.login_otp_carry(p_from_session text)
 returns boolean language plpgsql volatile security definer set search_path = public as $$
 declare uid uuid := auth.uid(); sid text := public.jwt_session_id(); n int := 0; alive boolean := true;
 begin
-  if uid is null or sid is null or p_from_session is null or p_from_session = sid then return false; end if;
-  if to_regclass('auth.sessions') is not null then
+  if uid is null or not public.auth_session_active() or sid is null or p_from_session is null or p_from_session = sid then return false; end if;
+  if to_regclass('auth.sessions') is null then return false; end if;
+  begin
+    execute 'select exists (select 1 from auth.sessions where id::text = $1 and user_id = $2
+      and (not_after is null or not_after > now()))' into alive using p_from_session, uid;
+  exception when undefined_column then
+    -- Older supported Auth schemas do not expose not_after; row ownership still blocks revoked sessions.
     execute 'select exists (select 1 from auth.sessions where id::text = $1 and user_id = $2)' into alive using p_from_session, uid;
-  end if;
+  end;
   if not alive then return false; end if;
   insert into public.login_otp_sessions (session_id, scope, user_id, channel)
   select sid, scope, uid, channel from public.login_otp_sessions

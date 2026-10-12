@@ -21,7 +21,8 @@ async function call<T = any>(who: string | null, fn: string, args: unknown[] = [
   return r.r
 }
 const fails = (p: Promise<unknown>, re: RegExp) => expect(p).rejects.toThrow(re)
-const freshSignIn = () => db.as(null, `select set_config('request.jwt.claims', $1, false)`, [JSON.stringify({ iat: Math.floor(Date.now() / 1000) })])
+const freshSignIn = () => db.as(null, `select set_config('request.jwt.claims', $1, false)`,
+  [JSON.stringify({ sub: P_ADMIN, session_id: P_ADMIN, iat: Math.floor(Date.now() / 1000) })])
 const outbox = (where = 'true') => db.as<any>(null, `select * from public.platform_outbox where ${where} order by created_at`)
 const inbox = (user: string) => db.as<any>(null, `select a.event, a.title, i.read_at from public.platform_alert_inbox i join public.platform_alerts a on a.id = i.alert_id where i.user_id = $1 order by a.created_at`, [user])
 

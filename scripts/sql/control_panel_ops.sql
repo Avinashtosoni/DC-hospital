@@ -123,8 +123,10 @@ begin
   if p_old_role <> 'owner' then
     update public.profiles set role = p_old_role::public.app_role where tenant_id = p_id and role = 'owner' and id <> p_user;
   end if;
-  insert into public.app_settings (tenant_id, key, data) values (p_id, 'bootstrap', jsonb_build_object('owner_email', lower(v.email)))
-  on conflict (tenant_id, key) do update set data = public.app_settings.data || excluded.data;
+  insert into public.tenant_onboarding (tenant_id, owner_name, owner_email, owner_phone)
+  values (p_id, left(coalesce(v.full_name,''),100), lower(v.email), public.onboarding_normalized_phone(v.phone))
+  on conflict (tenant_id) do update set owner_name=excluded.owner_name, owner_email=excluded.owner_email,
+    owner_phone=excluded.owner_phone, updated_at=now(), last_activity_at=now();
 
   select slug into v_slug from public.tenants where id = p_id;
   perform public.provider_log('hospital:owner', v_slug, jsonb_build_object('new_owner', v.email, 'previous_owner_becomes', p_old_role));
@@ -141,7 +143,7 @@ begin
   if exists (select 1 from public.profiles where tenant_id = p_id and role = 'owner') then
     raise exception 'The owner has already signed up — use “Send password reset” in Users instead.';
   end if;
-  select lower(data ->> 'owner_email') into v_email from public.app_settings where tenant_id = p_id and key = 'bootstrap';
+  select lower(nullif(owner_email,'')) into v_email from public.tenant_onboarding where tenant_id = p_id;
   if coalesce(v_email, '') = '' or v_email = 'owner@your-hospital.in' then raise exception 'Set the owner’s e-mail first (Settings → Details).'; end if;
   v_path := '/register?hospital=' || t.slug;
   v_base := rtrim(coalesce(public.signup_config() ->> 'platformUrl', ''), '/');
@@ -739,6 +741,7 @@ create or replace function public.impersonation_bind(p_id uuid)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare r public.impersonations; v_sid text := public.jwt_session_id();
 begin
+  if auth.uid() is null or not public.auth_session_active() then raise exception 'This sign-in session is no longer active.' using errcode = '42501'; end if;
   select * into r from public.impersonations where id = p_id for update;
   if not found or r.target_id is distinct from auth.uid() or r.ended_at is not null or r.expires_at <= now()
      or r.bound_at is not null or r.created_at < now() - interval '5 minutes' then
@@ -756,7 +759,8 @@ begin
   select * into r from public.impersonations where id = p_id and target_id = auth.uid();
   if not found then return null; end if;
   return jsonb_build_object('id', r.id, 'expires_at', r.expires_at, 'admin_name', r.admin_name,
-                            'active', r.ended_at is null and r.expires_at > now() and r.session_id is not distinct from public.jwt_session_id());
+                            'active', public.auth_session_active() and r.ended_at is null and r.expires_at > now()
+                              and r.session_id is not distinct from public.jwt_session_id());
 end $$;
 
 -- end it: the impersonated tab itself, or the admin who started it
@@ -764,6 +768,7 @@ create or replace function public.impersonation_end(p_id uuid, p_reason text def
 returns void language plpgsql volatile security definer set search_path = public as $$
 declare r public.impersonations;
 begin
+  if auth.uid() is null or not public.auth_session_active() then raise exception 'This sign-in session is no longer active.' using errcode = '42501'; end if;
   select * into r from public.impersonations where id = p_id for update;
   if not found then return; end if;
   if r.target_id is distinct from auth.uid() and r.admin_id is distinct from auth.uid() then

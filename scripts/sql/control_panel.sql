@@ -54,7 +54,7 @@ begin
       'patients', (select count(*) from public.patients x where x.tenant_id = t.id),
       'owner_joined', exists (select 1 from public.profiles p where p.tenant_id = t.id and p.role = 'owner'),
       'owner_email', coalesce((select p.email from public.profiles p where p.tenant_id = t.id and p.role = 'owner' order by p.created_at limit 1),
-                              (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = t.id and s.key = 'bootstrap')),
+                              (select nullif(o.owner_email,'') from public.tenant_onboarding o where o.tenant_id = t.id)),
       'messages', (select coalesce(sum(m.sent), 0) from public.message_usage m where m.tenant_id = t.id and m.month = v_month)
     ) h
     from public.tenants t
@@ -128,13 +128,18 @@ begin
   returning id into v_id;
   perform set_config('app.tenant_id', v_id::text, true);   -- everything below (and its audit trail) belongs to the new hospital
   if v_dom <> '' then insert into public.tenant_domains (domain, tenant_id, is_primary) values (v_dom, v_id, true); end if;
-  insert into public.app_settings (tenant_id, key, data) values (v_id, 'bootstrap', jsonb_strip_nulls(jsonb_build_object(
-    'owner_email', v_owner, 'owner_name', nullif(trim(coalesce(p ->> 'owner_name','')),''),
-    'owner_phone', nullif(regexp_replace(coalesce(p ->> 'owner_phone',''), '[^0-9+]', '', 'g'),''),
-    'city', nullif(trim(coalesce(p ->> 'city','')),''),
-    'followup_consent', case when jsonb_typeof(p -> 'followup_consent')='boolean' then p -> 'followup_consent' else 'false'::jsonb end,
-    'consent_source', coalesce(nullif(p ->> 'consent_source',''),'control_panel'),
-    'ai_assistance_override', case when jsonb_typeof(p -> 'ai_assistance_override')='boolean' then p -> 'ai_assistance_override' else 'null'::jsonb end)));
+  insert into public.tenant_onboarding (tenant_id, owner_email, owner_name, owner_phone, city, followup_consent, consent_source, consent_updated_at)
+  values (v_id, v_owner, left(trim(coalesce(p ->> 'owner_name','')),100), public.onboarding_normalized_phone(p ->> 'owner_phone'),
+    left(trim(coalesce(p ->> 'city','')),80),
+    case when jsonb_typeof(p -> 'followup_consent')='boolean' then (p ->> 'followup_consent')::boolean else false end,
+    case when p ->> 'consent_source' in ('system','signup','control_panel','hospital_owner') then p ->> 'consent_source' else 'control_panel' end,
+    case when jsonb_typeof(p -> 'followup_consent')='boolean' then now() else null end)
+  on conflict (tenant_id) do update set owner_email=excluded.owner_email, owner_name=excluded.owner_name,
+    owner_phone=excluded.owner_phone, city=excluded.city, followup_consent=excluded.followup_consent,
+    consent_source=excluded.consent_source, consent_updated_at=excluded.consent_updated_at, updated_at=now();
+  if jsonb_typeof(p -> 'ai_assistance_override')='boolean' then
+    update public.tenants set ai_assistance_override=(p ->> 'ai_assistance_override')::boolean where id=v_id;
+  end if;
   perform public.seed_hospital_defaults(v_id);
   perform public.provider_log('hospital:create', v_slug, jsonb_build_object('plan', v_plan, 'status', v_stat, 'owner', v_owner, 'domain', nullif(v_dom, '')));
   return jsonb_build_object('id', v_id, 'slug', v_slug, 'domain', nullif(v_dom, ''), 'owner_email', v_owner);
@@ -173,8 +178,8 @@ begin
     v_owner := lower(trim(p ->> 'owner_email'));
     if v_owner !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Enter the owner''s e-mail.'; end if;
     if exists (select 1 from public.profiles where tenant_id = p_id and role = 'owner') then raise exception 'The owner has already signed up — change owners in the hospital''s Users & accounts.'; end if;
-    insert into public.app_settings (tenant_id, key, data) values (p_id, 'bootstrap', jsonb_build_object('owner_email', v_owner))
-    on conflict (tenant_id, key) do update set data = excluded.data;
+    insert into public.tenant_onboarding (tenant_id, owner_email) values (p_id, v_owner)
+    on conflict (tenant_id) do update set owner_email=excluded.owner_email, updated_at=now();
   end if;
   perform public.provider_log('hospital:update', t.slug, p);
   return public.cp_hospitals(p_id) -> 0;

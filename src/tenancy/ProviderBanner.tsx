@@ -57,7 +57,7 @@ export function ProviderBanner() {
           </select>
         </label>
       ) : null}
-      <span className="hidden text-brand-300 md:inline">{MODE_HINT[mode]} · every action is logged</span>
+      <span className="hidden text-brand-300 md:inline">{MODE_HINT[mode]} · selected clinical route/chart opens emit best-effort signals; direct API reads are not logged</span>
     </div>
   )
 }

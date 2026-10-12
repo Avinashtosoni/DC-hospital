@@ -18,6 +18,9 @@ create table auth.users (
   encrypted_password text, email_confirmed_at timestamptz, raw_app_meta_data jsonb default '{}', raw_user_meta_data jsonb default '{}',
   created_at timestamptz default now(), updated_at timestamptz default now(), confirmation_token text, email_change text,
   email_change_token_new text, recovery_token text, banned_until timestamptz);
+create table auth.sessions (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users on delete cascade,
+  created_at timestamptz default now(), not_after timestamptz);
 create table auth.identities (id uuid, user_id uuid references auth.users on delete cascade, provider_id text, identity_data jsonb,
   provider text, last_sign_in_at timestamptz, created_at timestamptz, updated_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
@@ -39,11 +42,27 @@ export async function freshDb(file: 'master' | 'production' | { path: string } |
   await db.exec('create extension if not exists pgcrypto with schema extensions;')
   await db.exec(typeof file === 'object' && 'sql' in file ? file.sql : readFileSync(typeof file === 'string' ? resolve(__dirname, `../../supabase/${file}.sql`) : file.path, 'utf8'))
   /** run a query as a signed-in user id, 'anon', 'service' or null (superuser) */
+  const seededDefaultSessions = new Set<string>()
   db.as = async (who, sql, params = []) => {
     await db.exec('reset role; select set_config(\'request.jwt.claim.sub\', \'\', false);')
     if (who === 'anon') await db.exec('set role anon')
     else if (who === 'service') await db.exec('set role service_role')
-    else if (who) await db.exec(`select set_config('request.jwt.claim.sub', '${who}', false); set role authenticated;`)
+    else if (who) {
+      const current = (await db.query<{ value: string | null }>(
+        `select nullif(current_setting('request.jwt.claims', true), '') value`)).rows[0]
+      let claims: Record<string, unknown> = {}
+      try { claims = current.value ? JSON.parse(current.value) : {} } catch { claims = {} }
+      if (claims.sub !== who || !claims.session_id) {
+        claims = { ...(claims.sub === who ? claims : {}), sub: who, session_id: who, role: 'authenticated' }
+        await db.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify(claims)])
+      }
+      if (claims.session_id === who && !seededDefaultSessions.has(who)) {
+        await db.query(`insert into auth.sessions(id,user_id) values ($1,$1) on conflict (id) do nothing`, [who])
+        seededDefaultSessions.add(who)
+      }
+      await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [who])
+      await db.exec('set role authenticated')
+    }
     try {
       return (await db.query(sql, params)).rows as never
     } finally {

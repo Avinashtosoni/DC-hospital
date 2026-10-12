@@ -57,10 +57,9 @@ Going live with paying hospitals: follow [GO_LIVE.md](GO_LIVE.md) and run `npm r
 - New Supabase project: `supabase/production.sql` (no demo data). Existing project: `supabase/upgrade-2026-10.sql`
   (safe to run again; oldest supported database: September 2026). Run on staging first.
 - Control panel (platform team): `https://<your app>/control-panel/` — served by the same container (nginx `location /control-panel/`).
-- Apply the database update **before** deploying Edge Functions that call its new RPCs/tables. Then redeploy the functions:
-  `supabase functions deploy ops notify`, `supabase functions deploy whatsapp-bot --no-verify-jwt`,
-  `supabase functions deploy domains`, `supabase functions deploy billing --no-verify-jwt` and
-  `supabase functions deploy impersonate` (Razorpay secrets: see MULTI_TENANCY.md → Billing).
+- Apply the database update **before** deploying Edge Functions that call its new RPCs/tables. Then run
+  `npm run functions:deploy`; the shared [manifest](../supabase/functions/_shared/manifest.ts) deploys every function
+  with its intended gateway-JWT flag (Razorpay secrets: see MULTI_TENANCY.md → Billing).
 - **Existing `site-media` files:** images uploaded before tenant folders were introduced remain at the bucket root. The primary hospital's CMS can still list, use and delete those legacy files; other hospitals cannot list or manage them. Public object URLs remain readable. You can leave them in place, or move them to `<PRIMARY_TENANT_ID>/` and update the saved CMS image URLs. New uploads are automatically stored under the active hospital UUID.
 - **Existing HTTP OpenWA settings:** OpenWA now requires HTTPS. Previously saved `http://` addresses are not upgraded automatically and will fail validation/delivery after the update. Put TLS on the gateway, change the hospital's Settings → Notifications → WhatsApp gateway URL to its `https://` address, save, and send a test message.
 - Hospitals' own domains (Settings → Domain) use Cloudflare for SaaS when the `domains` function has the secrets

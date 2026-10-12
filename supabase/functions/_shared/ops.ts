@@ -15,6 +15,7 @@ import { openwaStatus, type Ctx } from './providers.ts'
 import { wacrmMe } from './wacrm.ts'
 import { platformAccounts, PLATFORM_CHANNELS, type Env, type PlatformTemplate } from './platform.ts'
 import { checkRazorpayKeys, razorpayFromPlatform, razorpayMode } from './razorpay.ts'
+import { EDGE_FUNCTIONS } from './manifest.ts'
 
 /** control-panel values first, then the Edge secret */
 export const mergeEnv = (saved: Record<string, unknown> | null | undefined, fallback: Env): Env => (k) => {
@@ -86,8 +87,6 @@ async function timed(f: Fetch, url: string, init: RequestInit = {}, timeoutMs = 
     return { ms: Date.now() - t0, error: (e as Error).name === 'AbortError' ? `no answer in ${timeoutMs / 1000} s` : (e as Error).message }
   } finally { clearTimeout(timer) }
 }
-
-export const EDGE_FUNCTIONS = ['notify', 'billing', 'domains', 'impersonate', 'whatsapp-bot'] as const
 
 export interface CheckOpts { supabaseUrl: string; serviceKey: string; anonKey?: string; siteUrl?: string; env: Env; fetch?: Fetch; self?: string
   domains?: DomainRow[]; cf?: CfAccess | null; sslWarnDays?: number }

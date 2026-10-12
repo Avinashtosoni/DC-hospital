@@ -1,3 +1,5 @@
+import { FUNCTION_MANIFEST, REQUIRED_FUNCTION_CORS_HEADERS } from '../supabase/functions/_shared/manifest.ts'
+
 /**
  * Go-live preflight (phase 8.4) — checks a deployed platform from the outside, the way a browser sees it.
  *
@@ -158,11 +160,35 @@ export async function preflight(base: string, opts: { hospital?: string; fetch?:
           Array.isArray(rows) && rows.length === 0 ? 'anonymous read → no rows' : Array.isArray(rows) ? 'anonymous visitors can read patients!' : 'unexpected response — access could not be verified')
       }
     } catch (e) { add('Patients hidden from visitors', 'fail', (e as Error).message) }
-    // Edge Functions must answer a successful CORS preflight; errors and unreachable checks are failures, not unknown passes.
-    for (const fn of ['notify', 'billing', 'domains', 'whatsapp-bot']) {
+    // Every manifest function must answer a complete browser preflight; missing CORS details are not a pass.
+    for (const { name } of FUNCTION_MANIFEST) {
       let r: Response | Error
-      try { r = await f(`${url}/functions/v1/${fn}`, { method: 'OPTIONS', headers: { Origin: root, 'Access-Control-Request-Method': 'POST' } }) } catch (e) { r = e as Error }
-      add(`Function ${fn}`, r instanceof Error ? 'fail' : r.ok ? 'ok' : 'fail', r instanceof Error ? r.message : r.ok ? `HTTP ${r.status}` : `not ready (HTTP ${r.status})`)
+      try {
+        r = await f(`${url}/functions/v1/${name}`, {
+          method: 'OPTIONS',
+          headers: {
+            Origin: root,
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': REQUIRED_FUNCTION_CORS_HEADERS.join(', '),
+          },
+        })
+      } catch (e) { r = e as Error }
+      if (r instanceof Error) {
+        add(`Function ${name}`, 'fail', r.message)
+        continue
+      }
+      if (!r.ok) {
+        add(`Function ${name}`, 'fail', `not ready (HTTP ${r.status})`)
+        continue
+      }
+      const origin = r.headers.get('access-control-allow-origin')
+      const methods = (r.headers.get('access-control-allow-methods') ?? '').toLowerCase().split(/\s*,\s*/)
+      const headers = (r.headers.get('access-control-allow-headers') ?? '').toLowerCase().split(/\s*,\s*/)
+      const missing = REQUIRED_FUNCTION_CORS_HEADERS.filter((h) => !headers.includes(h))
+      const corsOk = (origin === '*' || origin === root) && methods.includes('post') && !missing.length
+      add(`Function ${name}`, corsOk ? 'ok' : 'fail', corsOk
+        ? `HTTP ${r.status} · CORS allows POST`
+        : `HTTP ${r.status} · invalid CORS (origin=${origin ?? 'missing'}, POST=${methods.includes('post')}, missing headers=${missing.join(',') || 'none'})`)
     }
   } else {
     add('Database up to date', 'fail', 'cannot check the schema until an HTTPS Supabase URL and anon key are configured')

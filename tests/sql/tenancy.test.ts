@@ -131,6 +131,24 @@ describe('isolation between hospitals', () => {
 })
 
 describe('website visitors (anon)', () => {
+  test('direct tenant reads expose only directory fields; legacy bootstrap settings stay private', async () => {
+    expect(await db.as<{ id: string; slug: string; name: string }>('anon', `select id, slug, name from public.tenants`))
+      .toContainEqual({ id: A, slug: 'main', name: 'DC Hospital' })
+    await expect(db.as('anon', `select notes from public.tenants`)).rejects.toThrow(/permission denied/)
+    expect(await db.as<{ id: string; slug: string; name: string; messaging: unknown }>(USER.owner,
+      `select id, slug, name, messaging from public.tenants where id=$1`, [A])).toHaveLength(1)
+    await expect(db.as(USER.owner, `select modules from public.tenants where id=$1`, [A])).rejects.toThrow(/permission denied/)
+
+    // Simulate a leftover legacy row: the policies hide it and prevent recreating it through the browser API.
+    await db.as(null, `insert into public.app_settings (tenant_id, key, data) values ($1,'bootstrap','{"owner_email":"legacy@example.test"}')`, [A])
+    expect(await db.as(USER.owner, `select data from public.app_settings where tenant_id=$1 and key='bootstrap'`, [A])).toEqual([])
+    await expect(db.as(USER.owner, `insert into public.app_settings (tenant_id,key,data) values ($1,'bootstrap','{}')`, [A]))
+      .rejects.toThrow(/row-level security/)
+    await expect(db.as(USER.owner, `select owner_email from public.tenant_onboarding where tenant_id=$1`, [A]))
+      .rejects.toThrow(/permission denied/)
+    await db.as(null, `delete from public.app_settings where tenant_id=$1 and key='bootstrap'`, [A])
+  })
+
   test('the domain header picks the hospital; no header means the primary hospital', async () => {
     const b = await asH<{ key: string; data: { name: string } }>('anon', { 'x-tenant-id': B }, `select key, data from public.public_site_content()`)
     expect(b).toEqual([{ key: 'brand', data: { name: 'City Hospital' } }])

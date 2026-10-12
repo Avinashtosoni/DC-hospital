@@ -97,16 +97,11 @@ begin
   end loop;
 end $rls$;
 
--- the wallet balance and billing overrides are not for visitors or staff (tenants is readable by anon for the website):
--- every other column stays readable, these two only through billing_summary() / my_context()
-do $cols$
-declare v_cols text;
-begin
-  select string_agg(quote_ident(column_name), ', ' order by ordinal_position) into v_cols
-    from information_schema.columns where table_schema = 'public' and table_name = 'tenants' and column_name not in ('wallet_paise', 'billing', 'close_reason');
-  execute 'revoke select on public.tenants from anon, authenticated';
-  execute format('grant select (%s) on public.tenants to anon, authenticated', v_cols);
-end $cols$;
+-- Tenant rows contain operational, billing, provider and contact data. Expose only the public directory fields
+-- to visitors and the one provider-messaging field the hospital app needs; privileged RPCs use SECURITY DEFINER.
+revoke select on public.tenants from anon, authenticated;
+grant select (id, slug, name) on public.tenants to anon;
+grant select (id, slug, name, messaging) on public.tenants to authenticated;
 
 -- ------------------------------------------------------------------ licence guard
 -- Raised for API callers (anon / authenticated — also inside SECURITY DEFINER RPCs, where `role` still names the
@@ -394,7 +389,7 @@ begin
     continue when exists (select 1 from public.notification_outbox o where o.tenant_id = r.id and o.event = 'billing_reminder'
                             and o.vars ->> 'milestone' = v_m and o.vars ->> 'until' = to_char(v_end at time zone 'Asia/Kolkata', 'YYYY-MM-DD'));
     select p.id, p.full_name, p.email into v_prof, v_name, v_mail from public.profiles p where p.tenant_id = r.id and p.role = 'owner' order by p.created_at limit 1;
-    v_mail := coalesce(v_mail, (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id = r.id and s.key = 'bootstrap'));
+    v_mail := coalesce(v_mail, (select nullif(o.owner_email,'') from public.tenant_onboarding o where o.tenant_id = r.id));
     continue when v_mail is null and v_prof is null;
     v_link := coalesce((select 'https://' || d.domain || '/billing' from public.tenant_domains d where d.tenant_id = r.id order by d.is_primary desc, (d.verified_at is null), d.created_at limit 1),
                        nullif(rtrim(coalesce((select c.data ->> 'siteUrl' from public.site_content c where c.tenant_id = r.id and c.key = 'settings'), ''), '/') || '/billing', '/billing'),

@@ -220,8 +220,8 @@ drop policy if exists avatars_own_update on storage.objects;
 drop policy if exists avatars_own_delete on storage.objects;
 create policy avatars_public_read on storage.objects for select to anon, authenticated using (bucket_id = 'avatars');
 create policy avatars_own_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+  with check (public.auth_session_active() and bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy avatars_own_update on storage.objects for update to authenticated
-  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (public.auth_session_active() and bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy avatars_own_delete on storage.objects for delete to authenticated
-  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (public.auth_session_active() and bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);

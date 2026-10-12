@@ -144,7 +144,7 @@ the hospital sample data but **keeps your website content, history and images**.
 
 Demo logins use a public password (`Demo@123`), so **never run a real hospital on `master.sql`'s demo accounts**.
 
-* **New project (recommended):** open `supabase/production.sql`, change the ✏️ owner e-mail, run it, then *Create account* in the app with that e-mail — you are the Owner. It has the full schema and security but **no demo accounts or data**.
+* **New project (recommended):** open `supabase/production.sql`, change the ✏️ private onboarding owner e-mail, run it, then *Create account* in the app with that e-mail — you are the Owner. It has the full schema and security but **no demo accounts or data**.
 * **Already on the demo data:** **Settings → Security & access → Go-live checklist** shows what's still demo. *Lock demo accounts* bans every demo login except yours, and *Clear demo data* deletes the demo patients, visits, bills and so on (your own records stay). Both are owner-only database functions (`lock_demo_accounts()`, `clear_demo_data()`).
 * Set **Settings → General → Website address** (filled in automatically on first save) so invitation and feedback links point to your domain.
 

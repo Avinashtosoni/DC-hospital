@@ -107,7 +107,7 @@ settings and sender identity. The Hospital Comrade team works through **provider
     executable by signed-in users / visitors on fresh installs (master's blanket grant ran after their revoke). Revoked
     at the very end of the build; tested on master, production and upgraded databases.
   - **Onboarding** (`tests/sql/onboarding.test.ts`): `supabase/snippets/add-hospital.sql` and `add-provider.sql` run as
-    shipped on a fresh production database. Found and fixed: a new hospital's bootstrap owner e-mail was ignored
+    shipped on a fresh production database. Found and fixed: a new hospital's private onboarding owner e-mail was ignored
     (only the first hospital had one) and a new hospital had no website forms — `seed_hospital_defaults()` now copies
     the built-in forms (from `src/forms/schema.ts`) and the hospital's identity — its name, and blank contacts, GSTIN, PAN,
     registration number and UPI id instead of the sample hospital's (they printed on a new hospital's invoices); the

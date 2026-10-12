@@ -3,6 +3,32 @@
 Result of the October 2026 end-to-end audit. Step-by-step detail for every item is in [GO_LIVE.md](GO_LIVE.md)
 (English) and [SETUP_GUIDE.md](SETUP_GUIDE.md) (Hinglish); this file is the summary. What changed in code: [CHANGELOG.md](../CHANGELOG.md).
 
+## Approved repository remediation tracker
+
+The audit is complete; implementation follows the approved order below. Repository changes and tests only—no live production
+configuration, credentials, buckets or data are changed by this work.
+
+| ID | Scope | Status |
+|---|---|---|
+| PRA-01 | Tenant/app-settings privacy and bootstrap PII | Complete; SQL, fresh/production install and upgrade regressions are in place. |
+| PRA-02 | Active-user/session authorization for already-issued JWTs | Complete for database access: check the authenticated user's ban, exact `auth.sessions` row and `not_after` when available; missing `auth.sessions` fails closed. Profile/provider self-rows, avatar writes, OTP and impersonation entry points use the check. |
+| PRA-03 | Shared Edge Function manifest and fail-closed preflight | Complete; shared function inventory/policy manifest and fail-closed preflight checks are implemented with regression coverage. |
+| PRA-04 | Bind Meta webhooks to their configured receiving phone-number ID | Complete; signed callbacks require Meta configuration and an exact receiver-ID match on every change. |
+| PRA-05 | Accepted internal-access risks and non-invasive monitoring | Complete; existing accountant clinical reads and provider-support chart access are unchanged. Best-effort app-route signals are added; see the limits below. |
+| PRA-06 | Database and object backup recovery assurance | Pending; repository workflow only, no credentials or bucket changes. |
+| PRA-07 | Release dependency checks | Pending. |
+| PRA-08 | Production-like tests, readiness monitoring and browser-data minimization | Pending. |
+
+**PRA-02 limit:** [Supabase's session documentation](https://supabase.com/docs/guides/auth/sessions) says sign-out removes `auth.sessions` rows, while time-box and inactivity policy are enforced on refresh and expired rows may be cleaned progressively (up to 24 hours later). This SQL check blocks revoked/removed sessions, bans and `not_after` expiries that Auth exposes; it does not promise an immediate inactivity cutoff before Auth deletes the row. No Auth settings are changed here.
+
+### PRA-05 — accepted internal-access risks and monitoring
+
+- **Access remains unchanged:** accountants retain the existing clinical-table reads, and assigned provider-support users retain read-only patient-chart access. No RLS policy, permission, or route access was narrowed.
+- **Provider signals:** successful patient-chart renders emit a best-effort `provider_audit` signal with the provider actor, tenant, time, and internal patient record ID; selected clinical app routes emit a screen label. No chart contents are added to the event.
+- **Accountant signals:** selected in-app clinical screens emit a low-cardinality `info` event to optional Sentry when `SENTRY_DSN` is configured. It contains the tenant slug, role, and allow-listed screen label—not a user ID, patient ID, URL, query string, or clinical data. With Sentry unset, this signal is off.
+- **Important limit:** these events are initiated by browser navigation, can be lost or disabled, and do not observe direct database/API reads, scripts, or every data request. They are operational signals—not a complete access audit. Existing database audit triggers continue to record changes, not every read.
+- **No live configuration or production state is changed.** Public and operator-facing copy was corrected so it no longer promises that every read is logged.
+
 ## 1. What the audit fixed
 
 | Area | Fix |
@@ -39,19 +65,17 @@ Never paste these in chat or commit them. They go only into Supabase / Coolify /
 
 1. **Backup first** (existing DB only): Supabase → Database → Backups, or Actions → *Database backup* → Run.
 2. **Database**
-   - **New:** run `supabase/production.sql` in the SQL editor after editing the ✏️ owner e-mail line.
+   - **New:** run `supabase/production.sql` in the SQL editor after editing the ✏️ private onboarding contact e-mail line.
    - **Existing:** run `supabase/upgrade-2026-10.sql`. It is safe to re-run. If it prints a WARNING about duplicate live admissions, discharge the duplicates and run it again.
    - **Staging with sample data:** run `supabase/master.sql`. Never use it for a real hospital.
 3. **Edge Functions**, from a machine with the Supabase CLI:
    ```bash
    supabase link --project-ref <ref>
-   supabase functions deploy notify
-   supabase functions deploy whatsapp-bot --no-verify-jwt
-   supabase functions deploy domains
-   supabase functions deploy billing --no-verify-jwt
-   supabase functions deploy impersonate          # control panel → "Sign in as user"
+   npm run functions:deploy
    ```
-   Then set the secrets from §2 row 4.
+   The shared [function manifest](../supabase/functions/_shared/manifest.ts) is the canonical inventory and gateway-JWT
+   policy; only `billing` and `whatsapp-bot` disable gateway JWT checks because their handlers validate their signed
+   webhooks and/or caller identity. Then set the secrets from §2 row 4.
 4. **Coolify:** set the variables from §2 row 5, then **Restart** (no rebuild needed). A push to the branch redeploys automatically.
 5. **Verify the app:** `https://<domain>/healthz` → `ok`. `/env.js` shows your Supabase URL and `"TENANCY": "multi"`.
 6. **First admin:** sign up on `https://<domain>/?hospital=main`, then run `supabase/snippets/add-provider.sql` with `v_role := 'admin'`. Then open the control panel (`/control-panel/`) and add a second admin, the seller details and the sign-up settings.
@@ -84,6 +108,6 @@ Never paste these in chat or commit them. They go only into Supabase / Coolify /
   - Pharmacy dispensing and stock deduction, and lab parameters with PDF reports. The user will scope these later.
   - Refunds and credit notes. Today a bill with payments can't be cancelled, so handle refunds outside the app for now.
   - IPD auto bed charges, online bill pay, insurance/TPA, OPD queue, payroll, telemedicine and patient documents.
-- **Access rules:** the accountant can read patients' clinical fields, because the table is shared. Staff covers pharmacy and lab work; there are no separate roles.
+- **Access rules:** the accountant can read patients' clinical fields, because the table is shared. Assigned provider-support accounts retain read-only chart access. UI access signals are best-effort and do not audit direct database/API reads. Staff covers pharmacy and lab work; there are no separate roles.
 - **Not done yet:** platform phases 8.5–8.8 and the Turnstile captcha.
 - **Code quality:** 113 lint warnings (mostly `exhaustive-deps`) and 26 clickable `div`s without a role. These are low-risk.

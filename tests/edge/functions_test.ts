@@ -297,6 +297,24 @@ async function metaSig(secret: string, body: string) {
   const b = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(body)))
   return 'sha256=' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 }
+const CITY_META_PHONE_ID = '1234567890'
+async function withCityMeta<T>(run: () => Promise<T>): Promise<T> {
+  const row = db.app_settings.find((r) => r.tenant_id === CITY && r.key === 'app')!
+  const original = structuredClone(row.data)
+  row.data.notifications.whatsapp.provider = 'meta'
+  row.data.notifications.whatsapp.phoneNumberId = CITY_META_PHONE_ID
+  db.app_secrets.push({ tenant_id: CITY, key: 'meta_access_token', value: 'city-meta-access-token' })
+  try { return await run() } finally {
+    row.data = original
+    db.app_secrets = db.app_secrets.filter((r) => !(r.tenant_id === CITY && r.key === 'meta_access_token'))
+  }
+}
+const metaEnvelope = (phoneNumberId = CITY_META_PHONE_ID, messageId = 'wamid-city-1') => JSON.stringify({
+  entry: [{ changes: [{ value: {
+    metadata: { display_phone_number: '+91 98765 00000', phone_number_id: phoneNumberId },
+    messages: [{ id: messageId, from: '919876500001', text: { body: '1' } }],
+  } }] }],
+})
 Deno.test("Meta's webhook check uses the hospital in the address", async () => {
   const verify = (q: string) => bot(new Request(`${SB}/functions/v1/whatsapp-bot?${q}`))
   assertEquals(await (await verify('hospital=citycare&hub.mode=subscribe&hub.verify_token=city-verify&hub.challenge=42')).text(), '42')
@@ -307,65 +325,102 @@ Deno.test("Meta's webhook check uses the hospital in the address", async () => {
 })
 
 Deno.test("incoming chats are answered from that hospital's doctors, number and chat state", async () => {
-  reset()
-  db.wa_sessions = [{ tenant_id: DC, phone: '9876500001', state: { step: 'doctor', lang: 'en', at: Date.now() } }]   // same phone, other hospital
-  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ id: 'wamid-city-1', from: '919876500001', text: { body: '1' } }] } }] }] })
-  const r = await bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('city-meta-secret', meta) }, body: meta }))
-  assertEquals(r.status, 200)
-  const doctors = calls.find((c) => c.url.pathname.endsWith('/public_doctors'))!
-  assertEquals(doctors.headers.get('x-tenant-id'), CITY)
-  assertEquals(doctors.headers.get('authorization'), `Bearer ${SERVICE}`)
-  const completed = calls.find((c) => c.url.pathname.endsWith('/wa_complete_event'))!
-  assertEquals(completed.body.p_event.startsWith('wa-event-'), true)
-  assertEquals(db.wa_sessions.some((r) => r.tenant_id === CITY && r.phone === '9876500001'), true)
-  for (const c of settingsReads()) assert(c.url.searchParams.get('tenant_id') === `eq.${CITY}`, `read of ${c.url.pathname} without City's filter`)
-  // the reply went out through City's WhatsApp, and mentions City's doctor (not DC's)
-  assert(sent.length > 0)
-  assert(sent.every((s) => s.url === 'https://hooks.city.test/wa' && s.auth === 'Bearer city-wa-secret'))
-  assert(sent.some((s) => /Medicine|Vivek/.test(s.body.message)) && !sent.some((s) => /Cardiology|DC Only/.test(s.body.message)))
+  await withCityMeta(async () => {
+    reset()
+    db.wa_sessions = [{ tenant_id: DC, phone: '9876500001', state: { step: 'doctor', lang: 'en', at: Date.now() } }]   // same phone, other hospital
+    const meta = metaEnvelope(CITY_META_PHONE_ID, 'wamid-city-1')
+    const r = await bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('city-meta-secret', meta) }, body: meta }))
+    assertEquals(r.status, 200)
+    const doctors = calls.find((c) => c.url.pathname.endsWith('/public_doctors'))!
+    assertEquals(doctors.headers.get('x-tenant-id'), CITY)
+    assertEquals(doctors.headers.get('authorization'), `Bearer ${SERVICE}`)
+    const completed = calls.find((c) => c.url.pathname.endsWith('/wa_complete_event'))!
+    assertEquals(completed.body.p_event.startsWith('wa-event-'), true)
+    assertEquals(db.wa_sessions.some((r) => r.tenant_id === CITY && r.phone === '9876500001'), true)
+    for (const c of settingsReads()) assert(c.url.searchParams.get('tenant_id') === `eq.${CITY}`, `read of ${c.url.pathname} without City's filter`)
+    // the reply went out only through the configured Meta receiver, and mentions City's doctor (not DC's)
+    assert(sent.length > 0)
+    assert(sent.every((s) => s.url === `https://graph.facebook.com/v21.0/${CITY_META_PHONE_ID}/messages` && s.auth === 'Bearer city-meta-access-token'))
+    assert(sent.some((s) => /Medicine|Vivek/.test(s.body.text?.body ?? '')) && !sent.some((s) => /Cardiology|DC Only/.test(s.body.text?.body ?? '')))
+  })
 })
 
 Deno.test('webhook retries resume staged replies and persist dedupe instead of advancing bot state twice', async () => {
-  reset()
-  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ id: 'wamid-retry-1', from: '919876501001', text: { body: '1' } }] } }] }] })
-  const signature = await metaSig('city-meta-secret', meta)
-  const request = () => new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': signature }, body: meta,
-  })
-  failOutboundOnce = true
-  const first = await bot(request())
-  assertEquals(first.status, 503)
-  const event = waEvents.get(`${CITY}:meta:wamid-retry-1`)
-  assertEquals(event.status, 'pending')
-  assert(Array.isArray(event.staged_replies) && event.staged_replies.length > 0)
-  const doctorCalls = calls.filter((c) => c.url.pathname.endsWith('/public_doctors')).length
-  assertEquals(doctorCalls, 1)
+  await withCityMeta(async () => {
+    reset()
+    const meta = metaEnvelope(CITY_META_PHONE_ID, 'wamid-retry-1')
+    const signature = await metaSig('city-meta-secret', meta)
+    const request = () => new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': signature }, body: meta,
+    })
+    failOutboundOnce = true
+    const first = await bot(request())
+    assertEquals(first.status, 503)
+    const event = waEvents.get(`${CITY}:meta:wamid-retry-1`)
+    assertEquals(event.status, 'pending')
+    assert(Array.isArray(event.staged_replies) && event.staged_replies.length > 0)
+    const doctorCalls = calls.filter((c) => c.url.pathname.endsWith('/public_doctors')).length
+    assertEquals(doctorCalls, 1)
 
-  const retry = await bot(request())
-  assertEquals(retry.status, 200)
-  assertEquals(event.status, 'completed')
-  assertEquals(calls.filter((c) => c.url.pathname.endsWith('/public_doctors')).length, 1)
-  const outboundCount = sent.length
-  const duplicate = await bot(request())
-  assertEquals(duplicate.status, 200)
-  assertEquals(sent.length, outboundCount)
+    const retry = await bot(request())
+    assertEquals(retry.status, 200)
+    assertEquals(event.status, 'completed')
+    assertEquals(calls.filter((c) => c.url.pathname.endsWith('/public_doctors')).length, 1)
+    const outboundCount = sent.length
+    const duplicate = await bot(request())
+    assertEquals(duplicate.status, 200)
+    assertEquals(sent.length, outboundCount)
+  })
+})
+
+Deno.test('Meta callbacks must be bound to this hospital\'s configured receiving phone number', async () => {
+  await withCityMeta(async () => {
+    reset()
+    const post = async (body: string) => bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('city-meta-secret', body) }, body,
+    }))
+    const wrong = await post(metaEnvelope('9876543210', 'wamid-other-number'))
+    assertEquals(wrong.status, 403)
+    const missing = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '919876500001', text: { body: '1' } }] } }] }] })
+    assertEquals((await post(missing)).status, 403)
+    const mixed = JSON.stringify({ entry: [
+      { changes: [{ value: { metadata: { phone_number_id: CITY_META_PHONE_ID }, messages: [] } }] },
+      { changes: [{ value: { metadata: { phone_number_id: '9876543210' }, messages: [] } }] },
+    ] })
+    assertEquals((await post(mixed)).status, 403)
+    assert(!calls.some((c) => c.url.pathname.endsWith('/wa_begin_event')))
+    assertEquals(sent.length, 0)
+  })
+})
+
+Deno.test('a valid Meta signature alone cannot enable a Meta webhook for another provider', async () => {
+  reset()
+  const body = metaEnvelope(CITY_META_PHONE_ID, 'wamid-not-enabled')
+  const r = await bot(new Request(`${SB}/functions/v1/whatsapp-bot?hospital=citycare`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('city-meta-secret', body) }, body,
+  }))
+  assertEquals(r.status, 403)
+  assert(!calls.some((c) => c.url.pathname.endsWith('/wa_begin_event')))
+  assertEquals(sent.length, 0)
 })
 
 Deno.test('Meta and Twilio chats must be signed — the sender number is the patient identity', async () => {
-  reset()
-  const meta = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '919876500001', text: { body: '1' } }] } }] }] })
-  const post = (q: string, headers: Record<string, string>, body: string) => bot(new Request(`${SB}/functions/v1/whatsapp-bot?${q}`, { method: 'POST', headers, body }))
-  // DC has no Meta app secret → rejected, even with a made-up signature
-  assertEquals((await post('hospital=main', { 'content-type': 'application/json' }, meta)).status, 401)
-  assertEquals((await post('hospital=main', { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('guess', meta) }, meta)).status, 401)
-  // City has one → a missing or wrong signature is refused
-  assertEquals((await post('hospital=citycare', { 'content-type': 'application/json' }, meta)).status, 403)
-  assertEquals((await post('hospital=citycare', { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('wrong', meta) }, meta)).status, 403)
-  // Twilio without an auth token → rejected
-  const form = 'From=whatsapp%3A%2B919876500001&Body=1'
-  assertEquals((await post('hospital=citycare', { 'content-type': 'application/x-www-form-urlencoded' }, form)).status, 401)
-  assertEquals(sent.length, 0)
-  assert(!calls.some((c) => c.url.pathname.endsWith('/wa_sessions') && c.method === 'POST'))
+  await withCityMeta(async () => {
+    reset()
+    const meta = metaEnvelope(CITY_META_PHONE_ID)
+    const post = (q: string, headers: Record<string, string>, body: string) => bot(new Request(`${SB}/functions/v1/whatsapp-bot?${q}`, { method: 'POST', headers, body }))
+    // DC has no Meta app secret → rejected, even with a made-up signature
+    assertEquals((await post('hospital=main', { 'content-type': 'application/json' }, meta)).status, 401)
+    assertEquals((await post('hospital=main', { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('guess', meta) }, meta)).status, 401)
+    // City has one → a missing or wrong signature is refused
+    assertEquals((await post('hospital=citycare', { 'content-type': 'application/json' }, meta)).status, 403)
+    assertEquals((await post('hospital=citycare', { 'content-type': 'application/json', 'x-hub-signature-256': await metaSig('wrong', meta) }, meta)).status, 403)
+    // Twilio without an auth token → rejected
+    const form = 'From=whatsapp%3A%2B919876500001&Body=1'
+    assertEquals((await post('hospital=citycare', { 'content-type': 'application/x-www-form-urlencoded' }, form)).status, 401)
+    assertEquals(sent.length, 0)
+    assert(!calls.some((c) => c.url.pathname.endsWith('/wa_sessions') && c.method === 'POST'))
+  })
 })
 
 Deno.test('the simulator runs in the hospital of the signed-in user', async () => {

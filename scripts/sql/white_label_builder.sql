@@ -119,29 +119,10 @@ returns text language sql immutable set search_path = pg_catalog as $$
 $$;
 revoke all on function public.onboarding_normalized_phone(text) from public,anon,authenticated;
 
-create table if not exists public.tenant_onboarding (
-  tenant_id            uuid primary key references public.tenants(id) on delete cascade,
-  created_at           timestamptz not null default now(),
-  updated_at           timestamptz not null default now(),
-  last_activity_at     timestamptz not null default now(),
-  current_step         text not null default 'account' check (current_step in ('account','details','doctors','team','appointment','website','domain','plan','complete')),
-  completed_steps      text[] not null default '{}',
-  owner_name           text not null default '' check (char_length(owner_name) <= 100),
-  owner_email          text not null default '' check (char_length(owner_email) <= 150),
-  owner_phone          text not null default '' check (owner_phone = '' or owner_phone ~ '^\+?[0-9]{10,13}$'),
-  city                 text not null default '' check (char_length(city) <= 80),
-  followup_consent     boolean not null default false,
-  consent_source       text not null default 'system' check (consent_source in ('system','signup','control_panel','hospital_owner')),
-  consent_updated_at   timestamptz,
-  reminder_count       smallint not null default 0 check (reminder_count between 0 and 3),
-  last_reminded_at     timestamptz,
-  next_followup_at     timestamptz,
-  completed_at         timestamptz
-);
-create index if not exists tenant_onboarding_followup_idx on public.tenant_onboarding(next_followup_at)
-  where next_followup_at is not null and completed_at is null;
-alter table public.tenant_onboarding enable row level security;
-revoke all on public.tenant_onboarding from anon, authenticated;
+-- The private tenant_onboarding table is created in tenancy_core.sql so role-claim and owner-contact functions can
+-- reference it before this optional onboarding module is loaded. The generated master SQL grants authenticated CRUD
+-- on tables already present at its RLS phase, so restore the private-table boundary here after that blanket grant.
+revoke all on public.tenant_onboarding from public, anon, authenticated;
 grant all on public.tenant_onboarding to service_role;
 
 -- No direct table writes: tenant and platform progress is exposed only through carefully scoped RPCs.
@@ -159,6 +140,52 @@ create trigger trg_tenant_onboarding_seed after insert on public.tenants
 insert into public.tenant_onboarding (tenant_id, owner_email, current_step, completed_steps, next_followup_at)
 select t.id, '', 'account', '{}', now() + interval '1 day' from public.tenants t
 on conflict (tenant_id) do nothing;
+
+-- One-time migration of legacy owner contact data out of app_settings. Preserve populated onboarding fields and any
+-- explicit consent decision; no new bootstrap rows or ongoing sync trigger are used after this migration.
+insert into public.tenant_onboarding (tenant_id, owner_name, owner_email, owner_phone, city, followup_consent,
+  consent_source, consent_updated_at, current_step, completed_steps, next_followup_at)
+select s.tenant_id, left(coalesce(s.data ->> 'owner_name',''),100), left(coalesce(s.data ->> 'owner_email',''),150),
+  public.onboarding_normalized_phone(s.data ->> 'owner_phone'), left(coalesce(s.data ->> 'city',''),80),
+  case when jsonb_typeof(s.data -> 'followup_consent')='boolean' then (s.data ->> 'followup_consent')::boolean else false end,
+  case when jsonb_typeof(s.data -> 'followup_consent')='boolean' then
+    case when s.data ->> 'consent_source' in ('system','signup','control_panel','hospital_owner') then s.data ->> 'consent_source' else 'control_panel' end
+    else 'system' end,
+  case when jsonb_typeof(s.data -> 'followup_consent')='boolean' then coalesce(s.updated_at,now()) else null end,
+  'account', '{}', now() + interval '1 day'
+from public.app_settings s where s.key='bootstrap'
+on conflict (tenant_id) do update set
+  owner_name = coalesce(nullif(public.tenant_onboarding.owner_name,''), excluded.owner_name),
+  owner_email = coalesce(nullif(public.tenant_onboarding.owner_email,''), excluded.owner_email),
+  owner_phone = coalesce(nullif(public.tenant_onboarding.owner_phone,''), excluded.owner_phone),
+  city = coalesce(nullif(public.tenant_onboarding.city,''), excluded.city),
+  followup_consent = case when public.tenant_onboarding.consent_updated_at is null then excluded.followup_consent else public.tenant_onboarding.followup_consent end,
+  consent_source = case when public.tenant_onboarding.consent_updated_at is null then excluded.consent_source else public.tenant_onboarding.consent_source end,
+  consent_updated_at = coalesce(public.tenant_onboarding.consent_updated_at, excluded.consent_updated_at),
+  next_followup_at = case when public.tenant_onboarding.completed_at is null then coalesce(public.tenant_onboarding.next_followup_at, excluded.next_followup_at) else null end,
+  updated_at = now();
+
+-- ai_assistance_override is operational tenant configuration, not owner bootstrap data.
+update public.tenants t set ai_assistance_override = case when jsonb_typeof(s.data -> 'ai_assistance_override')='boolean'
+  then (s.data ->> 'ai_assistance_override')::boolean else null end
+from public.app_settings s where s.tenant_id=t.id and s.key='bootstrap' and s.data ? 'ai_assistance_override';
+
+-- Backfill an owner who already joined before tenant_onboarding was introduced.
+insert into public.tenant_onboarding (tenant_id, current_step, completed_steps, owner_name, owner_email, owner_phone, last_activity_at, next_followup_at)
+select p.tenant_id, 'details', array['account'], left(coalesce(p.full_name,''),100), left(coalesce(p.email,''),150),
+  public.onboarding_normalized_phone(p.phone), now(), now() + interval '1 day'
+from public.profiles p where p.tenant_id is not null and p.role='owner'
+on conflict (tenant_id) do update set
+  current_step = case when public.tenant_onboarding.completed_at is null and public.tenant_onboarding.current_step='account' then 'details' else public.tenant_onboarding.current_step end,
+  completed_steps = array(select distinct x from unnest(public.tenant_onboarding.completed_steps || array['account']) x),
+  owner_name = coalesce(nullif(public.tenant_onboarding.owner_name,''), excluded.owner_name),
+  owner_email = coalesce(nullif(public.tenant_onboarding.owner_email,''), excluded.owner_email),
+  owner_phone = coalesce(nullif(public.tenant_onboarding.owner_phone,''), excluded.owner_phone),
+  last_activity_at = now(), updated_at = now();
+
+drop trigger if exists trg_tenant_onboarding_bootstrap on public.app_settings;
+drop function if exists public.tenant_onboarding_sync_bootstrap();
+delete from public.app_settings where key='bootstrap';
 
 create or replace function public.tenant_onboarding_owner_joined()
 returns trigger language plpgsql security definer set search_path = public as $$
@@ -181,39 +208,7 @@ drop trigger if exists trg_tenant_onboarding_owner_joined on public.profiles;
 create trigger trg_tenant_onboarding_owner_joined after insert or update of tenant_id, role on public.profiles
   for each row when (new.role = 'owner') execute function public.tenant_onboarding_owner_joined();
 
--- hospital_create() stores the onboarding contact and consent on its bootstrap row. This trigger syncs them to the
--- private onboarding record and handles legacy CP owner-e-mail edits without erasing existing contact/consent fields.
-create or replace function public.tenant_onboarding_sync_bootstrap()
-returns trigger language plpgsql security definer set search_path = public as $$
-declare v_consent boolean;
-begin
-  if new.key <> 'bootstrap' then return new; end if;
-  if jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then v_consent := (new.data ->> 'followup_consent')::boolean; end if;
-  insert into public.tenant_onboarding (tenant_id, owner_name, owner_email, owner_phone, city, followup_consent, consent_source, consent_updated_at,
-    current_step, completed_steps, next_followup_at)
-  values (new.tenant_id, left(coalesce(new.data ->> 'owner_name',''),100), left(coalesce(new.data ->> 'owner_email',''),150),
-    public.onboarding_normalized_phone(new.data ->> 'owner_phone'), left(coalesce(new.data ->> 'city',''),80), coalesce(v_consent,false),
-    case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then coalesce(nullif(new.data ->> 'consent_source',''), 'control_panel') else 'system' end,
-    case when v_consent is null then null else now() end, 'account', '{}', now() + interval '1 day')
-  on conflict (tenant_id) do update set
-    owner_name = coalesce(nullif(left(new.data ->> 'owner_name',100),''), public.tenant_onboarding.owner_name),
-    owner_email = coalesce(nullif(left(new.data ->> 'owner_email',150),''), public.tenant_onboarding.owner_email),
-    owner_phone = coalesce(nullif(public.onboarding_normalized_phone(new.data ->> 'owner_phone'),''), public.tenant_onboarding.owner_phone),
-    city = coalesce(nullif(left(new.data ->> 'city',80),''), public.tenant_onboarding.city),
-    followup_consent = case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then (new.data ->> 'followup_consent')::boolean else public.tenant_onboarding.followup_consent end,
-    consent_source = case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then coalesce(nullif(new.data ->> 'consent_source',''), 'control_panel') else public.tenant_onboarding.consent_source end,
-    consent_updated_at = case when jsonb_typeof(new.data -> 'followup_consent') = 'boolean' then now() else public.tenant_onboarding.consent_updated_at end,
-    next_followup_at = case when public.tenant_onboarding.completed_at is null then coalesce(public.tenant_onboarding.next_followup_at, now() + interval '1 day') else null end,
-    updated_at = now();
-  if new.data ? 'ai_assistance_override' then
-    update public.tenants set ai_assistance_override = case when jsonb_typeof(new.data -> 'ai_assistance_override') = 'boolean'
-      then (new.data ->> 'ai_assistance_override')::boolean else null end where id = new.tenant_id;
-  end if;
-  return new;
-end $$;
-drop trigger if exists trg_tenant_onboarding_bootstrap on public.app_settings;
-create trigger trg_tenant_onboarding_bootstrap after insert or update of data on public.app_settings
-  for each row when (new.key = 'bootstrap') execute function public.tenant_onboarding_sync_bootstrap();
+-- Owner contact lives only in tenant_onboarding; app_settings is reserved for application preferences.
 
 create or replace function public.my_onboarding()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
@@ -305,7 +300,7 @@ begin
     'hospitals', coalesce((select jsonb_agg(jsonb_build_object(
       'id', t.id, 'slug', t.slug, 'name', t.name, 'plan', t.plan, 'created_at', t.created_at,
       'owner_joined', exists(select 1 from public.profiles p where p.tenant_id=t.id and p.role='owner'),
-      'owner_name', o.owner_name, 'owner_email', coalesce(nullif(o.owner_email,''), (select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id=t.id and s.key='bootstrap')),
+      'owner_name', o.owner_name, 'owner_email', nullif(o.owner_email,''),
       'owner_phone', o.owner_phone, 'city', o.city, 'current_step', o.current_step, 'completed_steps', to_jsonb(o.completed_steps),
       'followup_consent', o.followup_consent, 'reminder_count', o.reminder_count, 'last_activity_at', o.last_activity_at, 'next_followup_at', o.next_followup_at,
       'ai_assistance_override', t.ai_assistance_override,
@@ -385,7 +380,7 @@ begin
         from public.profiles p where p.tenant_id=r.tenant_id and p.role='owner' order by p.created_at limit 1;
       if not found then
         v_profile := null;
-        v_email := coalesce(nullif(r.owner_email,''),(select s.data ->> 'owner_email' from public.app_settings s where s.tenant_id=r.tenant_id and s.key='bootstrap'));
+        v_email := nullif(r.owner_email,'');
         v_phone := r.owner_phone; v_name := r.owner_name;
       end if;
       v_phone := public.onboarding_normalized_phone(v_phone);
@@ -625,7 +620,7 @@ end $$;
 
 -- -----------------------------------------------------------------------------------------------------
 -- Internal grants: owner-facing RPCs, Control Panel controls, and service-role-only AI accounting.
-revoke all on function public.tenant_onboarding_seed(), public.tenant_onboarding_owner_joined(), public.tenant_onboarding_sync_bootstrap(),
+revoke all on function public.tenant_onboarding_seed(), public.tenant_onboarding_owner_joined(),
   public.onboarding_external_channels(jsonb), public.ai_builder_tenant_entitled(uuid), public.ai_builder_reserve(uuid,uuid,text),
   public.ai_builder_finish(uuid,text,text,text,int,int,text), public.process_onboarding_reminders() from public,anon,authenticated;
 revoke all on function public.my_onboarding(),public.save_onboarding_progress(jsonb),public.request_onboarding_help(text),public.get_platform_signup_draft(uuid) from public;

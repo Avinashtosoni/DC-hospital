@@ -1,10 +1,19 @@
+import { readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { deployArgs, deployCommands } from '../scripts/deploy-functions'
 import { headerChecks, parseEnvJs, preflight } from '../scripts/preflight'
+import { FUNCTION_MANIFEST, REQUIRED_FUNCTION_CORS_HEADERS } from '../supabase/functions/_shared/manifest'
 
 const ENV = `// Generated at container start — do not edit.
 window.__ENV__ = { "VITE_SUPABASE_URL": "https://abc.supabase.co", "VITE_SUPABASE_ANON_KEY": "anon", "REQUIRE_BACKEND": "true", "TENANCY": "multi", "APP_ENV": "production", "PLATFORM_NAME": "Hospital Comrade", "PLATFORM_DOMAIN": "h.in", "PLATFORM_LEGAL_NAME": "Digital Comrade" };
 `
 const SEC = { 'content-security-policy': "default-src 'self'; object-src 'none'; frame-ancestors 'self'", 'strict-transport-security': 'max-age=31536000', 'x-content-type-options': 'nosniff', 'x-frame-options': 'SAMEORIGIN' }
+const FUNCTION_CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-allow-headers': [...REQUIRED_FUNCTION_CORS_HEADERS].join(', '),
+}
 
 function fakeFetch(over: Record<string, Response> = {}) {
   return async (url: string, init?: RequestInit) => {
@@ -19,7 +28,7 @@ function fakeFetch(over: Record<string, Response> = {}) {
     if (u.pathname === '/rest/v1/rpc/resolve_tenant') return Response.json([{ slug: 'main' }])
     if (u.pathname === '/rest/v1/patients') return Response.json([])
     if (u.pathname === '/auth/v1/settings') return Response.json({ mailer_autoconfirm: false, disable_signup: false })
-    if (u.pathname.startsWith('/functions/v1/')) return new Response('ok')
+    if (u.pathname.startsWith('/functions/v1/')) return new Response('ok', { headers: FUNCTION_CORS })
     return new Response('nope', { status: 404 })
   }
 }
@@ -36,11 +45,34 @@ describe('go-live preflight', () => {
     expect(ro[1].status).toBe('fail')
     expect(ro[2].status).toBe('fail')
   })
+  it('uses one manifest for every deployed Edge Function and its gateway-JWT mode', () => {
+    const dirs = readdirSync(resolve(process.cwd(), 'supabase/functions'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== '_shared')
+      .map((entry) => entry.name).sort()
+    const manifest = FUNCTION_MANIFEST.map((entry) => entry.name).sort()
+    expect(manifest).toEqual(dirs)
+    expect(new Set(manifest).size).toBe(manifest.length)
+    expect(FUNCTION_MANIFEST.filter((entry) => !entry.verifyJwt).map((entry) => entry.name).sort())
+      .toEqual(['billing', 'whatsapp-bot'])
+    expect(deployArgs('billing', false)).toEqual(['functions', 'deploy', 'billing', '--no-verify-jwt'])
+    expect(deployCommands()).toContain('supabase functions deploy ai-page-builder')
+    expect(deployCommands()).toContain('supabase functions deploy whatsapp-bot --no-verify-jwt')
+  })
   it('a healthy platform has nothing blocking', async () => {
     const r = await preflight('https://h.in/', { hospital: 'main', fetch: fakeFetch() })
     expect(r.filter((c) => c.status === 'fail')).toEqual([])
     expect(r.find((c) => c.name === 'Free-trial sign-up')?.detail).toBe('open · review first · 14 days')
     expect(r.find((c) => c.name === 'Company details for the legal pages')?.status).toBe('warn')
+  })
+  it('fails closed when a deployed function does not permit the app CORS request', async () => {
+    const r = await preflight('https://h.in', { fetch: fakeFetch({
+      'OPTIONS abc.supabase.co/functions/v1/ai-page-builder': new Response('ok', {
+        headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'OPTIONS' },
+      }),
+    }) })
+    const check = r.find((c) => c.name === 'Function ai-page-builder')
+    expect(check?.status).toBe('fail')
+    expect(check?.detail).toMatch(/invalid CORS.*POST=false.*authorization/)
   })
   it('flags demo mode, an old database, readable patients and missing functions', async () => {
     const r = await preflight('https://h.in', { fetch: fakeFetch({

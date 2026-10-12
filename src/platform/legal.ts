@@ -151,7 +151,7 @@ export function legalDocs(): LegalDoc[] {
           'The Processor processes the data only on the Hospital\u2019s documented instructions \u2014 the Terms, this agreement and the Hospital\u2019s use of the software\u2019s features \u2014 and not for its own purposes. It tells the Hospital if it believes an instruction breaks the law.',
         ] },
         { h: '3. Confidentiality and access', p: [
-          'Only Processor staff who need access to provide support or keep the service running get it, under confidentiality obligations; support access is read-only unless the Hospital asks for help with a change, and every access is logged in the Hospital\u2019s audit trail.',
+          'Only Processor staff with assigned access who need it to provide support or operate the service may access Hospital data, under confidentiality obligations. Provider support mode is read-only for patient charts. Selected application route and chart opens generate best-effort activity signals, but direct database or API reads are not captured by those signals and they are not a complete access audit. Database change-audit entries are recorded separately.',
         ] },
         { h: '4. Security measures', p: [
           'Database-level isolation between hospitals; role-based access; encryption in transit (HTTPS/TLS) and of backups; audit logs of changes; automatic sign-out; password policies; regular backups and restore tests; timely security updates.',

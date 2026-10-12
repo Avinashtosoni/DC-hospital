@@ -67,8 +67,8 @@ begin
     execute format('drop policy if exists tenant_isolation on public.%I', t);
     if t = 'profiles' then
       execute 'create policy tenant_isolation on public.profiles as restrictive for all to anon, authenticated
-                 using (tenant_id = (select public.current_tenant()) or id = auth.uid())
-                 with check (tenant_id = (select public.current_tenant()) or id = auth.uid())';
+                 using (public.auth_session_active() and (tenant_id = (select public.current_tenant()) or id = auth.uid()))
+                 with check (public.auth_session_active() and (tenant_id = (select public.current_tenant()) or id = auth.uid()))';
     else
       execute format('create policy tenant_isolation on public.%I as restrictive for all to anon, authenticated
                         using (tenant_id = (select public.current_tenant()))
@@ -353,7 +353,10 @@ alter table public.provider_users enable row level security;
 alter table public.provider_assignments enable row level security;
 alter table public.provider_audit enable row level security;
 revoke all on public.tenants, public.tenant_domains, public.provider_users, public.provider_assignments, public.provider_audit from anon, authenticated;
-grant select on public.tenants to anon, authenticated;
+-- The public tenant endpoint exposes only the directory fields. Billing, notes, modules, status dates, wallet values,
+-- provider messaging and operational flags are available only through explicitly scoped SECURITY DEFINER RPCs.
+grant select (id, slug, name) on public.tenants to anon;
+grant select (id, slug, name, messaging) on public.tenants to authenticated;
 grant select, insert, update, delete on public.tenant_domains, public.provider_users, public.provider_assignments to authenticated;
 grant update, insert, delete on public.tenants to authenticated;
 grant select on public.provider_audit to authenticated;
@@ -376,31 +379,31 @@ create policy tenant_domains_admin on public.tenant_domains for all to authentic
 drop policy if exists provider_users_select on public.provider_users;
 drop policy if exists provider_users_admin on public.provider_users;
 create policy provider_users_select on public.provider_users for select to authenticated
-  using (user_id = auth.uid() or public.provider_mode() = 'admin');
+  using (public.auth_session_active() and (user_id = auth.uid() or public.provider_mode() = 'admin'));
 create policy provider_users_admin on public.provider_users for all to authenticated
   using (public.provider_mode() = 'admin') with check (public.provider_mode() = 'admin' and user_id <> auth.uid());
 
 drop policy if exists provider_assignments_select on public.provider_assignments;
 drop policy if exists provider_assignments_admin on public.provider_assignments;
 create policy provider_assignments_select on public.provider_assignments for select to authenticated
-  using (user_id = auth.uid() or public.provider_mode() = 'admin');
+  using (public.auth_session_active() and (user_id = auth.uid() or public.provider_mode() = 'admin'));
 create policy provider_assignments_admin on public.provider_assignments for all to authenticated
   using (public.provider_mode() = 'admin') with check (public.provider_mode() = 'admin');
 
 drop policy if exists provider_audit_select on public.provider_audit;
 create policy provider_audit_select on public.provider_audit for select to authenticated
-  using (public.provider_mode() = 'admin' or (user_id = auth.uid()));
+  using (public.auth_session_active() and (public.provider_mode() = 'admin' or user_id = auth.uid()));
 
 -- ------------------------------------------------------------------ RPCs
 -- the website asks "which hospital is this domain?" before anything else (multi-tenant mode).
 -- A mapped domain always wins; only hosts without a mapping (preview / staging / localhost) may name a
 -- hospital by slug (?hospital=city), so a hospital's own domain can never be made to show another one.
 drop function if exists public.resolve_tenant(text);
-drop function if exists public.resolve_tenant(text, text);   -- the columns grew (is_demo)
-create or replace function public.resolve_tenant(p_host text, p_slug text default null)
-returns table (id uuid, slug text, name text, status text, modules jsonb, is_primary boolean, is_demo boolean)
+drop function if exists public.resolve_tenant(text, text);   -- return only the browser's tenant bootstrap fields
+create function public.resolve_tenant(p_host text, p_slug text default null)
+returns table (id uuid, slug text, name text, status text, is_primary boolean, is_demo boolean)
 language sql stable security definer set search_path = public as $$
-  select t.id, t.slug, t.name, public.tenant_license(t.id), t.modules, t.is_primary, t.is_demo   -- effective status (licence, phase 4)
+  select t.id, t.slug, t.name, public.tenant_license(t.id), t.is_primary, t.is_demo   -- effective status (licence, phase 4)
     from public.tenants t
    where t.id = coalesce(
            (select d.tenant_id from public.tenant_domains d where d.domain = lower(split_part(trim(coalesce(p_host, '')), ':', 1))),
@@ -445,7 +448,7 @@ begin
 end $$;
 
 revoke all on function public.request_header(text), public.client_ip_hash(), public.primary_tenant(), public.keep_tenant(), public.profiles_pick_tenant() from public, anon, authenticated;
-grant execute on function public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
+grant execute on function public.auth_session_active(), public.current_tenant(), public.provider_role(), public.provider_can(uuid), public.provider_mode(),
   public.has_role(public.app_role[]), public.is_staff(), public.current_app_role(), public.my_doctor_id(), public.my_patient_id()
   to anon, authenticated, service_role;
 grant execute on function public.resolve_tenant(text, text) to anon, authenticated;

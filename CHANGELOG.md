@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased: production-readiness remediation PRA-03–05
+
+- **PRA-03:** shared Edge Function inventory/policy manifest and fail-closed preflight checks, with regression coverage.
+- **PRA-04:** signed Meta webhooks also require the tenant's configured Meta provider and a matching receiving phone-number ID on every callback change.
+- **PRA-05:** accountant clinical reads and assigned provider-support chart access remain unchanged. Provider chart opens emit best-effort entries through the existing provider audit; accountant app routes emit optional low-data Sentry signals. These UI signals do not capture direct database/API reads and are not a complete access audit. No production configuration or access policy was changed.
+
 ## Unreleased: verified mobile number on free-trial sign-up
 
 - **/signup → Mobile number → Verify:** a 6-digit code on WhatsApp (SMS as the fallback) from the platform's shared
@@ -149,8 +155,8 @@ Existing databases: run `supabase/upgrade-2026-10.sql` again (safe to re-run). T
 
 ## Unreleased — control panel: manage every hospital
 
-The Hospital Comrade control panel can now run a hospital's account without opening it (admin = everything,
-support = their assigned hospitals without money or deleting, finance = billing). Every action is in the audit log.
+The Hospital Comrade control panel can run a hospital's account without opening it (admin = everything,
+support = assigned hospitals without money or deleting, finance = billing). Selected provider actions are logged; app chart-open signals are best-effort and direct database/API reads are not audited.
 
 - **Details:** website contact (name, address, phones, e-mail, logo link) and legal / GST details (legal name, GSTIN,
   PAN, billing address); hand the hospital to another owner; resend / copy the owner's sign-up link.

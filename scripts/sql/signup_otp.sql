@@ -231,7 +231,7 @@ begin
   -- one account = one hospital
   if exists (select 1 from public.profiles where lower(email) = v_mail and tenant_id is not null and role <> 'patient')
      or exists (select 1 from public.provider_users u join auth.users a on a.id = u.user_id where lower(a.email) = v_mail)
-     or exists (select 1 from public.app_settings s where s.key = 'bootstrap' and lower(s.data ->> 'owner_email') = v_mail) then
+     or exists (select 1 from public.tenant_onboarding o where lower(o.owner_email) = v_mail) then
     raise exception 'This e-mail already belongs to a hospital here — sign in there, or use another e-mail.';
   end if;
   if exists (select 1 from public.platform_signups where lower(email) = v_mail and status = 'pending') then
